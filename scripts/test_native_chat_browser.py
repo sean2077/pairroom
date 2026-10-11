@@ -50,7 +50,10 @@ def fixture_html(isolated: bool = False) -> str:
       activityHelp:'Binding state and last activity are observations, not live presence.',
       inspect:'Inspect', sent:'Queued', send:'Queue message', retrySend:'Retry original send',
       noItems:'No pending items', pendingTitle:'Pending items',
-      empty:'No published messages yet.', placeholder:'Queue a message for a native session…'
+      empty:'No published messages yet.', placeholder:'Queue a message for a native session…',
+      awaitingPeer:'Awaiting the other side', awaitingPeerHelp:'Other slot: awaiting the other side. No Runtime or native session is selected for them.',
+      remoteBindingHelp:'The other side uses CLI/hooks directly from their native session. They need no local Service. Native session paths, permissions and credentials remain on their machine.', member:'LAN member',
+      remoteHuman:'Other side', hostHuman:'Host owner'
     };
     window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.split('.').pop()]||key;}};
     window.__message = (id,from='slot1',state='handed_off',text='Review '+id) => ({
@@ -273,6 +276,38 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await expect(page.locator('#messages .message-row')).to_have_count(300)
             await expect(page.locator('#message-count')).to_have_text('500')
             await expect(page.locator('.truncated-note')).to_contain_text('300 / 500')
+            # A LAN invitation is an unfilled slot, not a fabricated local
+            # vendor session. Admitted peers expose no local bind/park control.
+            await page.evaluate("""() => {
+              window.__beforeLAN=structuredClone(__snapshot);
+              __snapshot.room.sharing='lan';__snapshot.room.owner_slot='slot1';
+              __snapshot.room.agents.slot2={awaiting_peer:true};
+              __snapshot.relay.bindings.slot2={};__update();
+            }""")
+            peer_card = page.locator('#bindings [data-slot="slot2"]')
+            await expect(peer_card.locator('.binding-state')).to_have_text('Awaiting the other side')
+            assert await peer_card.locator('details, .binding-park, .agent-config').count() == 0
+            assert '@grok1' not in await peer_card.inner_text(), 'pending peer inherited a runtime handle'
+            await page.evaluate("""() => {
+              __snapshot.room.agents.slot2={runtime:'codex'};
+              __snapshot.identities.slot2={MentionHandle:'@codex'};
+              __snapshot.relay.bindings.slot2={active:true,remote_key:'b'.repeat(64),generation:2};
+              __snapshot.relay.messages=[{...__message('lan-file','user','queued','Shared reproduction'),author:'lan:'+ 'b'.repeat(64),
+                attachments:[{id:'evidence-file',kind:'file',media_type:'text/plain',name:'repro <img onerror=alert(1)>.txt',size:48,sha256:'c'.repeat(64)}]},
+                {...__message('lan-host','user','queued','I will check the reproduction.'),author:'host_owner'}];
+              delete __snapshot.relay.total_messages;__update();
+            }""")
+            await expect(peer_card.locator('.binding-state')).to_have_text('LAN member')
+            await expect(peer_card.locator('h3')).to_have_text('@codex')
+            assert await peer_card.locator('details, .binding-park, .agent-config').count() == 0
+            await expect(peer_card).to_contain_text('codex')
+            file_message = page.locator('#messages [data-message-id="lan-file"]')
+            await expect(file_message.locator('a.attachment-file')).to_have_attribute('href','api/v1/attachments/evidence-file')
+            await expect(file_message.locator('a.attachment-file')).to_contain_text('repro <img onerror=alert(1)>.txt')
+            assert await file_message.locator('img').count() == 0, 'text evidence rendered as an image or filename markup'
+            await expect(file_message.locator('.message-author')).to_have_text('You · Other side')
+            await expect(page.locator('#messages [data-message-id="lan-host"] .message-author')).to_have_text('You · Host owner')
+            await page.evaluate('__snapshot=__beforeLAN;__update()')
             # Locale changes retranslate handles/state without replacing input.
             await page.locator('#message-text').fill('仍保留草稿')
             await page.evaluate("PairRoomI18n.lang='zh-CN';document.dispatchEvent(new Event('pairroom:lang'))")
@@ -324,7 +359,8 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             (artifacts/'results.json').write_text(json.dumps({'fixture':True,'shared_workbench':not isolated,
                 'real_vendor_e2e':False,'checks':['three-column panels and independent toggles','visible Agent metadata','single-line participant card header','chip row only while participants are collapsed','pager/attachment affordances','delivery summary','narrow panel focus/inertness','IM alignment','duplicate runtime identities','initial and incoming scroll',
                 'history anchor','draft/node preservation','binding disclosure/focus','safe Markdown/quotes/attachments',
-                'retry confirmation/cancel','uncertain send identity','real cross-window Web Locks','300-message bound','locale switch','responsive light/dark'],
+                'retry confirmation/cancel','uncertain send identity','real cross-window Web Locks','300-message bound',
+                'LAN awaiting/admitted peer honesty','LAN human provenance','text evidence download safety','locale switch','responsive light/dark'],
                 'browser_errors':errors},indent=2)+'\n',encoding='utf-8')
             print('Native IM browser fixture passed (not vendor E2E)',flush=True)
         finally:

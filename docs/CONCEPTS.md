@@ -20,15 +20,18 @@ A participant's **Runtime** is Claude Code, Codex, Grok Build, or Gemini CLI. Ei
 
 A **Room Runtime** is the active PairRoom component serving a Room, not the participant's harness. Suspending it does not delete the Room. Its process ownership depends on the immutable **host mode**:
 
-| Boundary | Embedded | Native (experimental) |
+| Boundary | Embedded (optional) | Native (default and recommended) |
 |---|---|---|
 | Vendor sessions | PairRoom starts/resumes supported adapters | Users run their original harness sessions |
 | Configuration | Stored selections supply explicit per-process overrides | Stored selections are display-only; configure the original harness |
 | Scheduling | One participant owns a native Turn at a time within the Room | Each slot has its own durable FIFO; Owner Turn is advisory |
 | Permissions and interruption | Supported adapter controls appear in PairRoom | Approvals, permissions, and interruption stay in the original harness |
 | Service capacity | Counts toward the active-runtime limit | Relay-only; exempt from the adapter-capacity budget |
+| Colleagues on a LAN | Local only | Only the host needs a Service; the guest's CLI/hooks join directly from its own native session |
 
-Host mode and collaboration mode are separate. A Room cannot switch host mode in place. An embedded Service inside the desktop application can serve both kinds of Room: “embedded Service” describes Service ownership, not a Room's host mode.
+New Room creation defaults to Native; Embedded must be selected explicitly. Existing Rooms retain their stored host mode. Host mode and collaboration mode are separate. A Room cannot switch host mode in place. An embedded Service inside the desktop application can serve both kinds of Room: “embedded Service” describes Service ownership, not a Room's host mode.
+
+For [LAN collaboration](LAN_NATIVE.md), one hosting Service owns the shared Room log and the colleague's CLI/hooks connect directly. The guest keeps a private client binding; it needs no local Service or second Room inbox. An optional local Service can display that same binding and support human interaction. Different native sessions on one machine can host local Rooms and join other hosts concurrently, each retaining its own host target. A new shared Room reserves the other slot as **awaiting teammate**, without guessing their Runtime or session. An exact accepted join receipt fills that slot with the actual Runtime. Each user keeps local filesystem and native permission authority; shared messages and explicitly uploaded evidence are the collaboration boundary.
 
 ## Binding and naming
 

@@ -177,7 +177,7 @@ func TestRemoveProjectSerializesWithRoomProvisioning(t *testing.T) {
 
 	provisioned := make(chan error, 1)
 	go func() {
-		_, err := registry.ProvisionRoom(ctx, ProvisionRequest{
+		_, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded,
 			ProjectID: project.ID,
 			Name:      "Concurrent Room",
 			Bindings:  specs(BindingNew, BindingNew, "concurrent-remove"),

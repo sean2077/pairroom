@@ -36,6 +36,8 @@
       step.append(text('h3', heading), text('p', description), command(example));
       if (heading === 'room.native.setup.connect') {
         step.append(text('p', 'room.native.setup.join'), command('pairroom relay bind'));
+        step.append(text('h4', 'room.native.setup.lan'), text('p', 'room.native.setup.lanBody'),
+          command("pairroom relay preflight --join\npairroom relay join '<invite>'"));
       }
       steps.append(step);
     }

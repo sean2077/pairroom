@@ -8,6 +8,9 @@ import (
 const NativeVersion = "pairroom-protocol/v8"
 
 func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) string {
+	if peerRuntime == model.RuntimeAwaitingPeer {
+		return fmt.Sprintf(`You occupy %s in a Native LAN Room. The remote peer is awaiting owner admission; no peer mention handle exists yet. Use explicit relay send to queue shared work, or relay peer to inspect the admitted runtime. Human instructions and native/project permissions apply. PairRoom owns FIFO/audit, not processes. Share only intended Room content and files; do not print credentials. Inspect unknown delivery before explicit Retry. After admission, the next Room envelope identifies the peer. %s: pairroom protocol --host-mode native --actor %s`, actor, NativeVersion, actor)
+	}
 	peer := model.OtherParticipant(actor)
 	ids := model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{actor: selfRuntime, peer: peerRuntime})
 	stop := "Stop relays your full visible reply."

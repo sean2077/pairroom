@@ -19,7 +19,7 @@ _Avoid (en)_: claude/codex slot IDs
 _Avoid (zh-CN)_: Claude/Codex 槽位 ID
 
 **Binding**:
-The association between a Room participant and an exact native Runtime/session identity. Embedded materializes new sessions on accepted execution; Native associates the existing session at bind.
+The association between a Room participant and its exact identity: an admitted LAN member's remote key, or a native Runtime/session identity for a locally bound participant. Embedded materializes new sessions on accepted execution; Native associates the existing session at bind.
 _Equivalent (zh-CN)_: 会话绑定
 
 **Runtime**:
@@ -109,3 +109,33 @@ _Equivalent (zh-CN)_: 发布缺口
 **Review version**:
 An optional Git evidence observation attached to an explicit Native message; matching observations do not constitute approval or an atomic workspace snapshot.
 _Equivalent (zh-CN)_: 评审版本
+
+## LAN collaboration
+
+**LAN sharing**:
+A native Room created with `sharing: "lan"` and one local `owner_slot`, hosted on the separate LAN listener for exactly one admitted remote member; only the host needs a Service.
+_Equivalent (zh-CN)_: 局域网共享
+
+**Awaiting peer**:
+The reserved other slot of a LAN Room before admission (`awaiting_peer`): no Runtime, session or mention handle is guessed for it, and it is never a reusable pair-template selection.
+_Equivalent (zh-CN)_: 等待对方加入
+
+**Remote key**:
+The admitted member's public certificate fingerprint on a LAN member binding (`remote_key`); it identifies the member's machine, never a vendor session identity.
+_Equivalent (zh-CN)_: 对方密钥
+
+**Join request and receipt**:
+A LAN invitation permits only a request to join; the host owner admits the exact request/key receipt supplied through a trusted channel, and that admitted key becomes the member binding's generation.
+_Equivalent (zh-CN)_: 加入请求与加入回执
+
+**Joined Room**:
+The guest machine's local record of a Room it joined (`joined_rooms`): its membership, generation and own private key, usable through CLI/hooks with no local Service.
+_Equivalent (zh-CN)_: 已加入的 Room
+
+**Leave**:
+Ends the guest's membership with the hosting Room; the host records the end durably.
+_Equivalent (zh-CN)_: 退出
+
+**Detach locally**:
+Retires the local joined-Room record and its identity reservation without claiming the host received a leave.
+_Equivalent (zh-CN)_: 本机断开

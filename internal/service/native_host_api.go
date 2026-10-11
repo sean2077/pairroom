@@ -60,7 +60,11 @@ func (s *ManagementServer) bindNative(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, err)
 		return
 	}
-	bootstrap := protocol.NativeBootstrap(slot, runtime.room.Agents[slot].Runtime, runtime.room.Agents[model.OtherParticipant(slot)].Runtime)
+	kinds := runtime.engine.Runtimes()
+	bootstrap := protocol.NativeBootstrap(slot, kinds[slot], kinds[model.OtherParticipant(slot)])
+	if runtime.room.Sharing == "lan" {
+		bootstrap += "\n" + protocol.SharedRoomBootstrapNotice
+	}
 	nativeResult(w, map[string]any{"binding": binding, "replaced": replaced, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": runtime.room.Agents[slot].Runtime, "notice": "Native settings are display-only. Hooks recheck identity. Replace cannot stop native work."}, nil)
 }
 func (s *ManagementServer) unbindNative(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +139,20 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 	release := runtime.acquire()
 	defer release()
 	action := r.PathValue("action")
+	if action == "invite" || action == "accept" || action == "revoke" {
+		if durable.Sharing != "lan" || auth.Slot != durable.OwnerSlot {
+			nativeResult(w, nil, relay.ErrAuth)
+			return
+		}
+		if _, err := runtime.engine.Inspect(auth); err != nil {
+			nativeResult(w, nil, err)
+			return
+		}
+		unlock := s.lockRoom(durable.ID)
+		defer unlock()
+		s.lanOwnerAction(w, r, runtime, action, auth)
+		return
+	}
 	if action == "upload" {
 		binding, err := runtime.engine.Inspect(auth)
 		if err != nil || binding.SessionID == "" {
@@ -235,7 +253,8 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 	case "peer":
 		peer, err := runtime.engine.Peer(auth)
 		if err == nil {
-			peer.Runtime = runtime.room.Agents[peer.Slot].Runtime.CanonicalForSlot(peer.Slot)
+			peer.Slot = model.OtherParticipant(auth.Slot)
+			peer.Runtime = runtime.engine.Runtimes()[peer.Slot]
 		}
 		nativeResult(w, peer, err)
 	case "failure":

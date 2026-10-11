@@ -52,16 +52,18 @@ func TestClaudeInboxCaptureDoesNotReuseOtherRuntimeEnvironment(t *testing.T) {
 
 func TestClaudeInboxCrashTempCleanupKeepsCommittedCapability(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{".claude-inbox-crash", claudewake.FileName, "unrelated"} {
+	for _, name := range []string{".claude-inbox-crash", ".identity-0123456789abcdef", claudewake.FileName, ".identity", "unrelated"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("synthetic"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cleanupAtomicTemps(dir)
-	if _, err := os.Stat(filepath.Join(dir, ".claude-inbox-crash")); !os.IsNotExist(err) {
-		t.Fatal("crash secret retained")
+	for _, name := range []string{".claude-inbox-crash", ".identity-0123456789abcdef"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("private atomic-write temp retained: %s", name)
+		}
 	}
-	for _, name := range []string{claudewake.FileName, "unrelated"} {
+	for _, name := range []string{claudewake.FileName, ".identity", "unrelated"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatal("cleanup removed committed or unrelated file")
 		}

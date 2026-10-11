@@ -147,6 +147,7 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 	candidate.Runtime = e.wakeRuntimeLocked(m.To)
 	if b := e.bindings[m.To]; b.Active && b.Generation == m.TargetGeneration {
 		candidate.SessionID = b.SessionID
+		candidate.Remote = b.RemoteKey != ""
 		candidate.BindID = b.BindID
 		candidate.Generation = b.Generation
 	}
@@ -170,6 +171,7 @@ func (e *Engine) wakeRuntimeLocked(slot model.ActorID) model.RuntimeKind {
 // outcome was recorded; Failed means that outcome proved no delivery. A
 // reservation without an outcome may have reached the native queue.
 type wakeNudge struct {
+	MessageID   string
 	At          time.Time
 	Consumption model.NativeWakeConsumption
 	MidTurn     bool
@@ -193,7 +195,7 @@ func (e *Engine) noteWakeNudgeLocked(r WakeReservation) {
 		ended := e.turnEnded[r.Target]
 		midTurn = ended.IsZero() || e.bindings[r.Target].LastActivity.After(ended)
 	}
-	e.wakeNudges[r.Target] = wakeNudge{At: r.At, Consumption: policy.Consumption, MidTurn: midTurn}
+	e.wakeNudges[r.Target] = wakeNudge{MessageID: r.MessageID, At: r.At, Consumption: policy.Consumption, MidTurn: midTurn}
 }
 
 // observeWakeHandoffLocked derives progress from the same durable message fact
@@ -328,7 +330,11 @@ func (e *Engine) WakeHeads() []WakeCandidate {
 // the waker still applies runtime capability, suppression, reservation and rate
 // rules; this predicate does not grant an external effect or an idle lease.
 func HasWakeWork(roomID string, events []model.Event, runtimes map[model.ActorID]model.RuntimeKind) (bool, error) {
-	e := &Engine{cfg: Config{RoomID: roomID, Runtimes: runtimes}, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
+	return HasWakeWorkWithSharedSlot(roomID, events, runtimes, "")
+}
+
+func HasWakeWorkWithSharedSlot(roomID string, events []model.Event, runtimes map[model.ActorID]model.RuntimeKind, sharedSlot model.ActorID) (bool, error) {
+	e := &Engine{cfg: Config{RoomID: roomID, Runtimes: runtimes, SharedSlot: sharedSlot}, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
 	for _, ev := range events {
 		if ev.RoomID != roomID {
 			return false, errors.New("native relay Room identity mismatch")

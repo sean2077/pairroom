@@ -26,8 +26,8 @@ func NativeSessionName(roomID, roomName string, actor ActorID, self, peer Runtim
 		return ""
 	}
 	runtimes := map[ActorID]RuntimeKind{actor: self.CanonicalForSlot(actor), OtherParticipant(actor): peer.CanonicalForSlot(OtherParticipant(actor))}
-	for _, kind := range runtimes {
-		if !kind.Valid() {
+	for slot, kind := range runtimes {
+		if !kind.Valid() && !(slot != actor && kind == RuntimeAwaitingPeer) {
 			return ""
 		}
 	}

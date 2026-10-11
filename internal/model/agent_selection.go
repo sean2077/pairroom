@@ -69,6 +69,9 @@ func normalizeCCSwitchAppType(value string) string {
 
 // AgentSelection is immutable, secret-free configuration for one stable Room slot.
 type AgentSelection struct {
+	// AwaitingPeer is an explicit unselected LAN peer, never a default Runtime.
+	// The Service restricts it to the invited slot of a Native shared Room.
+	AwaitingPeer   bool        `json:"awaiting_peer,omitempty"`
 	Runtime        RuntimeKind `json:"runtime"`
 	Provider       ProviderRef `json:"provider"`
 	Model          string      `json:"model,omitempty"`
@@ -80,6 +83,9 @@ type AgentSelection struct {
 }
 
 func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
+	if s.AwaitingPeer {
+		return s
+	}
 	s.Runtime = s.Runtime.CanonicalForSlot(actor)
 	if s.Provider.Source == "" {
 		s.Provider.Source = ProviderNative
@@ -98,6 +104,13 @@ func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
 func (s AgentSelection) Validate(actor ActorID) error {
 	if !actor.ValidParticipant() {
 		return fmt.Errorf("invalid Agent slot %q", actor)
+	}
+	if s.AwaitingPeer {
+		s.AwaitingPeer = false
+		if s != (AgentSelection{}) {
+			return errors.New("awaiting peer must not select a runtime, provider, or execution configuration")
+		}
+		return nil
 	}
 	s = s.Normalized(actor)
 	if !s.Runtime.Valid() {

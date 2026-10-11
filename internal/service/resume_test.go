@@ -12,6 +12,7 @@ import (
 	"github.com/sean2077/pairroom/internal/agent"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/relayclient"
 	"github.com/sean2077/pairroom/internal/store"
 )
 
@@ -101,6 +102,7 @@ func TestResumePendingRoomsActivatesOnlyRoomsWithWakeWork(t *testing.T) {
 func TestResumePendingNativeRoomsWithoutExternalWakeStillNotify(t *testing.T) {
 	for _, kind := range []model.RuntimeKind{model.RuntimeGrok, model.RuntimeGemini} {
 		t.Run(string(kind), func(t *testing.T) {
+			relayclient.IsolateNativeCaller(t)
 			registry, project := testRegistry(t, testGitRepo(t))
 			noSpawn := ProvisionerFunc(func(context.Context, Project, model.ActorID, BindingSpec, string) (Binding, func(context.Context) error, error) {
 				t.Error("Native provisioning spawned an adapter")

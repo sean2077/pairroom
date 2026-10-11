@@ -64,6 +64,79 @@ class FlagInventoryTests(unittest.TestCase):
                 self.assertEqual(docs_check.extract_flags(), ["attach", "mock", "room"])
 
 
+class StorageFormatTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.write("internal/version/version.go", """package version
+const (
+    StoreSchema = 13
+    LocalStoreSchema = 12
+)
+""")
+        self.write("internal/service/provision.go", "payload := roomProvisionedPayload{Schema: 6, HostMode: room.HostMode}")
+        self.write("internal/service/registry.go", """package service
+const registryCheckpointSchema = 4
+const localRegistryCheckpointSchema = 3
+func validate() {
+    if (payload.Schema == 5 && storeSchema != 12) || (payload.Schema == 6 && storeSchema != 13) { reject() }
+}
+""")
+        self.summary = ("New Rooms write **Store schema 13/provisioning 6**; existing local "
+                        "Store 12/provisioning 5 remains readable. New Registry checkpoints "
+                        "use 4; existing local checkpoint 3 remains readable.\n")
+        self.table = ("\n| Format | New writes | Existing local reads |\n|---|---|---|\n"
+                      "| Room Store / provisioning | 13/6 | 12/5 |\n"
+                      "| Registry checkpoint | 4 | 3 |\n")
+        for name in ("STORAGE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "UPGRADING.md"):
+            self.write("docs/" + name, self.summary + (self.table if name == "STORAGE.md" else ""))
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_current_writers_and_existing_local_readers_are_both_supported(self):
+        self.assertEqual(docs_check.storage_format_window(self.root), ((13, 6), (12, 5), 4, 3))
+        self.assertEqual(docs_check.check_storage_formats(self.root), [])
+
+    def test_old_head_architecture_claim_is_rejected(self):
+        self.write("docs/ARCHITECTURE.md", "Current readers require Store schema 12/provisioning 5. Registry checkpoint 3 requires canonical slots and host mode.\n")
+        failures = docs_check.check_storage_formats(self.root)
+        self.assertEqual(len(failures), 2, failures)
+        self.assertTrue(all("docs/ARCHITECTURE.md" in item for item in failures))
+
+    def test_missing_reader_window_and_mismatched_pair_are_rejected(self):
+        for old, wrong in (("Store 12/provisioning 5", "Store 12/provisioning 6"),
+                           ("Store 12/provisioning 5", "Store 11/provisioning 4"),
+                           ("checkpoint 3", "checkpoint 2")):
+            with self.subTest(wrong=wrong):
+                self.write("docs/TROUBLESHOOTING.md", self.summary.replace(old, wrong))
+                self.assertTrue(any("docs/TROUBLESHOOTING.md" in item for item in docs_check.check_storage_formats(self.root)))
+
+    def test_writer_reader_columns_cannot_be_swapped(self):
+        for old, wrong in (("| 13/6 | 12/5 |", "| 12/5 | 13/6 |"),
+                           ("| 4 | 3 |", "| 3 | 4 |")):
+            with self.subTest(wrong=wrong):
+                self.write("docs/STORAGE.md", self.summary + self.table.replace(old, wrong))
+                failures = docs_check.check_storage_formats(self.root)
+                self.assertEqual(len(failures), 1, failures)
+                self.assertIn("table must distinguish", failures[0])
+
+    def test_source_writer_change_requires_current_documentation(self):
+        self.write("internal/service/registry.go", (self.root / "internal/service/registry.go").read_text().replace("registryCheckpointSchema = 4", "registryCheckpointSchema = 5"))
+        failures = docs_check.check_storage_formats(self.root)
+        self.assertTrue(any("new checkpoint 5" in item for item in failures), failures)
+
+    def test_history_is_preserved_and_examples_cannot_supply_current_contract(self):
+        self.write("CHANGELOG.md", "Historical Store 11/provisioning 4 and checkpoint 2.\n")
+        self.assertEqual(docs_check.check_storage_formats(self.root), [])
+        self.write("docs/ARCHITECTURE.md", "```text\n" + self.summary + "```\n<!-- " + self.summary + " -->\n")
+        failures = docs_check.check_storage_formats(self.root)
+        self.assertEqual(len(failures), 2, failures)
+
+
 class MarkdownTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

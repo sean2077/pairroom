@@ -67,6 +67,11 @@ func nativeHTTPWith(t *testing.T, wakeConfig nativeWakerConfig, notifier *Notifi
 	}
 	server := httptest.NewServer(management.Handler())
 	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := management.Shutdown(stopCtx); err != nil {
+			t.Errorf("stop native fixture Management: %v", err)
+		}
+		stopCancel()
 		server.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -557,7 +562,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "other-bind", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatalf("duplicate runtime identity accepted: %v", err)
 	}
-	embedded, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "embedded", Bindings: specs(BindingNew, BindingNew, "")}, deferredNewProvisioner{})
+	embedded, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: f.project.ID, Name: "embedded", Bindings: specs(BindingNew, BindingNew, "")}, deferredNewProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}

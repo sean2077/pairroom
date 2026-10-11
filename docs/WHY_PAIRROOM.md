@@ -24,7 +24,7 @@ Automatic relay publishes an explicitly addressed complete response at the nativ
 
 Keeping a native harness and keeping its original desktop/terminal UI are different promises. Choose the Room's immutable host mode accordingly:
 
-| Need | Embedded Room | Native Room (recommended for daily work; experimental) |
+| Need | Embedded Room | Native Room (default and recommended) |
 |---|---|---|
 | Where you interact | PairRoom's conversation and controls; adapters drive the supported native harness interfaces | Your own Claude Code / Codex / Grok Build sessions, including the intended Codex Desktop workflow; approved hooks bind them to the relay |
 | Who owns execution | PairRoom schedules the two participants' Turns; each harness still runs its own tools and subagents | The original harness owns its process, tools, permissions, input and interruption; PairRoom does not launch or interrupt it |
@@ -32,7 +32,7 @@ Keeping a native harness and keeping its original desktop/terminal UI are differ
 | Delivery and control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control |
 | Important limit | Native tool execution does not expose every interactive vendor feature or preserve an independent Desktop UI | Automatic continuation is bounded by park; authenticated multi-round vendor E2E remains a release gate |
 
-Native is the recommended mode for daily work: you keep interacting in your usual terminal or client, each side's work stays visible there, and you can stop or correct it directly. It remains experimental under the limits below. Embedded is the quickest first trial, including Mock, and the mode for independent per-slot Provider selection. In both modes the exchange between the Agents is visible in the Room.
+Native is the default and recommended mode for daily work: you keep interacting in your usual terminal or client, each side's work stays visible there, and you can stop or correct it directly. Embedded is an optional path for PairRoom-owned adapter controls, Mock demonstrations, and independent per-slot Provider selection. In both modes the exchange between the Agents is visible in the Room.
 
 A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native supports Claude Code, Codex and Grok Build. Grok uses bounded Hook readiness hints and foreground collection to avoid clipped inputs; clipped Stop replies require explicit full-text publication. See [Grok Native](CLI_REFERENCE.md#grok-build-native). Hook parking and continuation have Runtime-specific bounds; beyond them, messages remain queued for a supported collector, an eligible wake, or human intervention. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Native continuation limits](NATIVE_RELAY.md#long-unattended-runs-by-runtime), [Protocol](PROTOCOL.md#native-host-protocol-v8), and [Support](../SUPPORT.md).
 
@@ -106,7 +106,7 @@ Adopting Orca's terminal/notification surface does not require adopting its orch
 | An architect/editor model split without two preserved native sessions | [Aider](https://aider.chat/docs/usage/modes.html) |
 | Cloud/team execution or enforced workflow budgets and gates | A product with those explicit deployment and control guarantees |
 
-PairRoom adds its own Service, bindings, storage and compatibility maintenance. It is not zero setup, a generic agent graph, a full editor, multi-user hosting, cloud sync, or a replacement for every native session feature. Its web listeners are local and loopback-only; the selected models may still receive code through their Providers. See [Security](../SECURITY.md).
+PairRoom adds a hosting Service, bindings, storage and compatibility maintenance. It is not zero setup, a generic agent graph, a full editor, cloud sync, or a replacement for every native session feature. Native supports one colleague per shared Room over the LAN with explicit membership approval. Only the Room's host needs a Service; the guest uses CLI/hooks directly. Different native sessions on one machine can host local Rooms and join Rooms on other hosts concurrently. Management and Room views stay on loopback; the optional TLS listener serves only the shared Native relay. The selected models may still receive code through their Providers. See [LAN collaboration](LAN_NATIVE.md) and [Security](../SECURITY.md).
 
 ## Expose uncertainty instead of silently repeating work
 

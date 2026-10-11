@@ -8,6 +8,16 @@ Per-process Provider/model/effort/permission projection in this page applies to 
 
 Shared Service settings, saved pair templates, and creation-time collaboration are not permission to reconfigure a Native process. A desktop-owned embedded Service can serve either Room host mode.
 
+Native is the default for new Service Rooms. Choose Embedded explicitly when PairRoom should own the local adapters; its creation form recommends Native for existing native sessions and colleague collaboration. Existing Rooms retain their committed host mode.
+
+## Native LAN settings
+
+**Settings → LAN sharing** controls a separate listener, disabled by default. Set an explicit numeric address assigned to the intended local interface and a fixed port, such as `192.168.10.24:4317`. Only private, loopback or link-local addresses are accepted; wildcard addresses, public Internet addresses and hostnames are refused. Management's existing `listen` and token settings still describe its numeric-loopback control plane.
+
+LAN hosting settings and the persistent host key live in the Service data root, outside startup JSON. Disabling the listener keeps that key. Use a stable address and port: each joined client binding retains the endpoint and host pin from its invitation, and automatic address migration is not supported. The guest's CLI/hooks connect directly using that Room's admitted certificate. Joining requires no local Service, listener, proxy setting, or `--service-file`. Client identities live in a private per-user store separate from every Service data root. A local Service may optionally project those bindings in **Joined Rooms**; it does not replace their transport target. Distinct native sessions can concurrently use locally hosted Rooms and Rooms on several other hosts without a global server switch.
+
+Create a shared Room explicitly with `sharing: "lan"` and `owner_slot`, or `pairroom relay bind --create --share lan`. Only the owner's Runtime is selected initially; the other selection is `{"awaiting_peer":true}` until its owner's request is admitted. `awaiting_peer` is a pending identity, never an executable Runtime or a reusable pair-template selection. LAN Rooms support Native mode only. [Native LAN collaboration](LAN_NATIVE.md) explains the complete invitation, approval, evidence and recovery workflow.
+
 ## Load and override
 
 Startup applies built-in defaults, then JSON configuration, then explicit flags for that command. In-Room changes affect only that Room, not the global file. The strict decoder rejects unknown/duplicate fields and malformed/null policy values. Read [Upgrading](UPGRADING.md) before breaking changes.
@@ -104,6 +114,7 @@ These JSON names come from configuration/model struct tags. The list identifies 
 - `approval_policy`
 - `args`
 - `auto_start`
+- `awaiting_peer`
 - `cc_switch`
 - `claude`
 - `codex`

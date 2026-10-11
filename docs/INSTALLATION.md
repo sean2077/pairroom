@@ -7,7 +7,12 @@ This guide owns the installation facts: which channel fits which platform, prere
 | Entry | You get | Choose it for |
 |---|---|---|
 | Desktop package | Desktop application plus a bundled `pairroom` CLI (except the Linux AppImage) | Daily use: tray, embedded Service, native Settings |
-| CLI only | The `pairroom` binary | Headless or SSH-forwarded hosts, daemon-only machines, browser-driven use |
+| CLI only | The `pairroom` binary | Direct LAN participants without a local Service; headless or SSH-forwarded hosts, daemon-only machines, browser-driven use |
+
+Only a Room's host needs to run a Service. To join a colleague's Native LAN
+Room, install the CLI and approve the project's hooks, then follow the
+[invitation workflow](LAN_NATIVE.md). Desktop and a local Service are optional
+on the participating machine.
 
 Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview)) must be installed and signed in separately. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
 

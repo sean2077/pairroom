@@ -1,0 +1,133 @@
+package lanclient
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/url"
+	"time"
+
+	"github.com/sean2077/pairroom/internal/lanshare"
+	"github.com/sean2077/pairroom/internal/nativeidentity"
+	"github.com/sean2077/pairroom/internal/relay"
+)
+
+// A request uses its immutable operation snapshot, not whichever binding a
+// concurrent process most recently loaded. Native credentials never leave
+// this machine: only the accepted LAN binding and generation are headers.
+type memberTransport struct {
+	base       http.RoundTripper
+	bindID     string
+	generation uint64
+	contact    func(bool)
+}
+
+func (t memberTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	copy := request.Clone(request.Context())
+	if t.bindID != "" {
+		lanshare.SetMemberHeaders(copy, t.bindID, t.generation)
+	}
+	response, err := t.base.RoundTrip(copy)
+	if t.contact != nil {
+		t.contact(response != nil)
+	}
+	return response, err
+}
+
+func (c *Client) httpFor(r record) (*http.Client, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := relay.Digest(r.Invite.Endpoint + "\x00" + r.Invite.HostPin + "\x00" + r.Identity.CertificatePEM + "\x00" + r.Identity.PrivateKeyPEM)
+	if c.http == nil || c.transportKey != key {
+		client, err := lanshare.NewClient(r.Invite, r.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if c.http != nil {
+			c.http.CloseIdleConnections()
+		}
+		c.http, c.transportKey = client, key
+	}
+	client := *c.http
+	transport := memberTransport{base: client.Transport, contact: c.observeContact}
+	if r.Room != nil {
+		transport.bindID, transport.generation = r.Room.BindID, r.Room.Generation
+	}
+	client.Transport = transport
+	return &client, nil
+}
+
+// A pinned HTTP response proves contact even when Room admission is denied.
+// Keep reachability independent of operation success and membership status.
+func (c *Client) observeContact(connected bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connected = connected
+	if connected {
+		c.lastSeen = time.Now().UTC()
+	}
+}
+
+func (c *Client) call(ctx context.Context, r record, action string, payload, result any) error {
+	client, err := c.httpFor(r)
+	if err != nil {
+		return err
+	}
+	return lanshare.Call(ctx, client, r.Invite, action, payload, result)
+}
+
+func membershipDenied(err error) bool {
+	var failure *lanshare.Error
+	return errors.As(err, &failure) && (failure.Status == http.StatusUnauthorized || failure.Status == http.StatusForbidden)
+}
+
+func safeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrTransportUnavailable) {
+		return ErrTransportUnavailable
+	}
+	var localFailure *Error
+	if errors.As(err, &localFailure) {
+		return localFailure
+	}
+	if errors.Is(err, relay.ErrAuth) || errors.Is(err, nativeidentity.ErrOwned) || errors.Is(err, nativeidentity.ErrUnowned) || membershipDenied(err) {
+		return relay.ErrAuth
+	}
+	if errors.Is(err, relay.ErrSendPayloadConflict) {
+		return relay.ErrSendPayloadConflict
+	}
+	var failure *lanshare.Error
+	if errors.As(err, &failure) {
+		if failure.Code == relay.SendPayloadConflictCode {
+			return relay.ErrSendPayloadConflict
+		}
+		if failure.Code == relay.WakeReservedCode {
+			return relay.ErrWakeReserved
+		}
+		if failure.Code == relay.WakeIneligibleCode {
+			return relay.ErrWakeIneligible
+		}
+		if failure.Code == lanshare.HostUnavailableCode {
+			// The host answered but cannot serve the Room right now; the
+			// admission is intact, so this must not read as an auth failure.
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room is unavailable right now and the membership stays valid; retry after the host resolves it"}
+		}
+		if failure.Code == lanshare.SharedQuotaCode {
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room's attachment storage is full; ask the host owner to free space or start a new Room, then retry the same publication"}
+		}
+		if failure.Code == lanshare.TemporaryQuotaCode {
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room's temporary upload storage is full; ask the host owner to clear leftover uploads, then retry the same publication"}
+		}
+		if failure.Code == lanshare.HostStorageCode {
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Service could not complete this operation; ask the host owner to inspect its Service state, then retry"}
+		}
+		return &Error{Status: failure.Status, Message: ErrUnavailable.Error()}
+	}
+	var transportFailure *url.Error
+	if errors.As(err, &transportFailure) {
+		return ErrTransportUnavailable
+	}
+	return ErrUnavailable
+}

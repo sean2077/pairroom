@@ -70,7 +70,11 @@ func roomHasResumableWork(durable Room) (bool, error) {
 		for actor, selection := range durable.Agents {
 			kinds[actor] = selection.Runtime
 		}
-		return relay.HasWakeWork(durable.ID, events, kinds)
+		var sharedSlot model.ActorID
+		if durable.Sharing == "lan" {
+			sharedSlot = model.OtherParticipant(durable.OwnerSlot)
+		}
+		return relay.HasWakeWorkWithSharedSlot(durable.ID, events, kinds, sharedSlot)
 	}
 	return room.HasRecoverableWork(events)
 }

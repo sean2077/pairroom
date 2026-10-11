@@ -21,8 +21,9 @@ and help me install PairRoom and check my environment. Ask before each change.
 
 | Path | Use it for | Steps |
 |---|---|---|
-| **Embedded** — start here | First use: PairRoom's conversation UI, with Runtime, Provider, model and effort chosen per slot | 2–4, then 5 |
-| **Native** — daily work (experimental) | Keeping the user's own Claude Code, Codex (including Desktop), Grok Build, or Gemini CLI sessions | 2–4, then 6 |
+| **Native** — default and recommended | Keeping the user's own Claude Code, Codex (including Desktop), Grok Build, or Gemini CLI sessions | 2–4, then 6 |
+| **Native LAN guest** | Joining a colleague's Room directly with CLI/hooks, without a local Service | 2, the guest's Runtime in 3, then 6a–6c with `preflight --join` and the [LAN workflow](LAN_NATIVE.md) |
+| **Embedded** — optional | PairRoom-owned adapters and conversation controls, per-slot Provider overrides, or a Mock demonstration | 2–4, then 5 |
 
 Ask which Runtime each of the two slots will use. Both slots may use the same Runtime and still differ in Provider and model, for example one session for planning/review and another independently configured session for implementation. Embedded selects this per slot through a read-only [CC Switch Provider reference](CONFIGURATION.md#cc-switch-provider-references); Native uses whatever each original session is already configured with. [CC Switch](https://github.com/farion1231/cc-switch) is needed only for per-slot Providers in Embedded. Gemini Embedded uses native authentication only: CC Switch and effort overrides are unsupported, and exact resume after an accepted session's process exits is blocked rather than replaced. Prefer Native for Gemini sessions that must survive suspension or Service restart; see [Gemini boundaries](NATIVE_RELAY.md#gemini-cli). Tool-loop quality with third-party Providers varies, so try the chosen combination on a small task first.
 
@@ -56,9 +57,11 @@ The installer verifies the release checksum and warns when the destination is no
 
 If the CLI is installed but not found, first ask the user to restart the harness: a running harness keeps the environment it started with, including after a Windows Setup that just added the PATH entry. If it is still missing, propose adding its directory to the user's PATH and wait for confirmation, then run `pairroom version` again in a new session. For Native, repeat this check in **both** harnesses; Codex Desktop and a terminal can see different PATHs.
 
-Use one release: the CLI that Native sessions run must come from the same release as the running Service. With Desktop, prefer its bundled CLI over a separately installed copy.
+Use one release: the CLI that Native sessions run must come from the same release as the Room's hosting Service. With Desktop, prefer its bundled CLI over a separately installed copy. A LAN guest needs no local Service; coordinate the CLI release with the host.
 
 ## 3. Check Git and the Runtimes
+
+For a LAN guest, verify Git and only the Runtime of that joining session. The guest does not need to install the host's Runtime or run a two-adapter `doctor` check. `relay preflight --join` in step 6c checks its own CLI/hooks and session eligibility without a local Service.
 
 From the user's project repository:
 
@@ -91,6 +94,8 @@ For Embedded per-slot Providers, `pairroom providers --json` lists CC Switch Pro
 
 ## 4. Find or start the Service
 
+This step applies to hosting Rooms. Skip it when only joining a colleague's LAN Room: CLI/hooks connect directly, and a local dashboard is optional. One machine can also host its own Rooms and join other hosts through different native sessions, with no global server switch.
+
 Exactly one Service owns a data root. Determine which one applies:
 
 - Desktop is open (window or tray): it already owns the Service.
@@ -105,7 +110,7 @@ The Agent cannot operate Management, so give the user this checklist:
 
 1. Open Management (the Desktop window, or `pairroom daemon open`).
 2. Register the repository's absolute path as a **Project**.
-3. Create an **Embedded** Room. For each Agent choose Runtime, supported optional Provider, model and effort fields; empty fields inherit native configuration. Gemini uses native Provider settings and does not support effort overrides.
+3. Change the default Native selection to **Embedded** when creating the Room. For each Agent choose Runtime, supported optional Provider, model and effort fields; empty fields inherit native configuration. Gemini uses native Provider settings and does not support effort overrides.
 4. Both participants default to **YOLO**. For the first test, select read-only native permissions explicitly.
 5. Send the first task from [Getting started](GETTING_STARTED.md#first-real-room).
 
@@ -113,7 +118,7 @@ The Agent cannot operate Management, so give the user this checklist:
 
 ## 6. Native: bind two existing sessions
 
-Continue only when steps 2–4 pass in each harness's tool shell and a non-Mock Service is running. [Native relay](NATIVE_RELAY.md) owns this workflow.
+For locally hosted Rooms, continue when steps 2–4 pass in each harness's tool shell and a non-Mock Service is running. A LAN guest completes steps 2–3 for its own Runtime, follows 6a–6c below, then uses the [LAN invitation workflow](LAN_NATIVE.md#create-request-accept) in place of 6d. It needs no local Service. [Native relay](NATIVE_RELAY.md) owns hook installation and transport behavior.
 
 **a. Install the hooks.** This writes project files, so confirm first. From the project worktree:
 
@@ -126,6 +131,8 @@ It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by defau
 **b. Stop for approval.** The user reviews and approves the exact hook in each harness: Codex `/hooks`; Claude Code project hook consent; Grok `/hooks`, press `r` to reload, then folder trust; Gemini `/hooks` and trusted workspace, approving/reloading both BeforeTool and AfterAgent. Follow each harness's reload or restart guidance so the hook and skill are loaded. Continue only after the user confirms.
 
 **c. Preflight.** In each Agent session, run `pairroom relay preflight`. It changes nothing and reports as JSON whether the bare `pairroom` command the hooks run is on this shell's PATH, whether the Service is reachable and from the same release, and whether this runtime's required response hooks are installed. Continue when `ready` is `true`; otherwise follow `next_steps` in order and rerun it. A Service version mismatch only warns and still reports `ready`, so read `next_steps` either way. It cannot see hook approval.
+
+Before an initial LAN join, use **`pairroom relay preflight --join`**. It checks the joining session's local prerequisites without requiring or contacting a local Service. Do not pass `--service-file` to join. After admission, ordinary `preflight` resolves the remote binding and checks its host directly.
 
 **d. Create and join.** In the first session, run `/pairroom-relay <topic>`, or `pairroom relay bind --create --name "<topic>"` as a tool call. It prints `peer_join_local` and `peer_join`; the user gives one to the second session, whose Agent runs it as a tool call. Bind must run as the Agent's own tool call: it reads the official session ID and fails closed in a detached terminal or in Grok's `!` shell mode. Gemini must use a fresh standalone `run_shell_command` tool call so its BeforeTool identity observation is still valid. If creation succeeded but bind failed, follow the printed recovery command instead of repeating `--create`.
 
@@ -140,6 +147,7 @@ It writes `.claude/settings.json` for Claude Code (Grok Build reuses it by defau
 | `relay preflight` is not `ready` | Follow its `next_steps` in order, then rerun it |
 | `relay doctor` reports no matching binding | Expected before step 6d: it inspects a bound session, so use `relay preflight` until then |
 | Bind cannot reach the Service | Step 4. A custom data root uses `--service-file <root>/relay-endpoint.json`, as a path |
+| Initial LAN setup asks for a local Service | Use `relay preflight --join`, then the invitation command. Only the Room's host needs a Service |
 | Bind rejects a missing or disabled hook | Steps 6a and 6b for that Runtime |
 | Bind reports missing session identity | Run it as the Agent's tool call inside the intended session |
 | `relay doctor` reports a version mismatch | Use the CLI from the Service's release (step 2) |

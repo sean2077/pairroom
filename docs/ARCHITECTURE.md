@@ -43,7 +43,7 @@ The Room Event Log is authoritative. Registry/indexes support discovery and owne
 
 Event sequences start at 1 and remain contiguous. Validate the existing published Room identity before repair or new writes; a missing/empty log is not a fresh Room. Ambiguous append failure closes the writer. Only an incomplete final record is repairable; never skip middle corruption.
 
-Current readers require Store schema 12/provisioning 5 with immutable explicit `host_mode`. Registry checkpoint 3 requires canonical slots and host mode. Retired Service roots fail before recovery, replay, repair, or rewrite; do not infer missing Bindings, selections, or collaboration from current defaults. [Storage](STORAGE.md) owns formats and [Upgrading](UPGRADING.md) owns retirement/rollback.
+New Rooms write Store schema 13/provisioning 6 with immutable explicit `host_mode`; current readers also accept existing local Store schema 12/provisioning 5 without rewriting Room facts. New Registry checkpoints use 4; existing local checkpoint 3 remains readable. Both require canonical slots and host mode. LAN facts require 13/6. Retired and future Service formats fail before recovery, replay, repair, or rewrite; do not infer missing Bindings, selections, or collaboration from current defaults. [Storage](STORAGE.md) owns formats and [Upgrading](UPGRADING.md) owns retirement/rollback.
 
 Agent pair profiles and default ID live in `agent-pair-profiles.json`, separately from the rebuildable `service-registry.json`. Creation copies the pair; later profile edits/deletion do not mutate Rooms. Native selections remain display-only; Embedded Provider materialization retains its validation boundary.
 
@@ -132,7 +132,7 @@ Desktop uses an explicit validated URL, installed daemon, or embedded Service wh
 
 ## HTTP, browser, and privacy boundaries
 
-Validate numeric-loopback-only listeners before opening state. Bearer tokens do not allow LAN/hostname binds. Browser bootstrap exchanges credentials for scoped sessions; mutations retain same-origin/CSRF protection. The Management gateway does not expose another Room's credentials or identity.
+Validate numeric-loopback Management, direct Room and standalone listeners before opening state. Bearer tokens do not allow LAN/hostname binds on those surfaces. The separately enabled Native LAN listener accepts only a selected numeric private interface, uses pinned TLS and per-Room certificate admission, and exposes a fixed Room-operation allowlist. Only the Room's host needs a Service. Joining CLI/hooks use a private per-user client store and connect directly to the immutable host target of each binding. An optional local Service projects the same client records for Joined Rooms, human actions and supported wake observation; it owns neither another remote inbox nor a second agent binding. Distinct native sessions can concurrently use locally hosted Rooms and several remote hosts. Browser bootstrap exchanges credentials for scoped sessions; mutations retain same-origin/CSRF protection. The Management gateway does not expose another Room's credentials or identity. See [Native LAN collaboration](LAN_NATIVE.md) and [Security](../SECURITY.md#25-native-lan-membership).
 
 SSE is a projection stream, not an execution queue. Reconnect from the actual cursor and refresh after a bounded-tail reset; never replay commands to repair a display gap. Incremental rendering preserves drafts, focus, disclosure, and reading position. Stale responses cannot overwrite newer mutations or target another Room.
 
@@ -160,4 +160,4 @@ Optional wake is Service-authorized, body-free, rate-limited, durably reserved b
 
 ## Verification and change discipline
 
-Use state-transition tests for successful, rejected, ambiguous, cancelled, restarted, and late-callback paths. Inventories must match source registrations/fields. [Contributing](../CONTRIBUTING.md) defines commands and evidence layers. Native remains experimental: historical plans, UI fixtures, synthetic hooks, and Mock cannot establish current authenticated Claude/Codex/Grok/Gemini multi-round acceptance or billed-token savings.
+Use state-transition tests for successful, rejected, ambiguous, cancelled, restarted, and late-callback paths. Inventories must match source registrations/fields. [Contributing](../CONTRIBUTING.md) defines commands and evidence layers. Historical plans, UI fixtures, synthetic hooks, and Mock cannot establish current authenticated Claude/Codex/Grok/Gemini multi-round acceptance or billed-token savings.

@@ -6,9 +6,12 @@ import (
 )
 
 const (
-	Current       = "5.13.1"
-	StoreSchema   = 12
-	RepositoryURL = "https://github.com/sean2077/pairroom"
+	Current     = "5.13.1"
+	StoreSchema = 13
+	// LocalStoreSchema is the supported pre-LAN format. Its explicit local
+	// permissions and bindings are read unchanged; LAN facts require schema 13.
+	LocalStoreSchema = 12
+	RepositoryURL    = "https://github.com/sean2077/pairroom"
 )
 
 // Commit, BuildDate, LastTag, and CommitsSinceTag are populated by the make
@@ -61,8 +64,8 @@ func Describe() string {
 	return tag + "+" + sha
 }
 
-// SupportsStoreSchema accepts only the current clean-cutover contract. Retired
-// stores must be rejected before replay or repair, never silently migrated.
+// SupportsStoreSchema is an explicit bounded compatibility window. Pre-5.0
+// stores remain retired and future formats fail closed before replay/repair.
 func SupportsStoreSchema(schema int) bool {
-	return schema == StoreSchema
+	return schema == LocalStoreSchema || schema == StoreSchema
 }

@@ -140,6 +140,7 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 		release()
 		return err
 	}
+	defer c.close()
 	cleanupAtomicTemps(dir)
 	// The binding was associated at bind from the harness environment, so the
 	// official hook session must equal the recorded one. A mismatch fails closed
@@ -348,7 +349,7 @@ func noteUnboundSession(ctx context.Context, dir string, kind model.RuntimeKind,
 	var bound []State
 	for _, path := range paths {
 		var s State
-		if readPrivate(path, &s) != nil || s.Schema != 2 || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
+		if readPrivate(path, &s) != nil || !validStateFormat(s) || s.Runtime != kind || s.Generation == 0 || s.SessionID == "" {
 			continue
 		}
 		bound = append(bound, s)
@@ -358,6 +359,10 @@ func noteUnboundSession(ctx context.Context, dir string, kind model.RuntimeKind,
 		return
 	case 1:
 		s := bound[0]
+		if s.LAN != nil {
+			_, _ = fmt.Fprintf(diagnostic, "PairRoom: this %s session is not bound here; LAN Room %s belongs to another native session. Resume that session, or ask the host to revoke its admission before joining from a new session.\n", kind.DisplayName(), s.Room)
+			return
+		}
 		_, _ = fmt.Fprintf(diagnostic, "PairRoom: this %s session is not bound here; Room %s slot %d belongs to another %s session, so this reply was not relayed. If this session intentionally replaced it (for example after /clear or resume), run pairroom relay bind --replace --room %s --slot %d in this session.\n", kind.DisplayName(), s.Room, slotNumber(s.Slot), kind.DisplayName(), s.Room, slotNumber(s.Slot))
 	default:
 		_, _ = fmt.Fprintf(diagnostic, "PairRoom: this %s session is not bound here; %d bindings in this workspace belong to other %s sessions, so this reply was not relayed. If this session intentionally replaced one, run pairroom relay bind --replace --room <room> --slot <1|2> in this session.\n", kind.DisplayName(), len(bound), kind.DisplayName())

@@ -77,16 +77,17 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	if err != nil {
 		return nil, err
 	}
-	kinds := map[model.ActorID]model.RuntimeKind{}
-	for actor, selection := range durable.Agents {
-		kinds[actor] = selection.Runtime
-	}
+	kinds := selectionsRuntimeKinds(durable.Agents)
 	var onAttention func(relay.Attention)
 	if notifier != nil {
 		// Runs under the relay lock: record only, never block.
 		onAttention = func(a relay.Attention) { notifier.Notify(durable, a.Kind, a.Slot, a.Key) }
 	}
-	engine, err := relay.Open(relay.Config{RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, CommitBinding: func(b relay.Binding, appendFact func() error) error {
+	var sharedSlot model.ActorID
+	if durable.Sharing == "lan" {
+		sharedSlot = model.OtherParticipant(durable.OwnerSlot)
+	}
+	engine, err := relay.Open(relay.Config{SharedSlot: sharedSlot, RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, OnAppend: registry.observeLANAuthorization, CommitBinding: func(b relay.Binding, appendFact func() error) error {
 		return registry.commitNativeBinding(durable.ID, b, appendFact)
 	}})
 	if err != nil {
@@ -261,7 +262,15 @@ func (n *nativeHostRuntime) snapshot() map[string]any {
 	return n.snapshotWithRelay(n.engine.Snapshot())
 }
 func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
-	return map[string]any{"room": n.room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{model.ActorSlot1: n.room.Agents[model.ActorSlot1].Runtime, model.ActorSlot2: n.room.Agents[model.ActorSlot2].Runtime})}
+	kinds := n.engine.Runtimes()
+	room := cloneRoom(n.room)
+	for slot, kind := range kinds {
+		if room.Sharing == "lan" && slot != room.OwnerSlot {
+			room.Agents[slot] = nativeLANSelection(kind, kind.Valid())
+		}
+	}
+	room = cloneRoom(room)
+	return map[string]any{"room": room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(kinds)}
 }
 func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
@@ -413,20 +422,42 @@ func nativeResult(w http.ResponseWriter, value any, err error) {
 	writeManagementJSON(w, 200, value)
 }
 func (n *nativeHostRuntime) upload(w http.ResponseWriter, r *http.Request) {
+	kind := r.Header.Get("X-PairRoom-Attachment-Kind")
+	if kind != "" && kind != "image" && kind != "file" {
+		writeManagementError(w, 400, "attachment kind must be image or file")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, attachment.MaxImageBytes+(1<<20))
 	reader, err := r.MultipartReader()
 	if err != nil {
-		writeManagementError(w, 400, "multipart image required")
+		writeManagementError(w, 400, "multipart attachment required")
 		return
 	}
 	part, err := reader.NextPart()
 	if err != nil {
-		writeManagementError(w, 400, "image part required")
+		writeManagementError(w, 400, "attachment part required")
 		return
 	}
 	defer part.Close()
-	image, err := n.media.SaveImage(part.FileName(), part, "native-relay")
-	nativeResult(w, image, err)
+	var value model.Attachment
+	switch {
+	case kind == "file" && n.room.Sharing == "lan":
+		value, err = n.media.SaveSharedEvidence(part.FileName(), part, "native-relay")
+	case kind == "file":
+		value, err = n.media.SaveEvidence(part.FileName(), part, "native-relay")
+	case n.room.Sharing == "lan":
+		value, err = n.media.SaveSharedImage(part.FileName(), part, "native-relay")
+	default:
+		value, err = n.media.SaveImage(part.FileName(), part, "native-relay")
+	}
+	if err == nil {
+		if _, extraErr := reader.NextPart(); !errors.Is(extraErr, io.EOF) {
+			_ = n.media.Remove(value.ID)
+			writeManagementError(w, 400, "upload requires exactly one attachment part")
+			return
+		}
+	}
+	nativeResult(w, value, err)
 }
 func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)

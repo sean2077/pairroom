@@ -486,6 +486,11 @@ func runServe(args []string) error {
 
 	flags := flag.NewFlagSet("pairroom serve", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: pairroom serve [options] (standalone Embedded Room)")
+		fmt.Fprintln(os.Stderr, "Native is recommended: start pairroom service, then run pairroom relay bind --create inside your native session.")
+		flags.PrintDefaults()
+	}
 	collaborationMode := flags.String("collaboration", "default", "new Room collaboration: default (Lead/Executor) or custom")
 	collaborationInstructions := flags.String("collaboration-instructions", "", "natural-language rules for a new custom Room")
 	configFlag := flags.String("config", configPath, "JSON configuration file")
@@ -635,8 +640,9 @@ func runServe(args []string) error {
 	if *mockFlag {
 		fmt.Println("  mode: mock")
 	} else {
-		fmt.Println("  mode: native Claude Code / Codex / Grok Build / Gemini CLI slots")
+		fmt.Println("  mode: embedded Claude Code / Codex / Grok Build / Gemini CLI slots")
 	}
+	fmt.Println("  Native is recommended for new Rooms: use pairroom service and pairroom relay bind --create.")
 
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- web.Serve(*listenFlag) }()
@@ -1130,7 +1136,7 @@ func printHelp() {
 Usage:
   pairroom daemon <command>      Install and manage pairroom service in the OS service manager
   pairroom service [options]     Start the multi-Project, multi-Room Management Shell
-  pairroom serve [options]       Start a standalone Room and Room View
+  pairroom serve [options]       Start a standalone Embedded Room and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
   pairroom providers [options]   Inspect the read-only sanitized CC Switch Profile catalog
   pairroom verify [options]      Strictly verify room data integrity
@@ -1138,14 +1144,16 @@ Usage:
   pairroom restore [options]     Restore and verify a room-data backup
   pairroom diagnostics [options] Create a redacted diagnostics bundle
   pairroom relay <command>       Bind user-owned native sessions and exchange durable relay messages
-  pairroom protocol [options]    Print the versioned agent collaboration contract
+  pairroom protocol [options]    Print the Native contract (or --host-mode embedded)
   pairroom version               Print version
 
 Quick start:
   pairroom service
-  pairroom daemon install
-  pairroom service --mock
-  pairroom serve --repo /path/to/project
+  pairroom relay install
+  pairroom relay bind --create
+
+Native is the default and recommended Room mode. Run relay commands in your native session.
+Choose Embedded explicitly in Management for PairRoom-owned sessions or a Mock demo.
 
 Run "pairroom service -help" for service-capacity and runtime options.
 Run "pairroom daemon -help" for background service management.

@@ -10,8 +10,10 @@ directory does not change the bound Room, participant slot or credentials.
 
 Foreground relay commands and approved Stop/StopFailure hooks first locate the
 exact `(runtime, session_id)` binding and read its original `State.Workspace`.
-Explicit `--repo`, `--room`, `--slot` and `--service-file` are selectors, not
-permission to switch an already-bound session to a different target. Conflicts
+Explicit `--repo`, `--room` and `--slot` are selectors, not permission to switch
+an already-bound session to a different target. `--service-file` selects a local
+hosting Service; a LAN client retains its own host endpoint and pin and does
+not use that flag. Conflicts
 fail; multiple matches require explicit disambiguation. The caller identity is
 checked again after acquiring the slot lock, including local-only unbind, so a
 concurrent replacement cannot transfer another session's inbox to the caller.
@@ -23,6 +25,13 @@ Service, even when invoked outside Git. Otherwise cwd and, for a Claude caller,
 checkouts and no existing binding resolves the choice, specify `--repo`; neither
 the initial directory nor the nearest Git root silently wins. A bound session's
 `bind --create` is rejected even after changing directories.
+
+For an initial LAN join, run `preflight --join` and `join '<invite>'` in the
+intended native session/workspace. This path reads no local Service endpoint and
+starts no Service. A direct binding records its remote host independently of
+local Service configuration. Different native sessions on one machine can use
+locally hosted Rooms and several remote hosts concurrently; a single session
+does not acquire multiple active identities by switching a global server.
 
 `relay install` remains an explicit workspace-scoped setup operation: install in
 the intended project or pass `--repo`. Hook installation and native consent are
@@ -68,24 +77,39 @@ Ordinary foreground use and approved hooks refresh missing locators from confirm
 state, without rewriting unchanged files. Successful unbind removes its locator;
 replacement cleans the previous session's pointer when possible. Failed cleanup
 cannot authorize the old session: every lookup rechecks the original private
-state, runtime, session ID, bind ID and generation. The Service still validates
-the credential/generation on transport requests. A locator is not a second
+state, runtime, session ID, bind ID and generation. The hosting Service still
+validates the local credential or admitted LAN key and binding generation on
+transport requests. Direct bindings also require a matching, accepted per-user
+client record: dashboard leave/detach or explicit replacement immediately makes
+old workspace files and locators ineligible. Missing or malformed authority
+fails closed; discovery does not repair it or replay its saved publication state.
+A locator is not a second
 source of binding truth and cannot restore removed credentials.
 
-There is no shared mutable index file or cross-session map lock. Each binding
+Session locators have no shared mutable index file or cross-session map lock. Each binding
 owns a separate atomic locator file. Discovery is bounded to at most 128 directory
 entries per session. Redirected indexed workspaces, malformed records,
 unsafe paths and ambiguous matches fail rather than falling through to cwd. A
 bound workspace that no longer exists (for example a removed task worktree) is
-skipped like a removed slot directory: its credentials went with it, and the
-session's other bindings remain usable.
+skipped like a removed slot directory. The missing workspace no longer supplies
+a confirmed session binding, even if a separate LAN client record remains in
+the per-user store. A retained client key does not authorize a different native
+session to inherit that binding. Other intact bindings remain usable.
 
 ## Upgrade and recovery
 
-Existing schema-2 binding files remain valid; there is no Store or relay protocol
-migration. On a cold foreground lookup, the CLI checks workspace hints and then,
+Existing local schema-2 binding files remain valid. Direct LAN bindings use
+schema 3 and their own private per-user client store; this does not migrate
+existing local bindings or change their host target. A cold direct lookup checks
+the bounded same-user client catalog for the exact native Runtime/session before
+any local Service discovery. It resolves the original workspace and fixed host
+even after disposable locators are removed and cwd changes; missing original
+workspace or conflicting binding state still fails closed. This read-only path
+also supports direct preflight and approved hooks without a local Service.
+On a cold local foreground
+lookup, the CLI checks workspace hints and then,
 when no explicit workspace was supplied, at most 128 project roots registered by
-the selected Service. This rebuilds discovery without scanning disks or vendor
+the selected local Service. This rebuilds discovery without scanning disks or vendor
 stores. A successful ordinary relay call or idempotent bind records the locator.
 For an older binding under a custom Service, provide its `--service-file` once
 or use the original workspace explicitly:
@@ -105,8 +129,11 @@ including outside Git: stdout is `{}`, the exit code is zero and nothing is
 written or sent. When the workspace has a confirmed binding for the same Runtime
 that belongs to another session (typically after Claude `/clear`/resume or a new
 Codex thread), the hook adds one stderr line naming that Room and slot and the
-explicit `bind --replace` decision, without session identities or reply text; it
-never rebinds. Hook environment/session disagreement remains an error,
+explicit local `bind --replace` decision, without session identities or reply
+text; it never rebinds. A LAN session replacement requires a fresh invitation
+with explicit `join --replace`, after the host confirms the previous membership
+ended. Use the original workspace and host route and obtain fresh receipt
+approval; retained old receipts and publication state are never replayed. Hook environment/session disagreement remains an error,
 not an invitation to associate another identity.
 
 A corrupted disposable locator fails closed; the reported error names the exact

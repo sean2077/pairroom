@@ -84,6 +84,9 @@ func NewAgentResolver(cfg AgentResolverConfig) (*AgentResolver, error) {
 			return nil, fmt.Errorf("%s default is required", model.SlotLabel(actor))
 		}
 		selection = selection.Normalized(actor)
+		if selection.AwaitingPeer {
+			return nil, errors.New("Agent defaults require selected runtimes")
+		}
 		if err := selection.Validate(actor); err != nil {
 			return nil, fmt.Errorf("%s default: %w", model.SlotLabel(actor), err)
 		}

@@ -10,6 +10,8 @@ This comparison asks **which coordination problem a tool solves**, not which pro
 
 Product names link to their upstream projects. None of them is a PairRoom prerequisite or integration.
 
+This comparison preserves its dated baselines, including the Native experimental label at that time. Current PairRoom uses Native as its default and recommended mode; see [Core concepts](CONCEPTS.md) for current behavior.
+
 ## Research scope
 
 PairRoom and [Orca](https://github.com/stablyai/orca) were reviewed on **2026-09-12**. PairRoom baseline: [`d76c089161180cd06baa1f53f22e93413e4266bf`](https://github.com/sean2077/pairroom/tree/d76c089161180cd06baa1f53f22e93413e4266bf); Orca source baseline: [`403b62a8d8fa6e896a93acc4c15405be0f0b7dc7`](https://github.com/stablyai/orca/tree/403b62a8d8fa6e896a93acc4c15405be0f0b7dc7). These are repository snapshots, not certification that an installed release contains every observed capability. Orca's online documentation is a dated, mutable source.

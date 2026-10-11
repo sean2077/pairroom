@@ -8,8 +8,9 @@ import (
 )
 
 // MessageDelivery is a read-only projection, never an Event Log payload.
-// Reservations have message IDs; terminal results only have a slot, so their
-// association is explicitly inferred from the single-worker event order.
+// Reservations have message IDs. A terminal result that names its message ID (a
+// joined member's wake attempt) is recorded verbatim; a result without one (the
+// host's own wake worker) is associated from the single-worker event order.
 type MessageDelivery struct {
 	QueueWaitMS          *int64            `json:"queue_wait_ms,omitempty"`
 	ReservedAt           *time.Time        `json:"reserved_at,omitempty"`
@@ -53,6 +54,13 @@ func (e *Engine) indexWakeReservation(r WakeReservation) {
 func (e *Engine) indexWakeObservation(slot model.ActorID, observation WakeObservation) {
 	d := e.deliveryIndex()
 	d.slots[slot] = append(d.slots[slot], wakeTimelineEntry{sequence: e.sequence, observation: observation})
+	if observation.MessageID != "" {
+		d.inferred[observation.MessageID] = observation
+		if d.pending[slot] == observation.MessageID {
+			delete(d.pending, slot)
+		}
+		return
+	}
 	if observation.Outcome != "suppressed" {
 		if id := d.pending[slot]; id != "" {
 			d.inferred[id] = observation

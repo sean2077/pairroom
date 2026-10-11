@@ -201,7 +201,7 @@ func (s *JSONLStore) ensureMetadata(allowCreate bool) error {
 		if metadata.Format != "pairroom-jsonl" {
 			return fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 		}
-		if metadata.SchemaVersion < version.StoreSchema {
+		if metadata.SchemaVersion < version.LocalStoreSchema {
 			return fmt.Errorf("retired development event store schema %d; recreate the Room", metadata.SchemaVersion)
 		}
 		if !version.SupportsStoreSchema(metadata.SchemaVersion) {

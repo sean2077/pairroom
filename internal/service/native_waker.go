@@ -183,6 +183,9 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 	now := w.now()
 	live := map[model.ActorID]bool{}
 	for _, c := range heads {
+		if c.Remote {
+			continue
+		}
 		live[c.Target] = true
 		reason := nativeWakeSuppression(c)
 		w.mu.Lock()
@@ -262,7 +265,7 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 		return errNativeWakeAudit
 	}
 	candidate, ok := w.relay.WakeCandidate(messageID)
-	if !ok {
+	if !ok || candidate.Remote {
 		return nil
 	}
 	if !candidate.QueueStart {

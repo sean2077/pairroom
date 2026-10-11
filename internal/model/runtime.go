@@ -15,6 +15,9 @@ const (
 	RuntimeCodex  RuntimeKind = "codex"
 	RuntimeGrok   RuntimeKind = "grok"
 	RuntimeGemini RuntimeKind = "gemini"
+	// RuntimeAwaitingPeer is a presentation/protocol sentinel for an explicit
+	// unselected LAN peer. It is not a supported executable Runtime.
+	RuntimeAwaitingPeer RuntimeKind = "awaiting_peer"
 )
 
 func ParseRuntimeKind(value string) RuntimeKind {
@@ -61,6 +64,8 @@ func (k RuntimeKind) CanonicalForSlot(actor ActorID) RuntimeKind {
 
 func (k RuntimeKind) DefaultCommand() string {
 	switch k.Canonical() {
+	case RuntimeAwaitingPeer:
+		return ""
 	case RuntimeCodex:
 		return "codex"
 	case RuntimeGemini:
@@ -74,6 +79,8 @@ func (k RuntimeKind) DefaultCommand() string {
 
 func (k RuntimeKind) DisplayName() string {
 	switch k.Canonical() {
+	case RuntimeAwaitingPeer:
+		return "Awaiting peer"
 	case RuntimeCodex:
 		return "Codex"
 	case RuntimeGemini:
@@ -87,6 +94,8 @@ func (k RuntimeKind) DisplayName() string {
 
 func (k RuntimeKind) ProviderAgentType() string {
 	switch k.Canonical() {
+	case RuntimeAwaitingPeer:
+		return ""
 	case RuntimeCodex:
 		return "codex"
 	case RuntimeGemini:
@@ -132,6 +141,10 @@ func ParticipantIdentities(runtimes map[ActorID]RuntimeKind) map[ActorID]Partici
 	identities := make(map[ActorID]ParticipantIdentity, len(SlotActors()))
 	for index, actor := range SlotActors() {
 		kind := resolved[actor]
+		if kind == RuntimeAwaitingPeer {
+			identities[actor] = ParticipantIdentity{DisplayName: "Awaiting peer"}
+			continue
+		}
 		suffix := ""
 		displayName := kind.DisplayName()
 		if counts[kind] > 1 {

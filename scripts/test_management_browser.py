@@ -160,6 +160,10 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
       };
     }""")
     await page.locator('#refresh-button').click()
+    # Manual refresh deliberately replaces the view. Finish that request before
+    # navigating or typing: Playwright fill focuses/selects before inserting text,
+    # so a pending forced render can detach its target between those operations.
+    await expect(page.locator('#refresh-button')).not_to_have_class(re.compile(r'\bspinning\b'))
     await page.evaluate("location.hash='#/overview'")
     project_link = page.locator('.tree-project-link[href="#/projects/p1"]')
     await project_link.click()
@@ -170,11 +174,13 @@ async def verify_diagnostics(browser, artifacts: Path, in_page_fixture: bool = F
     await expect(disclosure).to_have_attribute('aria-expanded', 'false')
     assert await page.evaluate('location.hash') == '#/projects/p1', 'disclosure navigated'
     await page.locator('#refresh-button').click()
+    await expect(page.locator('#refresh-button')).not_to_have_class(re.compile(r'\bspinning\b'))
     await expect(disclosure).to_have_attribute('aria-expanded', 'false')
     await disclosure.focus()
     await page.keyboard.press('Enter')
     await expect(disclosure).to_have_attribute('aria-expanded', 'true')
     await page.locator('#project-room-search').fill('Implementation')
+    await expect(page.locator('#project-room-search')).to_have_value('Implementation')
     await expect(page.locator('#view .room-row')).to_have_count(1)
     await page.evaluate("location.hash='#/overview'")
     await project_link.click()
@@ -514,6 +520,9 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
         await page.evaluate("location.hash='#/projects/p1'")
         await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
         await wait_state("!document.getElementById('room-submit').disabled")
+        # These cases verify applied Provider overrides and their fail-closed
+        # validation, which belong to explicit Embedded creation.
+        await page.locator('#room-host-mode').select_option('embedded')
 
     async def close_dialog():
         await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
@@ -734,6 +743,8 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         await page.wait_for_timeout(100)
         await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
         await page.wait_for_function("!document.getElementById('room-submit').disabled")
+        await expect(page.locator('#room-host-mode')).to_have_value('native')
+        await page.locator('#room-host-mode').select_option('embedded')
         assert await page.locator('#room-collaboration-mode option').evaluate_all('nodes=>nodes.map(n=>n.value)') == ['default', 'custom']
         assert await page.locator('#room-collaboration-mode').input_value() == 'default'
         assert 'Lead' in await page.locator('#slot1-responsibility-label').inner_text()
@@ -855,6 +866,8 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         results.update(await verify_activation(browser))
         results.update(await verify_cleanup_controls(browser, artifacts, in_page_fixture))
         results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))
+        from test_management_lan_browser import verify_lan
+        results.update(await verify_lan(browser, artifacts, in_page_fixture))
         results['page_errors'] = errors
         (artifacts / 'results.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(results, indent=2))

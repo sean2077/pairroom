@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/claudewake"
+	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -32,7 +33,7 @@ type options struct {
 	review                                         bool
 	reviewRepo, reviewBase                         string
 	repo, room, slot, kind, endpoint, text, id, to string
-	name, peer                                     string
+	name, peer, share, invitation, receipt         string
 	textFile, outputFile                           string
 	cursor, since                                  string
 	limit                                          int
@@ -40,11 +41,12 @@ type options struct {
 	references                                     stringsFlag
 	replace, purge, enabled, discard, resend       bool
 	localOnly                                      bool
+	joinCheck                                      bool
 	create, brief                                  bool
 	repoExplicit                                   bool
 	timeout                                        int
 	inlineMax                                      int
-	attachments                                    stringsFlag
+	attachments, files                             stringsFlag
 	preparedAgents                                 map[model.ActorID]model.AgentSelection
 }
 type stringsFlag []string
@@ -53,7 +55,7 @@ func (s *stringsFlag) String() string     { return strings.Join(*s, ",") }
 func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }
 
 // relayActions lists every relay operation Run accepts, in usage order.
-var relayActions = []string{"install", "preflight", "bind", "hook", "send", "exchange", "wait", "status", "history", "doctor", "review", "peer", "park", "nudge", "reconcile", "unbind"}
+var relayActions = []string{"install", "preflight", "bind", "join", "invite", "accept", "revoke", "hook", "send", "exchange", "wait", "status", "history", "doctor", "review", "peer", "park", "nudge", "reconcile", "unbind"}
 
 func relayUsage() string {
 	return "use pairroom relay " + strings.Join(relayActions, "|") + " (see docs/CLI_REFERENCE.md)"
@@ -102,6 +104,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex, grok or gemini; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
+	flags.BoolVar(&o.joinCheck, "join", false, "preflight: check readiness to join a LAN Room without a local Service")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin unless --text-file or --ref is used")
 	flags.StringVar(&o.textFile, "text-file", "", "send/exchange: read UTF-8 body from a file, or - for stdin")
 	flags.Var(&o.references, "ref", "send/exchange: local file reference with path, size and SHA-256, not an upload (repeatable)")
@@ -111,20 +114,22 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
 	flags.StringVar(&o.name, "name", "", "optional Room display name for bind --create")
-	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok|gemini for bind --create")
-	flags.BoolVar(&o.replace, "replace", false, "explicitly revoke occupied binding; does not stop native work")
+	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok|gemini for local bind --create")
+	flags.StringVar(&o.share, "share", "", "bind --create: lan creates a Native Room awaiting a remote peer")
+	flags.BoolVar(&o.replace, "replace", false, "explicitly replace a binding; LAN join requires a fresh invitation after the previous membership is retired")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
 	flags.BoolVar(&o.enabled, "enabled", true, "park enabled")
-	flags.BoolVar(&o.brief, "brief", action == "status" || action == "reconcile", "status/reconcile: bounded transport summary; --brief=false includes full history")
+	flags.BoolVar(&o.brief, "brief", action == "status" || action == "reconcile", "status/reconcile: bounded transport summary; --brief=false includes local history or a bounded LAN history window")
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
-	flags.BoolVar(&o.localOnly, "local-only", false, "unbind: remove local binding files without contacting the Service; the server-side binding stays active until an explicit unbind or replace")
+	flags.BoolVar(&o.localOnly, "local-only", false, "unbind: detach local binding without contacting the Room host; remote membership remains active until revoked")
 	defaultTimeout := 30
 	if action == "wait" || action == "exchange" {
 		defaultTimeout = 3600
 	}
 	flags.IntVar(&o.timeout, "timeout", defaultTimeout, "foreground wait seconds (0 or 1–21600); 0 waits until cancellation; hook park remains at most 30 seconds")
 	flags.Var(&o.attachments, "attach", "image attachment path (repeatable)")
+	flags.Var(&o.files, "file", "send/exchange: explicitly upload a UTF-8 text evidence file, at most 5 MiB (repeatable)")
 	flags.BoolVar(&o.review, "review", false, "send/exchange: attach a bounded Git review observation")
 	flags.StringVar(&o.reviewRepo, "review-repo", "", "review evidence checkout; defaults to the bound Room workspace (does not rebind)")
 	flags.StringVar(&o.reviewBase, "review-base", "", "send/exchange --review: base commit/ref, default HEAD")
@@ -132,17 +137,48 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.since, "since", "", "history: minimum publication time (RFC3339)")
 	flags.IntVar(&o.limit, "limit", 50, "history: page size (1–100; also text-budgeted)")
 	flags.BoolVar(&o.pending, "pending", false, "history: oldest unresolved messages, independently of recent chat")
-	if err := flags.Parse(args[1:]); err != nil {
+	flagArgs := args[1:]
+	if (action == "join" || action == "accept") && len(flagArgs) > 1 && !strings.HasPrefix(flagArgs[0], "-") {
+		flagArgs = append(append([]string{}, flagArgs[1:]...), flagArgs[0])
+	}
+	if err := flags.Parse(flagArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if flags.NArg() != 0 {
+	if action == "join" || action == "accept" {
+		if flags.NArg() != 1 {
+			return fmt.Errorf("relay %s requires one quoted public %s", action, map[string]string{"join": "invitation", "accept": "join receipt"}[action])
+		}
+		if action == "join" {
+			o.invitation = flags.Arg(0)
+		} else {
+			o.receipt = flags.Arg(0)
+		}
+	} else if flags.NArg() != 0 {
 		return errors.New("unexpected relay arguments")
 	}
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if provided["join"] && action != "preflight" {
+		return errors.New("--join applies only to preflight")
+	}
+	if o.joinCheck && o.endpoint != "" || action == "join" && o.endpoint != "" {
+		return errors.New("joining a LAN Room connects directly to its host; omit --service-file")
+	}
+	if provided["share"] && (action != "bind" || !o.create || o.share != "lan") {
+		return errors.New("--share accepts lan only with bind --create")
+	}
+	if o.share == "lan" && o.peer != "" {
+		return errors.New("LAN peer runtime is established at admission; omit --peer-runtime")
+	}
+	if provided["file"] && action != "send" && action != "exchange" {
+		return errors.New("--file applies only to send/exchange")
+	}
+	if action == "join" && (o.create || o.room != "" || o.slot != "" || o.share != "" || o.peer != "") {
+		return errors.New("join derives its Room and slot from the invitation and host admission; use --repo for the local workspace")
+	}
 	if (provided["review"] || provided["review-base"]) && (action != "send" && action != "exchange") {
 		return errors.New("--review/--review-base apply only to send/exchange")
 	}
@@ -256,6 +292,10 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if err != nil {
 		return err
 	}
+	if action == "unbind" && o.localOnly && strings.HasPrefix(o.room, "lan_") {
+		noteLANTransport(ctx)
+		return unbindLANLocalOnly(ctx, root, o, out)
+	}
 	if err := applyCallerDefaults(root, action, &o); err != nil {
 		return err
 	}
@@ -268,6 +308,10 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	if action == "bind" {
 		return bind(ctx, root, o, out)
+	}
+	if action == "join" {
+		noteLANTransport(ctx)
+		return joinLAN(ctx, root, o, out)
 	}
 	if err := resolveSlotDefaults(root, &o); err != nil {
 		return err
@@ -290,7 +334,11 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		release()
 		return err
 	}
+	defer c.close()
 	noteServiceEndpoint(ctx, c.State.EndpointPath)
+	if c.State.LAN != nil {
+		noteLANTransport(ctx)
+	}
 	if err := validateCommandCaller(c); err != nil {
 		release()
 		return err
@@ -323,6 +371,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		defer releaseCollector()
 	}
 	switch action {
+	case "invite", "accept", "revoke":
+		var result map[string]any
+		var request any
+		if action == "accept" {
+			request = map[string]string{"receipt": o.receipt}
+		}
+		if err := c.call(ctx, action, request, &result); err != nil {
+			return err
+		}
+		return writeJSON(out, result)
 	case "send", "exchange":
 		text, err := readPublicationInput(publicationInput{
 			text:       o.text,
@@ -349,6 +407,13 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		attachments := []string{}
 		for _, path := range o.attachments {
 			id, err := c.upload(ctx, path)
+			if err != nil {
+				return err
+			}
+			attachments = append(attachments, id)
+		}
+		for _, path := range o.files {
+			id, err := c.uploadFile(ctx, path, "file")
 			if err != nil {
 				return err
 			}
@@ -446,9 +511,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		return writeJSON(out, result)
 	case "nudge":
-		return writeJSON(out, map[string]string{"notice": "Automatic wake is Service-managed for eligible Claude/Codex sessions. This receive-only fallback runs inside the associated session; relay doctor explains the current boundary.", "command": fmt.Sprintf("pairroom relay wait --room %s --slot %s", o.room, o.slot)})
+		notice := "Automatic wake is Service-managed for eligible Claude/Codex sessions. This receive-only fallback runs inside the associated session; relay doctor explains the current boundary."
+		if c.State.LAN != nil {
+			notice = "This session receives directly from the Room host with wait or hooks. Idle wake requires an eligible local observer; messages stay queued on the host while no receiver is running."
+		}
+		return writeJSON(out, map[string]string{"notice": notice, "command": fmt.Sprintf("pairroom relay wait --room %s --slot %s", o.room, o.slot)})
 	case "status", "reconcile":
 		var status any = &relay.Snapshot{}
+		if c.State.LAN != nil {
+			status = &relay.TailSnapshot{}
+		}
 		operation := "status"
 		if o.brief {
 			status = &relay.Summary{}
@@ -494,11 +566,17 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if err != nil {
 			return err
 		}
+		defer current.close()
 		if current.State.BindID != c.State.BindID {
 			return errors.New("binding changed; inspect before unbinding")
 		}
 		if err := c.call(ctx, "unbind", nil, nil); err != nil {
 			return err
+		}
+		if current.State.LAN != nil {
+			if err := archiveLANWorkspaceState(root, dir, current.State); err != nil {
+				return err
+			}
 		}
 		for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
 			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -534,22 +612,60 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 // slot stays occupied and only loses its local credentials — until an explicit
 // `pairroom relay unbind` or a `bind --replace` from the intended session.
 func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Writer) error {
-	release, err := lockSlot(ctx, dir)
+	return unbindLocalOnlyWithMetadata(ctx, root, dir, o, nil, out)
+}
+
+func unbindLocalOnlyWithMetadata(ctx context.Context, root, dir string, o options, expected *lanclient.Metadata, out io.Writer) error {
+	// Offline retirement takes the same lock without the sensitive-directory
+	// check: it removes the credentials instead of using them.
+	release, err := lockSlotRecovery(ctx, dir)
 	if err != nil {
 		return err
 	}
 	defer release()
-	cleanupAtomicTemps(dir)
 	var state State
-	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
+	recovery, err := readBindingFile(filepath.Join(dir, "state.json"), &state, readPrivate, true)
+	if err != nil {
 		return fmt.Errorf("read local binding state: %w", err)
 	}
 	if err := validateCommandCaller(&Client{State: state}); err != nil {
 		return err
 	}
-	if state.Schema != 2 || !state.Slot.ValidParticipant() {
+	if !validStateFormat(state) || !state.Slot.ValidParticipant() {
 		return errors.New("invalid local relay state identity")
 	}
+	if expected != nil {
+		if !matchesDirectMetadata(state, *expected) {
+			return errors.New("direct LAN workspace identity changed; inspect before local detach")
+		}
+	} else if state.LAN != nil || lanPrivateStatePath(dir) {
+		return errors.New("direct LAN local detach requires its original private client record")
+	}
+	if state.LAN != nil {
+		client, filesRecovered, err := loadLocalRecovery(dir, *expected)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		if client.endpointErr != nil {
+			return client.endpointErr
+		}
+		if client.LAN == nil {
+			return errors.New("direct LAN binding has no client transport")
+		}
+		if err := validateCommandCaller(client); err != nil {
+			return err
+		}
+		state = client.State
+		recovery = recovery || filesRecovered
+		if err := client.LAN.Detach(ctx, client.localAuth()); err != nil {
+			return err
+		}
+		if err := archiveLANWorkspaceStateWith(root, dir, state, recovery); err != nil {
+			return err
+		}
+	}
+	cleanupAtomicTemps(dir)
 	for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -561,6 +677,12 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 	result := map[string]any{
 		"unbound": "local-only",
 		"notice":  "local binding files removed without contacting the Service; the server-side binding stays active and the slot remains occupied until an explicit `pairroom relay unbind` or `pairroom relay bind --replace`",
+	}
+	if state.LAN != nil {
+		result["notice"] = "Direct LAN client detached locally without contacting the host. Its remote membership still occupies the slot; ask the host owner to revoke that admission. It will not reconnect automatically."
+	}
+	if recovery {
+		result["warning"] = "the local binding files were not owner-only; they were read only to retire this binding locally and have been removed with it"
 	}
 	if o.purge {
 		states, err := statePaths(root)
@@ -873,7 +995,7 @@ func resolveSlotDefaults(root string, o *options) error {
 		if err := readPrivate(path, &s); err != nil {
 			return err
 		}
-		if s.Schema != 2 || !s.Slot.ValidParticipant() || !safePart(s.Room) || s.Generation == 0 || s.SessionID == "" {
+		if !validStateFormat(s) || !s.Slot.ValidParticipant() || !safePart(s.Room) || s.Generation == 0 || s.SessionID == "" {
 			continue
 		}
 		all = append(all, candidate{room: s.Room, slot: s.Slot, harnessPID: s.HarnessPID, harness: s.HarnessName})
@@ -931,6 +1053,10 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 		project = registered.ID
 	}
 	request := map[string]any{"host_mode": string(model.HostNative)}
+	if o.share == "lan" {
+		request["sharing"] = "lan"
+		request["owner_slot"] = slot
+	}
 	if name := strings.TrimSpace(o.name); name != "" {
 		request["name"] = name
 	}
@@ -994,14 +1120,42 @@ func defaultRuntimeFor(slot model.ActorID) model.RuntimeKind {
 	return model.RuntimeClaude
 }
 func (c *Client) upload(ctx context.Context, path string) (string, error) {
+	return c.uploadFile(ctx, path, "image")
+}
+
+func (c *Client) uploadFile(ctx context.Context, path, kind string) (string, error) {
+	info, err := os.Lstat(path)
+	limit := int64(10 << 20)
+	if kind == "file" {
+		limit = 5 << 20
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
+		return "", errors.New("attachment must be a regular file within the selected kind's size limit")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 10<<20 {
-		return "", errors.New("attachment must be a regular image, at most 10 MiB")
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Size() > limit {
+		return "", errors.New("attachment changed while opening")
+	}
+	if c.State.LAN != nil {
+		if c.endpointErr != nil {
+			return "", c.endpointErr
+		}
+		if c.LAN == nil {
+			return "", errors.New("direct LAN binding has no client transport")
+		}
+		value, err := c.LAN.Upload(ctx, c.localAuth(), kind, filepath.Base(path), io.LimitReader(f, limit+1))
+		if err != nil {
+			return "", normalizeLANError("upload", err)
+		}
+		if value.ID == "" {
+			return "", errors.New("attachment receipt missing")
+		}
+		return value.ID, nil
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -1009,7 +1163,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err = io.Copy(part, io.LimitReader(f, (10<<20)+1)); err != nil {
+	if _, err = io.Copy(part, io.LimitReader(f, limit+1)); err != nil {
 		return "", err
 	}
 	if err = writer.Close(); err != nil {
@@ -1020,6 +1174,7 @@ func (c *Client) upload(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-PairRoom-Attachment-Kind", kind)
 	c.authHeaders(req)
 	res, err := c.HTTP.Do(req)
 	if err != nil {

@@ -36,6 +36,14 @@ var (
 	ErrWakeRoomBusy = errors.New("resolve delivering or unknown deliveries before changing wake configuration")
 )
 
+// WakeReservedCode and WakeIneligibleCode are the stable wire codes of the two
+// named wake-reservation refusals. A refusal the host can name must not be
+// collapsed into transport unavailability on the way back to the client.
+const (
+	WakeReservedCode   = "wake_reserved"
+	WakeIneligibleCode = "wake_ineligible"
+)
+
 // Wake outcomes and reasons are a fixed redaction vocabulary. They never carry
 // vendor thread identity, message bodies, or command output; RecordWake
 // rejects anything outside these sets so a caller cannot leak them into the
@@ -84,6 +92,7 @@ type WakeReservation struct {
 // that policy again at reservation admission; the waker adds transport
 // capability checks, grace and rate limits before submitting an effect.
 type WakeCandidate struct {
+	Remote       bool              `json:"remote,omitempty"`
 	BindID       string            `json:"-"`
 	Generation   uint64            `json:"-"`
 	MessageID    string            `json:"message_id"`
@@ -99,6 +108,8 @@ type WakeCandidate struct {
 }
 
 type Binding struct {
+	// RemoteKey is an admitted LAN public key fingerprint, never a vendor identity.
+	RemoteKey      string            `json:"remote_key,omitempty"`
 	Slot           model.ActorID     `json:"slot"`
 	Runtime        model.RuntimeKind `json:"runtime,omitempty"`
 	BindID         string            `json:"bind_id"`
@@ -129,6 +140,7 @@ type BindRequest struct {
 
 // Auth is transport-only. Never marshal it into an event, error, or response.
 type Auth struct {
+	MemberKey  string
 	Slot       model.ActorID
 	BindID     string
 	Generation uint64
@@ -137,6 +149,7 @@ type Auth struct {
 }
 
 type Message struct {
+	Author           string             `json:"author,omitempty"`
 	Review           *review.Anchor     `json:"review,omitempty"`
 	ID               string             `json:"id"`
 	From             model.ActorID      `json:"from"`
@@ -170,6 +183,7 @@ type Publication struct {
 }
 
 type SendRequest struct {
+	author        string
 	Review        *review.Anchor `json:"review,omitempty"`
 	ID            string         `json:"id"`
 	Text          string         `json:"text"`

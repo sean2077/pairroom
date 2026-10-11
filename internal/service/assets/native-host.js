@@ -48,7 +48,10 @@
       throw error;
     } finally { clearTimeout(timeout); readControllers.delete(controller); }
   }
-  function handle(slot) { return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot); }
+  function handle(slot) {
+    if (snapshot?.room.agents?.[slot]?.awaiting_peer) return `${tr(slot === 'slot1' ? 'agent1' : 'agent2')} · ${window.PairRoomI18n.t('room.lan.awaitingPeer')}`;
+    return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot);
+  }
   function readingPosition() {
     const list = $('messages');
     const stick = !messagesRendered || list.scrollHeight-list.scrollTop-list.clientHeight < 70;
@@ -120,7 +123,8 @@
     const chips = [];
     const nodes=['slot1','slot2'].map((slot,index)=>{
       const b=value.relay.bindings[slot]||{};const selection=value.room.agents[slot]||{};
-      const state = tr(!b.active?'unbound':b.session_id?'bound':'pending');
+      const remote = Boolean(b.remote_key) || (value.room.sharing === 'lan' && value.room.owner_slot !== slot);
+      const state = selection.awaiting_peer ? window.PairRoomI18n.t('room.lan.awaitingPeer') : remote && b.active ? window.PairRoomI18n.t('room.lan.member') : tr(!b.active?'unbound':b.session_id?'bound':'pending');
       const chip = element('button', undefined, `participant-chip ${slot}`);
       chip.type = 'button'; chip.dataset.participant = slot; chip.dataset.nativeFocus = `${slot}-chip`;
       chip.setAttribute('aria-controls', 'native-participants');
@@ -135,11 +139,20 @@
       chips.push(chip);
       const card=element('article',undefined,`binding ${slot}`);card.dataset.slot=slot;card.tabIndex=-1;card.dataset.nativeFocus=slot;
       const top=element('div',undefined,'binding-top'),who=element('div',undefined,'binding-identity'),name=element('h3',handle(slot));name.title=handle(slot);
-      const observed=element('span',state,`binding-state ${!b.active?'unbound':b.session_id?'bound':'pending'}`);observed.title=tr('activityHelp');
+      const observed=element('span',state,`binding-state ${!b.active?'unbound':b.session_id||remote?'bound':'pending'}`);observed.title=tr('activityHelp');
       who.append(name,observed);
       top.append(element('span',String(index+1),'participant-avatar'),who);
-      if(b.active){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'),'binding-park');park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
+      if(b.active&&!remote){const park=element('button',tr(b.park_enabled?'parkOn':'parkOff'),'binding-park');park.type='button';park.dataset.park=slot;park.dataset.nativeFocus=`${slot}-park`;park.setAttribute('aria-pressed',String(Boolean(b.park_enabled)));park.addEventListener('click',async()=>{park.disabled=true;try{await request(`api/v1/participants/${slot}/park`,{method:'POST',body:JSON.stringify({enabled:!b.park_enabled})});status(tr('controls'));await refresh();}catch(e){status(e.message,true);}finally{park.disabled=false;}});top.append(park);}
       card.append(top);
+      if (remote) {
+        card.append(element('p', window.PairRoomI18n.t(selection.awaiting_peer ? 'room.lan.awaitingPeerHelp' : 'room.lan.remoteBindingHelp'), 'muted'));
+        if (!selection.awaiting_peer) {
+          const remoteMeta = element('dl', undefined, 'binding-meta');
+          [[window.PairRoomI18n.t('agent.runtime'), selection.runtime], [tr('generation'), b.generation || '—'], [tr('last'), time(b.last_activity)]].forEach(([key, text]) => remoteMeta.append(element('dt', key), element('dd', String(text))));
+          card.append(remoteMeta);
+        }
+        return card;
+      }
       const label = key => window.PairRoomI18n.t(key), inherited = label('room.nativeDefault');
       const provider = selection.provider?.source === 'cc-switch'
         ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}` : label('agent.nativeProvider');
@@ -225,7 +238,8 @@
     const chat=view==='chat', actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
     const head=element('div',undefined,chat?'message-meta':'message-heading');
     const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;
-    head.append(element('strong',handle(m.from),'message-author'),element('span',`${tr('target')} ${handle(m.to)}`,'message-target'),stamp);
+    const author = m.from === 'user' && m.author ? `${handle(m.from)} · ${window.PairRoomI18n.t(m.author.startsWith('lan:') ? 'room.lan.remoteHuman' : 'room.lan.hostHuman')}` : handle(m.from);
+    head.append(element('strong',author,'message-author'),element('span',`${tr('target')} ${handle(m.to)}`,'message-target'),stamp);
     const bubble=element('div',undefined,chat?'message-bubble':'message-evidence');
     if(m.quote)bubble.append(element('blockquote',`${m.quote.from_handle || ''}\n${m.quote.text || ''}`,'reply-quote'));
     const body=element('div',undefined,'message-body');
@@ -240,7 +254,12 @@
       const result=element('span',tr('reviewUnverified'),'muted');check.addEventListener('click',async()=>{check.disabled=true;try{const value=await request(`api/v1/review?id=${encodeURIComponent(m.id)}`);result.textContent=tr(`review_${value.status}`);}catch(e){status(e.message,true);}finally{check.disabled=false;}});
       evidence.append(check,result);bubble.append(evidence);
     }
-    for(const a of m.attachments||[]){const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=`api/v1/attachments/${encodeURIComponent(a.id)}`;bubble.append(img);}
+    for(const a of m.attachments||[]){
+      const path=`api/v1/attachments/${encodeURIComponent(a.id)}`;
+      if(a.kind==='file'){
+        const file=element('a',`${a.name||a.id} · ${a.size||0} B`,'attachment-file');file.href=path;file.download=a.name||a.id;file.title=a.sha256?`SHA-256: ${a.sha256}`:'';bubble.append(file);
+      }else{const img=element('img');img.alt=a.name||tr('attach');img.loading='lazy';img.src=path;bubble.append(img);}
+    }
     const footer=element('div',undefined,'message-footer');footer.append(element('span',tr(m.state),'badge'));
     const transport=deliveryEvidence(m,delivery);if(transport)footer.append(transport);
     const inspect=element('button',tr('inspect'),'message-action');inspect.type='button';inspect.addEventListener('click',()=>inspectMessage(m.id));footer.append(inspect);
@@ -347,7 +366,7 @@
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',auditNames[a.kind]?tr(auditNames[a.kind]):a.kind),element('time',time(a.at)));const detail=auditDetail(a);if(detail)li.append(element('p',detail));return li;}));
   }
-  function render(value, unchangedTail = false){snapshot=value;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);if(!unchangedTail)renderMessages(value);renderDelivery(value);if(!unchangedTail)renderAudit(value);}
+  function render(value, unchangedTail = false){snapshot=value;$('lan-access').hidden=value.room.sharing!=='lan'||window.parent===window;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);if(!unchangedTail)renderMessages(value);renderDelivery(value);if(!unchangedTail)renderAudit(value);}
   function renderConnection(value) {
     connectionState = value;
     $('connection').textContent = tr(value);
@@ -554,6 +573,7 @@
   // Clearing the local draft hands recovery of another window's send to this one.
   $('message-text').addEventListener('input',()=>{if(foreignSend&&!sending&&!localDraft(foreignSend))readoptOutbox();});
   $('attachment').addEventListener('change',lockComposer);
+  $('lan-access').addEventListener('click',()=>{if(snapshot?.room.sharing==='lan'&&window.parent!==window)window.parent.postMessage({type:'pairroom-surface',action:'lan-access',roomId:snapshot.room.id},location.origin);});
   document.addEventListener('pairroom:lang',translations);
   function start() {
     if (!pageActive) return Promise.resolve();

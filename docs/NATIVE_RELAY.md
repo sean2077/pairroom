@@ -1,10 +1,10 @@
 # Native relay: setup, usage and reliability
 
-Native hosting connects two sessions you already run. In generic response-boundary descriptions below, “Stop” includes Gemini's AfterAgent unless a vendor is named. PairRoom does not launch, configure, or interrupt their processes. This guide owns the user workflow; [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command options, [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract, and [session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns cwd/worktree resolution. The app includes a Native setup guide as well.
+Native is the default and recommended host mode. It connects two sessions you already run. In generic response-boundary descriptions below, “Stop” includes Gemini's AfterAgent unless a vendor is named. PairRoom does not launch, configure, or interrupt their processes. This guide owns the user workflow; [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns command options, [Protocol](PROTOCOL.md#native-host-protocol-v8) owns the transport contract, and [session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns cwd/worktree resolution. The app includes a Native setup guide as well.
 
 ## Before starting
 
-Install PairRoom and Git. Open Desktop or run `pairroom service`, but do not start a second Service over the same data directory. In **each Agent's tool shell**, verify `pairroom version` and `git --version`. Opening Desktop alone does not prove that its CLI is on that shell's PATH. Use the CLI from the same PairRoom release as the running Service; see [Installation](INSTALLATION.md). Restart existing shells after changing PATH.
+Install PairRoom and Git. For a Room hosted on your machine, open Desktop or run `pairroom service`, without starting a second Service over the same data directory. To join a colleague's LAN Room, use CLI/hooks directly; no local Service or daemon is required. See the [LAN workflow](LAN_NATIVE.md). In **each Agent's tool shell**, verify `pairroom version` and `git --version`. Opening Desktop alone does not prove that its CLI is on that shell's PATH. Use the CLI from the same PairRoom release as the Room's hosting Service; see [Installation](INSTALLATION.md). Restart existing shells after changing PATH.
 
 Install and authenticate the harnesses you intend to use: Claude Code, Codex, Grok Build, or Gemini CLI. Either slot can use any supported Runtime, including the same Runtime twice. Configure Provider, model, effort, tools, and permissions in the original harnesses; Native Room selections do not override those processes.
 
@@ -25,6 +25,8 @@ Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok B
 Review and approve the exact installed definitions in the harness: Codex `/hooks`, Claude project hook consent, Grok hook approval plus folder trust, and Gemini `/hooks` approval/reload of both BeforeTool and AfterAgent plus workspace trust. Follow native trust/restart guidance; PairRoom never grants consent for you.
 
 Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. A Service version mismatch, or a `pairroom` on PATH that is not the running binary, only warns: read `next_steps` even when `ready` is `true`. It cannot see approval, and neither can bind: bind rejects only a missing or disabled hook, so an installed but unapproved hook lets bind succeed while Stop replies never publish. The first finished turn's `last_hook_at` in `relay doctor` confirms approval; until the hook has run, `doctor` and `status` show a local `hook_hint`.
+
+For an invited LAN session that is not yet bound, run **`pairroom relay preflight --join`** instead. It checks CLI, workspace, native session eligibility and hooks without reading a local Service endpoint or requiring one to run. Then follow `relay join` and exact-receipt acceptance in the [LAN guide](LAN_NATIVE.md#create-request-accept). After a remote binding exists, ordinary `preflight` resolves that session's host directly. Starting or stopping an optional local Service does not change the binding's destination.
 
 After setup, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever the Service reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
 
@@ -123,7 +125,7 @@ Grok never publishes clipped Stop text as a complete reply. Send the full text e
 
 ## Runtime boundary and discovery
 
-Relay first resolves the exact native session and its confirmed binding; cwd/project paths are cold-discovery hints, not identity. Disposable locators are revalidated against private binding state. Explicit `--repo`, `--room`, `--slot`, and `--service-file` must agree with the bound session. Ambiguity fails rather than switching Rooms. A Desktop/app-server process may host several sessions, so PID alone is insufficient.
+Relay first resolves the exact native session and its confirmed binding; cwd/project paths are cold-discovery hints, not identity. Disposable locators are revalidated against private binding state. Explicit `--repo`, `--room`, and `--slot` must agree with the bound session; `--service-file` selects a local hosting Service and is not a LAN join or server-switch flag. A direct LAN binding retains its host endpoint and pin independently of any local Service. Distinct native sessions may host or join different Rooms concurrently. Ambiguity fails rather than switching Rooms. A Desktop/app-server process may host several sessions, so PID alone is insufficient.
 
 The primary checkout can remain the session entry point while edits/tests/review happen in a task worktree. Communicating does not require changing back or rebinding. Share the exact task path and revision with the peer; PairRoom does not create, merge, or authorize access to worktrees. Native Owner Turn remains advisory, not a writer lock.
 
@@ -145,11 +147,23 @@ The CLI requires an affirmative `handed_off: true` acknowledgement, not merely H
 
 A detached background waiter whose output never reaches the model may nevertheless be terminally `handed_off`. Another `wait` cannot re-collect it. Inspect the authorized message/history and actual workspace before deciding a fresh instruction; do not blindly duplicate the original task body.
 
-Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection. Full history/export is explicit and may contain private material.
+Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection.
+
+For a local binding, `status --brief=false` returns the full snapshot. Direct LAN
+bindings instead return a bounded recent window of complete messages and audit
+entries, with exact retained totals. Read older evidence through paginated
+`history` or `history --id ID`; see [LAN status and recovery](LAN_NATIVE.md#observe-and-recover)
+for the count and encoded response limits. Explicit history/export may contain
+private material.
 
 ## Claude external wake
 
-Update both CLI and Service, then run `pairroom relay bind` once in the existing Claude session; an approved Stop also refreshes the capability. PairRoom captures `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` in that session's tool environment. Do not copy them into prompts or flags. No new hook or longer Stop timeout is required.
+For a LAN guest, Service wake is an optional enhancement provided by a running
+local observer over its direct client binding. CLI/hooks need no such Service.
+Without a live collector, hook or observer, messages stay at the host; the
+remote Service cannot invoke a native capability on this machine by itself.
+
+For a locally hosted binding, update CLI and Service, then run `pairroom relay bind` once in the existing Claude session. A direct LAN binding uses its CLI and, if external wake is desired, a current optional local Service observer. An approved Stop also refreshes the capability. PairRoom captures `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` in that session's tool environment. Do not copy them into prompts or flags. No new hook or longer Stop timeout is required.
 
 A wake-enabled Room (default on; changed through Management at an idle boundary) can nudge an eligible existing Claude inbox or Codex queue with fixed, body-free text. Live collectors take precedence. The minimum interval is per receiving slot, with a shared Room hourly budget. Unattempted rate-limited heads are rechecked when eligible; a reserved or possibly submitted wake is never automatically retried. [Automatic wake](PROTOCOL.md#automatic-idle-peer-wake) owns the exact limits and audit vocabulary.
 
@@ -186,12 +200,13 @@ After Grok's seventh continuation the chain ends and the session goes idle. Queu
 | Symptom | Action |
 |---|---|
 | `pairroom` is missing in the Agent's shell | Fix that shell's PATH and verify its CLI version, not just Desktop startup |
-| Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents. Up to eight Stop replies given meanwhile (fewer only when they are very long: the saved state stays under about 1.9 MiB) stay saved and publish in order at the next Stop, `relay status` or `relay reconcile` (`status` publishes them too; use `relay doctor` or `history` to inspect without publishing); a reply beyond that is reported on stderr as not retained |
+| Locally hosting Service is unavailable | Start/reuse the intended Service; a custom data root uses `--service-file <root>/relay-endpoint.json`, never pasted file contents. Up to eight Stop replies given meanwhile (fewer only when they are very long: the saved state stays under about 1.9 MiB) stay saved and publish in order at the next Stop, `relay status` or `relay reconcile` (`status` publishes them too; use `relay doctor` or `history` to inspect without publishing); a reply beyond that is reported on stderr as not retained |
+| Direct LAN host is unavailable | Keep the original client state and inspect the saved host with bound `preflight`. Resume after the host returns; no local Service or endpoint file is required. Follow [LAN recovery](LAN_NATIVE.md#observe-and-recover) for uncertain delivery or revoked membership |
 | stderr says the Service runs a different release | Run `pairroom relay preflight` and use the CLI from the Service's release (for example the one bundled with Desktop) before other recovery |
 | Hook missing or unapproved | Install for the intended Runtime and review the exact native definition |
 | Missing/conflicting session identity | Run bind as the Agent's tool call in the intended session; do not fabricate metadata |
 | Binding not found after a directory change | Follow [workspace recovery](NATIVE_SESSION_WORKSPACE.md#upgrade-and-recovery), not another workspace's credentials |
-| Slot occupied or bind result lost | Resume the original session/attempt; use replacement only for an intentional new session |
+| Slot occupied or bind result lost | Resume the original session/attempt. Local Rooms allow explicit replacement for an intentional new session; LAN uses a fresh `join --replace` after confirmed retirement and new exact-receipt approval |
 | Native final answer absent from Room | Check whether the Stop reply had the exact peer handle or `@user`; unaddressed bodies stay out of the Room |
 | Messages remain queued | Ask the bound receiving Agent to run `wait`; inspect capability/wake observations rather than assuming it was awakened |
 | Delivery is `unknown` or output was clipped | Inspect the original message, full saved output, and side effects before any explicit Retry |
@@ -202,7 +217,7 @@ The Native Room uses three columns on wide viewports: **Participants** on the le
 
 Participant cards show stored Runtime/Provider/model/effort/permission metadata, observed binding state, and last activity. These are display-only and not live presence; the page states such boundaries once in the collapsed **PairRoom relays; your harness runs.** notice and as tooltips on the related headings and controls. The inspector shows per-slot queued/delivering/unknown totals, oldest queued input, last wake observation, Pending items, history, diagnostics, and audit. It provides no process-start or Interrupt control.
 
-Peer messages show queue-to-claim timing after handoff or an uncertain delivery; it ends at the collector's claim, not model acceptance. When a message has a wake reservation or slot wake evidence, expand it to see the message's exact reservation, any outcome inferred from slot event order, and up to three slot observations while it waited. Result events have no message ID, so inferred outcomes and slot observations remain distinct from a confirmed message-specific effect. Submitted/accepted wake does not prove that the model began a turn. Missing or negative timing is left unmeasured.
+Peer messages show queue-to-claim timing after handoff or an uncertain delivery; it ends at the collector's claim, not model acceptance. When a message has a wake reservation or slot wake evidence, expand it to see the message's exact reservation, its wake outcome, and up to three slot observations while it waited. An outcome event that names a message ID is an exact message-specific effect; an outcome without one remains inferred from slot event order, so inferred outcomes and slot observations stay distinct from a confirmed effect. Submitted/accepted wake does not prove that the model began a turn. Missing or negative timing is left unmeasured.
 
 Pending items are independent of the recent chat tail. Use `relay history --pending` for oldest-first unresolved work or `relay history --id ID` for one message. Normal history is newest-first; follow returned cursors. Reading never claims, acknowledges, or retries a message. `relay doctor` and the Native diagnostic button inspect the current Room without a model call; CLI doctor also checks local installation observations. Doctor never activates a suspended Room, such as one not yet reopened after a Service restart; its error names `relay status --brief`, which activates the Room. Hook approval and model acceptance remain unknown.
 
@@ -226,6 +241,6 @@ For a lightweight review using this evidence, see [Implementation review](GETTIN
 
 An unchanged observation is neither an atomic snapshot nor approval. Use the operator-selected trusted checkout; an incoming anchor path grants no access. Keep edits stable or use immutable commits/artifacts for consequential review. [Review design and historical measurements](design/native-review-closure.md) explain bounds and verification categories.
 
-The browser's tail snapshot is bounded to recent complete messages and audit entries; retained totals still describe full history. It is not a total JSON-byte cap, and full export remains complete. [Protocol](PROTOCOL.md#native-observation-and-review-extensions) and [Storage](STORAGE.md#native-current-work-and-browser-recovery-projections) own the paging/recovery contracts.
+The local Native browser's tail snapshot is bounded to recent complete messages and audit entries; retained totals still describe full history. That browser text budget is not a total JSON-byte cap, and full local export remains complete. The separate [direct LAN status window](LAN_NATIVE.md#observe-and-recover) also bounds encoded JSON below the LAN response cap and points to history pages for older evidence. [Protocol](PROTOCOL.md#native-observation-and-review-extensions) and [Storage](STORAGE.md#native-current-work-and-browser-recovery-projections) own the paging/recovery contracts.
 
-Native remains experimental. Authenticated multi-round Claude Code/Codex/Grok acceptance, resume/fork behavior, and comparative billing require separate owner-authorized testing. Synthetic hooks, Mock, browser fixtures, and historical reports do not establish current vendor-model acceptance. Do not publish private transcripts or run paid benchmarks without consent.
+Authenticated multi-round Claude Code/Codex/Grok acceptance, resume/fork behavior, and comparative billing require separate owner-authorized testing. Synthetic hooks, Mock, browser fixtures, and historical reports do not establish current vendor-model acceptance. Do not publish private transcripts or run paid benchmarks without consent.

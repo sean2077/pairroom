@@ -81,6 +81,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 			request.Agents = defaultAgentSelections()
 		}
 	}
+	if request.Sharing == "lan" {
+		if request.AgentPairProfileID != "" {
+			return Room{}, errors.New("LAN creation selects only its local owner runtime")
+		}
+		request.Agents, err = prepareLANSelections(request.OwnerSlot, request.Agents)
+		if err != nil {
+			return Room{}, err
+		}
+	}
 	selections, err := validateAgentSelections(request.Agents)
 	if err != nil {
 		return Room{}, err
@@ -232,15 +241,15 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 	now := r.now()
 	room := Room{
-		HostMode: request.HostMode,
-		ID:       roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
+		HostMode: request.HostMode, Sharing: request.Sharing, OwnerSlot: request.OwnerSlot,
+		ID: roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
 		Collaboration: model.CloneCollaboration(request.Collaboration),
 		Lifecycle:     RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
 		TranscriptBoundaryNotice: TranscriptBoundaryNotice,
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 5, HostMode: room.HostMode, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 6, HostMode: room.HostMode, Sharing: room.Sharing, OwnerSlot: room.OwnerSlot, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
 		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,
@@ -291,6 +300,21 @@ func defaultAgentSelections() map[model.ActorID]model.AgentSelection {
 	}
 }
 
+// An explicitly unselected LAN peer is different from an omitted legacy
+// runtime. Presentation must retain that distinction before deriving handles
+// or native names, without storing the sentinel as the peer's selection.
+func selectionsRuntimeKinds(agents map[model.ActorID]model.AgentSelection) map[model.ActorID]model.RuntimeKind {
+	kinds := make(map[model.ActorID]model.RuntimeKind, 2)
+	for _, slot := range model.SlotActors() {
+		selection := agents[slot]
+		kinds[slot] = selection.Runtime
+		if selection.AwaitingPeer {
+			kinds[slot] = model.RuntimeAwaitingPeer
+		}
+	}
+	return kinds
+}
+
 func writeInitialRoomLog(dir string, project Project, room Room, payload roomProvisionedPayload) error {
 	eventStore, err := store.Open(dir)
 	if err != nil {
@@ -322,10 +346,7 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 	if err := appendEvent("room.settings.updated", model.ActorSystem, model.DefaultRoomSettings()); err != nil {
 		return err
 	}
-	identities := model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{
-		model.ActorSlot1: room.Agents[model.ActorSlot1].Runtime,
-		model.ActorSlot2: room.Agents[model.ActorSlot2].Runtime,
-	})
+	identities := model.ParticipantIdentities(selectionsRuntimeKinds(room.Agents))
 	participants := []model.ParticipantSnapshot{
 		{ID: model.ActorSlot1, DisplayName: identities[model.ActorSlot1].DisplayName, MentionHandle: identities[model.ActorSlot1].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorSlot1), State: model.StateStopped, Model: room.Agents[model.ActorSlot1].Model, RuntimeKind: room.Agents[model.ActorSlot1].Runtime, SessionID: room.Bindings[model.ActorSlot1].SessionID},
 		{ID: model.ActorSlot2, DisplayName: identities[model.ActorSlot2].DisplayName, MentionHandle: identities[model.ActorSlot2].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorSlot2), State: model.StateStopped, Model: room.Agents[model.ActorSlot2].Model, RuntimeKind: room.Agents[model.ActorSlot2].Runtime, SessionID: room.Bindings[model.ActorSlot2].SessionID},

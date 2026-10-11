@@ -67,7 +67,7 @@ func roomDeletionTestRegistry(t *testing.T, suffix string) (*Registry, Project, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{
+	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Deletion test Room",
 		Bindings:  roomDeletionTestSpecs(),
@@ -576,7 +576,7 @@ func TestRemoveRoomRejectsSwappedManagedDirectoryBeforeCheckpoint(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := registry.ProvisionRoom(ctx, ProvisionRequest{
+	other, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      "Swap sentinel Room",
 		Bindings:  roomDeletionTestSpecs(),
@@ -1318,7 +1318,7 @@ func TestManagementRoomRemovalRefusesBusyRuntimeWithoutTouchingData(t *testing.T
 
 func provisionRoomDeletionTestRoom(t *testing.T, registry *Registry, project Project, name, suffix string) Room {
 	t.Helper()
-	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded,
 		ProjectID: project.ID,
 		Name:      name,
 		Bindings:  roomDeletionTestSpecs(),

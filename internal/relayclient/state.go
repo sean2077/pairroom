@@ -3,6 +3,7 @@
 package relayclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,10 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/atomicfile"
+	"github.com/sean2077/pairroom/internal/lanclient"
+	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
@@ -52,7 +56,8 @@ type State struct {
 	Slot             model.ActorID     `json:"slot"`
 	Runtime          model.RuntimeKind `json:"runtime"`
 	Workspace        string            `json:"workspace"`
-	EndpointPath     string            `json:"endpoint_path"`
+	EndpointPath     string            `json:"endpoint_path,omitempty"`
+	LAN              *LANTransport     `json:"lan,omitempty"`
 	BindID           string            `json:"bind_id"`
 	Generation       uint64            `json:"generation"`
 	SessionID        string            `json:"session_id,omitempty"`
@@ -78,6 +83,31 @@ type State struct {
 	GeminiResponse *GeminiResponseCursor `json:"gemini_response,omitempty"`
 }
 
+// LANTransport is the immutable, public route of one direct Native binding.
+// Its room-scoped private key and receive journal live in the user client
+// store. Local Service discovery must never retarget this association.
+type LANTransport struct {
+	ClientID string `json:"client_id"`
+	Endpoint string `json:"endpoint"`
+	HostPin  string `json:"host_pin"`
+	RoomID   string `json:"room_id"`
+}
+
+// Schema 2 remains the local Service format. A separate schema makes older
+// clients refuse direct bindings instead of treating their credentials as a
+// loopback Service capability. Discovery validates routing before selecting it.
+func validStateFormat(s State) bool {
+	if s.Schema == 2 {
+		return s.LAN == nil
+	}
+	if s.Schema != 3 || s.LAN == nil || s.EndpointPath != "" {
+		return false
+	}
+	v := s.LAN
+	return v.ClientID == s.Room && v.ClientID == lanRoutingID(lanshare.Invite{HostPin: v.HostPin, RoomID: v.RoomID}) &&
+		lanshare.ValidFingerprint(v.HostPin) && lanshare.ValidID(v.RoomID) && lanshare.ValidateEndpoint(v.Endpoint) == nil
+}
+
 type credentials struct {
 	BindID string `json:"bind_id"`
 	Secret string `json:"secret"`
@@ -89,6 +119,7 @@ type Client struct {
 	Secret   string
 	Endpoint relay.Endpoint
 	HTTP     *http.Client
+	LAN      *lanclient.Client
 	Save     func(State) error // injected only by deterministic crash-window tests
 	// endpointErr defers a missing Service endpoint to the first relay call, so
 	// a Stop hook can still save its reply WAL while the Service is stopped.
@@ -106,7 +137,15 @@ func secureDir(root string, parts ...string) (string, error) {
 			return "", errors.New("invalid relay state path component")
 		}
 		path = filepath.Join(path, part)
-		if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		if lanPrivateStatePath(path) {
+			// LAN transport directories hold credentials: create them with the
+			// owner-private boundary the LAN slot lock and privatefile.WriteJSON
+			// require, not with an inherited Windows DACL that would make the
+			// directory permanently unusable.
+			if err := privatefile.Mkdir(path); err != nil {
+				return "", err
+			}
+		} else if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 			return "", err
 		}
 		info, err := os.Lstat(path)
@@ -128,7 +167,9 @@ func readPrivate(path string, value any) error {
 		return errors.New("relay state must be a bounded regular file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		return errors.New("relay state and credential permissions must be 0600")
+		// Uniform with the Windows DACL verdict: both mean the owner-only
+		// boundary was lost, which the offline recovery path may repair.
+		return fmt.Errorf("%w: relay state and credential permissions must be 0600", privatefile.ErrPrivate)
 	}
 	// Peer-slot hooks scan this file without the slot lock; on Windows the
 	// shared-delete open keeps that scan from failing the owner's replace.
@@ -138,6 +179,11 @@ func readPrivate(path string, value any) error {
 	}
 	if json.Unmarshal(data, value) != nil {
 		return errors.New("invalid relay state; inspect before rebind")
+	}
+	if s, ok := value.(*State); ok && s.Schema == 3 {
+		// Direct credentials use the stronger cross-platform private-file
+		// boundary. Validate the opened file, including its Windows DACL.
+		return privatefile.ReadJSON(path, maxPrivateFileBytes, value)
 	}
 	return nil
 }
@@ -152,37 +198,110 @@ func load(dir string) (*Client, error) {
 	return c, nil
 }
 
-// loadLocal validates the private binding without requiring a running Service.
-// Relay calls on the result fail with the endpoint error until it is readable.
-func loadLocal(dir string) (*Client, error) {
-	var state State
-	if err := readPrivate(filepath.Join(dir, "state.json"), &state); err != nil {
-		return nil, err
+// readPrivateRecovery reads one local binding file for an explicit offline
+// retirement. It keeps the regular-file and size bounds, but a lost owner-only
+// boundary — a workspace restored from a backup, copied from another machine,
+// or an inherited Windows DACL — must not make the documented offline escape
+// impossible. The bytes authorize only this local retirement and are removed
+// with it; they never authorize a host operation.
+func readPrivateRecovery(path string, value any) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
 	}
-	if state.Schema != 2 {
-		return nil, errors.New("retired relay state format; re-bind this slot without reading legacy credentials")
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxPrivateFileBytes {
+		return errors.New("relay state must be a bounded regular file")
+	}
+	data, err := atomicfile.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if len(data) > maxPrivateFileBytes {
+		return errors.New("relay state must be a bounded regular file")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(value) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("invalid relay state; inspect before rebind")
+	}
+	return nil
+}
+
+// readBindingFile permits a lost owner-only boundary only for an explicit
+// offline retirement. Format, size, missing-file and other read failures remain
+// errors; each file independently passes the strict reader first.
+func readBindingFile(path string, value any, strict func(string, any) error, recovery bool) (bool, error) {
+	err := strict(path, value)
+	if err == nil || !recovery || !errors.Is(err, privatefile.ErrPrivate) {
+		return false, err
+	}
+	if err := readPrivateRecovery(path, value); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func loadLocal(dir string) (*Client, error) {
+	c, _, err := loadLocalWith(dir, nil)
+	return c, err
+}
+
+// loadLocalRecovery is only for explicit direct LAN retirement. The protected
+// client record must match the recovered state before credentials or any local
+// Service endpoint can be read. Its boolean reports a recovered file boundary.
+func loadLocalRecovery(dir string, expected lanclient.Metadata) (*Client, bool, error) {
+	return loadLocalWith(dir, &expected)
+}
+
+// loadLocalWith validates the binding without requiring a running Service.
+// A protected direct identity enables the narrow offline recovery reader.
+func loadLocalWith(dir string, expected *lanclient.Metadata) (*Client, bool, error) {
+	var state State
+	recovered, err := readBindingFile(filepath.Join(dir, "state.json"), &state, readPrivate, expected != nil)
+	if err != nil {
+		return nil, recovered, err
+	}
+	if !validStateFormat(state) {
+		return nil, recovered, errors.New("retired relay state format; re-bind this slot without reading legacy credentials")
+	}
+	if lanPrivateStatePath(dir) && state.LAN == nil {
+		return nil, recovered, errors.New("direct LAN workspace state cannot use a local Service transport")
 	}
 	if !state.Slot.ValidParticipant() || state.Room == "" || state.BindID == "" {
-		return nil, errors.New("invalid relay state identity")
+		return nil, recovered, errors.New("invalid relay state identity")
+	}
+	if expected != nil && !matchesDirectMetadata(state, *expected) {
+		return nil, recovered, errors.New("direct LAN workspace identity changed; inspect before local detach")
 	}
 	if !validBacklog(state) {
-		return nil, errors.New("invalid relay publication backlog; inspect before rebind")
+		return nil, recovered, errors.New("invalid relay publication backlog; inspect before rebind")
 	}
 	var cred credentials
-	if err := readPrivate(filepath.Join(dir, "credentials"), &cred); err != nil {
-		return nil, err
+	readCredential := readPrivate
+	if state.LAN != nil {
+		readCredential = func(path string, value any) error { return privatefile.ReadJSON(path, maxPrivateFileBytes, value) }
+	}
+	credentialRecovered, err := readBindingFile(filepath.Join(dir, "credentials"), &cred, readCredential, expected != nil)
+	recovered = recovered || credentialRecovered
+	if err != nil {
+		return nil, recovered, err
 	}
 	if cred.BindID != state.BindID || cred.Secret == "" {
-		return nil, errors.New("relay credential/state mismatch; recover bind explicitly")
+		return nil, recovered, errors.New("relay credential/state mismatch; recover bind explicitly")
 	}
 	c := &Client{Dir: dir, State: state, Secret: cred.Secret, HTTP: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 40 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	c.Save = func(s State) error { return relay.AtomicJSON(filepath.Join(dir, "state.json"), s) }
+	if state.LAN != nil {
+		c.Save = func(s State) error { return privatefile.WriteJSON(filepath.Join(dir, "state.json"), s) }
+		c.endpointErr = c.loadLAN()
+		return c, recovered, nil
+	}
 	endpoint, err := relay.ReadEndpoint(state.EndpointPath)
 	if err != nil {
 		c.endpointErr = fmt.Errorf("read current Service endpoint (is PairRoom running?): %w", err)
 	}
 	c.Endpoint = endpoint
-	return c, nil
+	return c, recovered, nil
 }
 func (c *Client) authHeaders(req *http.Request) {
 	attachCLIBuild(req)
@@ -192,8 +311,17 @@ func (c *Client) authHeaders(req *http.Request) {
 	req.Header.Set("X-PairRoom-Session", c.State.SessionID)
 }
 func (c *Client) call(ctx context.Context, action string, payload any, result any) error {
+	if c.State.LAN != nil {
+		noteLANTransport(ctx)
+	}
 	if c.endpointErr != nil {
 		return c.endpointErr
+	}
+	if c.State.LAN != nil {
+		if c.LAN == nil {
+			return errors.New("direct LAN binding has no client transport")
+		}
+		return normalizeLANError(action, c.LAN.Relay(ctx, c.localAuth(), action, payload, result))
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -242,6 +370,9 @@ type relayError struct {
 func (e *relayError) Error() string { return fmt.Sprintf("relay %s: %s", e.action, e.message) }
 
 func relayErrorCode(err error) string {
+	if errors.Is(err, relay.ErrSendPayloadConflict) {
+		return relay.SendPayloadConflictCode
+	}
 	var failure *relayError
 	if errors.As(err, &failure) {
 		return failure.code
@@ -423,10 +554,15 @@ func cleanupAtomicTemps(dir string) {
 		return
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") || strings.HasPrefix(entry.Name(), ".bind-attempt.json-") || strings.HasPrefix(entry.Name(), ".claude-inbox-") {
+		if strings.HasPrefix(entry.Name(), ".state.json-") || strings.HasPrefix(entry.Name(), ".credentials-") || strings.HasPrefix(entry.Name(), ".bind-attempt.json-") || strings.HasPrefix(entry.Name(), ".claude-inbox-") || strings.HasPrefix(entry.Name(), ".identity-") {
 			if entry.Type().IsRegular() {
 				_ = os.Remove(filepath.Join(dir, entry.Name()))
 			}
 		}
 	}
+}
+
+// readLANAttemptFile is the strict reader for direct LAN attempt records.
+func readLANAttemptFile(path string, value any) error {
+	return privatefile.ReadJSON(path, maxPrivateFileBytes, value)
 }

@@ -135,6 +135,9 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     assert (await registered.value).status == 201
                     await expect(page.locator('#project-dialog')).not_to_be_visible()
                     await page.get_by_role('button', name=re.compile('Create Room', re.I)).first.click()
+                    # This real-transport fixture exercises Mock adapters and
+                    # Embedded Turn ownership; Native is the product default.
+                    await page.locator('#room-host-mode').select_option('embedded')
                     await page.locator('#room-collaboration-mode').select_option('custom')
                     await page.locator('#room-collaboration-instructions').fill(instructions)
                     await expect(page.locator('#room-name')).to_have_value('')
@@ -190,7 +193,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     headers = {'X-PairRoom-CSRF':csrf}
                     # Real second Room; provisioning does not invoke a model.
                     created_second = await context.request.post(origin+f'/api/v1/projects/{room["project_id"]}/rooms', headers=headers,
-                        data={'name':'Second workspace','bindings':{'slot1':{'mode':'new'},'slot2':{'mode':'new'}}})
+                        data={'name':'Second workspace','host_mode':'embedded','bindings':{'slot1':{'mode':'new'},'slot2':{'mode':'new'}}})
                     assert created_second.status == 201
                     second_id = (await created_second.json())['id']
                     move={'kind':'room','id':second_id,'target_id':room_id,'position':'before'}

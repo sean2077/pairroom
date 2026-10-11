@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/version"
 )
@@ -30,12 +31,17 @@ var (
 
 const roomDeletionQuarantineName = ".deleted-rooms"
 
-const registryCheckpointSchema = 3
+const registryCheckpointSchema = 4
+
+const localRegistryCheckpointSchema = 3
 
 type RegistryConfig struct {
 	Root     string
 	Resolver *ProjectResolver
 	Now      func() time.Time
+	// NativeIdentityRoot injects an isolated coordination store in tests.
+	// Production uses the per-user store shared by all local Services/clients.
+	NativeIdentityRoot string
 }
 
 type Registry struct {
@@ -54,6 +60,14 @@ type Registry struct {
 	rooms         map[string]Room
 	bindingOwners map[string]string
 	poisoned      error
+	identities    *nativeidentity.Store
+	nativeClaims  map[string]nativeidentity.Claim
+	nativeRetired map[nativeidentity.Claim]struct{}
+	// Cold LAN admission uses only this compact projection, never a request-
+	// triggered Event Log scan. Its own lock permits Engine OnAppend updates
+	// while CommitBinding already holds the Registry projection lock.
+	lanAuthMu sync.RWMutex
+	lanAuth   map[string]*lanRoomAuthorization
 
 	roomDeletionFS                roomDeletionFS
 	roomDeletionCleanupDiagnostic string
@@ -83,6 +97,16 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
+	identities, err := nativeidentity.Open()
+	if cfg.NativeIdentityRoot != "" {
+		identities, err = nativeidentity.OpenAt(cfg.NativeIdentityRoot)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := identities.Validate(ctx); err != nil {
+		return nil, fmt.Errorf("unsupported or invalid native identity state; data was not modified: %w", err)
+	}
 	if err := preflightRegistryRoot(root); err != nil {
 		return nil, err
 	}
@@ -107,6 +131,9 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		projectByRoot:    make(map[string]string),
 		rooms:            make(map[string]Room),
 		bindingOwners:    make(map[string]string),
+		identities:       identities,
+		nativeClaims:     make(map[string]nativeidentity.Claim),
+		nativeRetired:    make(map[nativeidentity.Claim]struct{}),
 		roomDeletionFS:   defaultRoomDeletionFS(),
 	}
 	// Validate a current checkpoint before creating a root/rooms directory or
@@ -140,6 +167,9 @@ func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 		return nil, fmt.Errorf("recover archived Rooms with missing data: %w", err)
 	}
 	if err := registry.scanRooms(ctx); err != nil {
+		return nil, err
+	}
+	if err := registry.reserveNativeIdentities(ctx); err != nil {
 		return nil, err
 	}
 	registry.refreshProjectAvailability(ctx)
@@ -301,7 +331,7 @@ func preflightRegistryRoot(root string) error {
 	}
 	if schema, exists, err := readSchemaHeader(filepath.Join(root, "service-registry.json")); err != nil {
 		return fmt.Errorf("inspect Service registry checkpoint before recovery: %w (service-registry.json is a rebuildable index: after backing it up and removing it, Rooms rebuild from their Event Logs, but Project registrations without Rooms must be recreated)", err)
-	} else if exists && schema < registryCheckpointSchema {
+	} else if exists && schema < localRegistryCheckpointSchema {
 		return fmt.Errorf("retired Service data root (checkpoint schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
 	} else if exists && schema > registryCheckpointSchema {
 		return fmt.Errorf("Service data root was written by a newer PairRoom (checkpoint schema %d > %d); upgrade this installation before starting it; data was not modified", schema, registryCheckpointSchema)
@@ -312,6 +342,9 @@ func preflightRegistryRoot(root string) error {
 		return fmt.Errorf("retired Service data root (Agent pair profile schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
 	} else if exists && schema > 2 {
 		return fmt.Errorf("Service data root was written by a newer PairRoom (Agent pair profile schema %d > 2); upgrade this installation before starting it; data was not modified", schema)
+	}
+	if err := preflightLANState(root); err != nil {
+		return err
 	}
 	return preflightRoomSchemas(filepath.Join(root, "rooms"))
 }
@@ -365,7 +398,7 @@ func preflightRoomSchemas(roomsRoot string) error {
 		if err != nil {
 			return fmt.Errorf("inspect Room metadata %s: %w", path, err)
 		}
-		if schema < version.StoreSchema {
+		if schema < version.LocalStoreSchema {
 			return fmt.Errorf("retired Service data root (Room store schema %d); start with a new data root and recreate Rooms and profiles; legacy data was not modified", schema)
 		}
 		if schema > version.StoreSchema {
@@ -414,7 +447,10 @@ func preflightRoomProvisioning(dir string) error {
 			}
 			if event.Kind == EventRoomProvisioned {
 				var header struct {
-					Schema int `json:"schema"`
+					Schema    int                                    `json:"schema"`
+					Sharing   string                                 `json:"sharing"`
+					OwnerSlot model.ActorID                          `json:"owner_slot"`
+					Agents    map[model.ActorID]model.AgentSelection `json:"agents"`
 				}
 				if err := json.Unmarshal(event.Data, &header); err != nil {
 					return fmt.Errorf("decode Room provisioning schema: %w", err)
@@ -422,8 +458,25 @@ func preflightRoomProvisioning(dir string) error {
 				if header.Schema < 5 {
 					return fmt.Errorf("retired room provisioning schema %d; recreate the Room; data was not modified", header.Schema)
 				}
-				if header.Schema > 5 {
+				if header.Schema > 6 {
 					return fmt.Errorf("unsupported room provisioning schema %d; use a newer PairRoom; data was not modified", header.Schema)
+				}
+				schema, exists, err := readStoreSchemaHeader(filepath.Join(dir, "metadata.json"))
+				if err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				if exists && ((header.Schema == 5 && schema != version.LocalStoreSchema) || (header.Schema == 6 && schema != version.StoreSchema)) {
+					return errors.New("store/provisioning schema mismatch: require 12/5 or 13/6; data was not modified")
+				}
+				if header.Schema == 5 {
+					if header.Sharing != "" || header.OwnerSlot != "" {
+						return errors.New("provisioning 5 cannot enable LAN sharing; data was not modified")
+					}
+					for _, selection := range header.Agents {
+						if selection.AwaitingPeer {
+							return errors.New("provisioning 5 cannot contain an unselected LAN peer; data was not modified")
+						}
+					}
 				}
 			}
 		}
@@ -492,10 +545,10 @@ func (r *Registry) readCheckpoint() (RegistrySnapshot, bool, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return RegistrySnapshot{}, false, errors.New("service registry checkpoint contains trailing JSON")
 	}
-	if snapshot.Schema < registryCheckpointSchema {
+	if snapshot.Schema < localRegistryCheckpointSchema {
 		return RegistrySnapshot{}, false, fmt.Errorf("retired service registry checkpoint schema %d", snapshot.Schema)
 	}
-	if snapshot.Schema != registryCheckpointSchema {
+	if snapshot.Schema != localRegistryCheckpointSchema && snapshot.Schema != registryCheckpointSchema {
 		return RegistrySnapshot{}, false, fmt.Errorf("unsupported service registry checkpoint schema %d", snapshot.Schema)
 	}
 	return snapshot, true, nil
@@ -691,6 +744,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	var provisioned *roomProvisionedPayload
 	materializedBindings := make(map[model.ActorID]Binding, 2)
 	nativeBindings := make(map[model.ActorID]relay.Binding, 2)
+	var retiredNativeBindings []relay.Binding
 	var meta model.RoomMeta
 	var lifecycle = RoomActive
 	var renamed string
@@ -706,6 +760,10 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 				return Room{}, Project{}, false, errors.New("native event requires an active native Room")
 			}
 			switch event.Kind {
+			case relay.EventLANInvite, relay.EventLANJoin, relay.EventLANMember:
+				if provisioned.Schema != 6 || storeSchema != 13 || provisioned.Sharing != "lan" {
+					return Room{}, Project{}, false, errors.New("LAN events require store 13/provisioning 6 sharing")
+				}
 			case relay.EventBinding, relay.EventMessage, relay.EventPublication, relay.EventPublicationGap, relay.EventFailure, relay.EventWakeConfig, relay.EventWakeReserved, relay.EventWakeAttempted:
 			default:
 				return Room{}, Project{}, false, fmt.Errorf("unsupported native event %q", event.Kind)
@@ -732,11 +790,25 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if payload.Schema < 5 {
 				return Room{}, Project{}, false, fmt.Errorf("retired room provisioning schema %d; recreate the Room", payload.Schema)
 			}
-			if payload.Schema != 5 {
+			if payload.Schema != 5 && payload.Schema != 6 {
 				return Room{}, Project{}, false, fmt.Errorf("unsupported room provisioning schema %d", payload.Schema)
 			}
-			if storeSchema != version.StoreSchema {
-				return Room{}, Project{}, false, errors.New("store/provisioning schema mismatch: require 12/5")
+			if (payload.Schema == 5 && storeSchema != 12) || (payload.Schema == 6 && storeSchema != 13) {
+				return Room{}, Project{}, false, errors.New("store/provisioning schema mismatch: require 12/5 or 13/6")
+			}
+			if payload.Schema == 5 && (payload.Sharing != "" || payload.OwnerSlot != "") {
+				return Room{}, Project{}, false, errors.New("provisioning 5 cannot enable LAN sharing")
+			}
+			if err := validateLANSelections(payload.HostMode, payload.Sharing, payload.OwnerSlot, payload.Agents); err != nil {
+				return Room{}, Project{}, false, err
+			}
+			if payload.Sharing == "lan" && !payload.Agents[model.OtherParticipant(payload.OwnerSlot)].AwaitingPeer {
+				return Room{}, Project{}, false, errors.New("LAN provisioning must await the peer runtime")
+			}
+			for _, b := range payload.Bindings {
+				if b.RemoteKey != "" {
+					return Room{}, Project{}, false, errors.New("provisioning cannot pre-admit a LAN member")
+				}
 			}
 			if !payload.HostMode.Valid() {
 				return Room{}, Project{}, false, errors.New("provisioning 5 requires explicit host_mode")
@@ -772,6 +844,19 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			updatedAt = event.CreatedAt
 		case "service.room.bindings.completed", "service.legacy.imported":
 			return Room{}, Project{}, false, fmt.Errorf("unsupported retired Room event %q", event.Kind)
+		case relay.EventLANMember:
+			b, err := relay.LANBindingFromEvent(event)
+			if err != nil {
+				return Room{}, Project{}, false, err
+			}
+			if event.Actor != model.ActorSystem || b.Slot != model.OtherParticipant(provisioned.OwnerSlot) {
+				return Room{}, Project{}, false, errors.New("LAN member actor or slot mismatch")
+			}
+			prior := nativeBindings[b.Slot]
+			if b.Generation < prior.Generation || (b.Generation == prior.Generation && prior.BindID != "" && b.BindID != prior.BindID) {
+				return Room{}, Project{}, false, errors.New("LAN membership generation regressed")
+			}
+			nativeBindings[b.Slot] = b
 		case relay.EventBinding:
 			if provisioned == nil || provisioned.HostMode != model.HostNative || lifecycle == RoomArchived {
 				return Room{}, Project{}, false, errors.New("native binding requires an active native Room")
@@ -780,12 +865,18 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 			if err != nil {
 				return Room{}, Project{}, false, err
 			}
+			if provisioned.Sharing == "lan" && b.Slot != provisioned.OwnerSlot {
+				return Room{}, Project{}, false, errors.New("LAN peer cannot use a local binding event")
+			}
 			if event.Actor != b.Slot {
 				return Room{}, Project{}, false, errors.New("native binding actor mismatch")
 			}
 			prior := nativeBindings[b.Slot]
 			if b.Generation < prior.Generation || (b.Generation == prior.Generation && prior.BindID != "" && b.BindID != prior.BindID) {
 				return Room{}, Project{}, false, errors.New("native binding generation regressed")
+			}
+			if prior.Active && (prior.SessionID != b.SessionID || prior.BindID != b.BindID || prior.Generation != b.Generation || !b.Active) {
+				retiredNativeBindings = append(retiredNativeBindings, prior)
 			}
 			nativeBindings[b.Slot] = b
 		case EventRoomBindingMaterialized:
@@ -918,7 +1009,7 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 		return Room{}, Project{}, false, errors.New("room.created collaboration conflicts with provisioning")
 	}
 	room := Room{
-		HostMode:                 payload.HostMode,
+		HostMode: payload.HostMode, Sharing: payload.Sharing, OwnerSlot: payload.OwnerSlot,
 		Collaboration:            model.CloneCollaboration(payload.Collaboration),
 		ID:                       payload.RoomID,
 		ProjectID:                payload.Project.ID,
@@ -939,11 +1030,29 @@ func (r *Registry) readRoomFacts(ctx context.Context, dir string) (Room, Project
 	}
 	for actor, binding := range nativeBindings {
 		room.Bindings[actor] = nativeRegistryBinding(binding)
+		if binding.RemoteKey != "" {
+			room.Agents[actor] = nativeLANSelection(binding.Runtime, binding.Active)
+		}
 	}
 	if room.UpdatedAt.IsZero() {
 		room.UpdatedAt = room.CreatedAt
 	}
 	if err := room.Validate(); err != nil {
+		return Room{}, Project{}, false, err
+	}
+	for slot, b := range nativeBindings {
+		if c := r.nativeIdentityClaim(room, b); c != nil {
+			r.nativeClaims[nativeClaimKey(room.ID, slot)] = *c
+		}
+	}
+	for _, b := range retiredNativeBindings {
+		if claim := r.nativeIdentityClaim(room, b); claim != nil {
+			if current, ok := r.nativeClaims[nativeClaimKey(room.ID, b.Slot)]; !ok || current != *claim {
+				r.nativeRetired[*claim] = struct{}{}
+			}
+		}
+	}
+	if err := r.resetLANAuthorization(room, events); err != nil {
 		return Room{}, Project{}, false, err
 	}
 	return room, payload.Project, true, nil
@@ -965,7 +1074,7 @@ func readRoomStoreSchema(dir string) (int, error) {
 	if metadata.Format != "pairroom-jsonl" {
 		return 0, fmt.Errorf("unsupported event metadata format %q", metadata.Format)
 	}
-	if metadata.SchemaVersion < version.StoreSchema {
+	if metadata.SchemaVersion < version.LocalStoreSchema {
 		return 0, fmt.Errorf("retired event store schema %d; recreate the Room", metadata.SchemaVersion)
 	}
 	if !version.SupportsStoreSchema(metadata.SchemaVersion) {
@@ -1186,8 +1295,8 @@ func validateCheckpointRoom(room Room) error {
 		return errors.New("checkpoint Room must contain exactly two canonical runtime_names")
 	}
 	for _, actor := range model.SlotActors() {
-		name := strings.TrimSpace(room.RuntimeNames[actor])
-		if name == "" {
+		name, present := room.RuntimeNames[actor]
+		if !present || strings.TrimSpace(name) == "" && !room.Agents[actor].AwaitingPeer {
 			return fmt.Errorf("checkpoint Room runtime_names is missing %s", actor)
 		}
 	}
@@ -1204,8 +1313,9 @@ func cloneRoom(room Room) Room {
 	room.Bindings = cloneBindings(room.Bindings)
 	room.Agents = cloneAgentSelections(room.Agents)
 	room.RuntimeNames = make(map[model.ActorID]string, 2)
+	kinds := selectionsRuntimeKinds(room.Agents)
 	for _, actor := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
-		room.RuntimeNames[actor] = model.NativeSessionName(room.ID, room.Name, actor, room.Agents[actor].Runtime, room.Agents[model.OtherParticipant(actor)].Runtime)
+		room.RuntimeNames[actor] = model.NativeSessionName(room.ID, room.Name, actor, kinds[actor], kinds[model.OtherParticipant(actor)])
 	}
 	return room
 }

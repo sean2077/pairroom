@@ -92,13 +92,17 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 await expect(page.locator('#project-dialog')).not_to_be_visible()
                 await page.get_by_role('button', name='Create Room', exact=False).first.click()
                 await page.locator('#room-name').fill('Native collaboration workspace')
-                await page.locator('#room-host-mode').select_option('native')
+                await expect(page.locator('#room-host-mode')).to_have_value('native')
                 await expect(page.locator('#room-native-help')).to_be_visible()
+                await expect(page.locator('#room-embedded-help')).to_be_hidden()
                 await expect(page.locator('input[name="slot1-mode"][value="existing"]')).to_be_disabled()
                 for slot in ('slot1', 'slot2'):
                     await expect(page.locator(f'#{slot}-runtime option[value="grok"]')).to_be_enabled()
                     await page.locator(f'#{slot}-runtime').select_option('grok')
                 await page.locator('#room-host-mode').select_option('embedded')
+                await expect(page.locator('#room-embedded-help')).to_be_visible()
+                await expect(page.locator('#room-embedded-help')).to_contain_text('Native is recommended')
+                await expect(page.locator('#room-native-help')).to_be_hidden()
                 await page.locator('#room-host-mode').select_option('native')
                 for slot, runtime in (('slot1', 'claude'), ('slot2', 'codex')):
                     await expect(page.locator(f'#{slot}-runtime')).to_have_value('grok')
@@ -199,7 +203,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     assert f'reply {round_no} from claude' in json.loads(right)['reason']
                 await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','restart-fixture','--text','Queued across Service restart'])
                 checkpoint=json.loads((root/'state'/'service-registry.json').read_text())
-                assert checkpoint['schema']==3 and all(r.get('host_mode') in ('embedded','native') for r in checkpoint['rooms'])
+                assert checkpoint['schema']==4 and all(r.get('host_mode') in ('embedded','native') for r in checkpoint['rooms'])
                 print('Native browser: independent pending history and accepted-response loss across refresh', flush=True)
                 # Add terminal publications through the actual authenticated API,
                 # forcing the original unknown message outside the recent window.

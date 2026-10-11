@@ -63,6 +63,7 @@ function client() {
   const context = vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync('internal/service/assets/management-diagnostics.js', 'utf8'), context);
   vm.runInContext(fs.readFileSync('internal/service/assets/management-order.js', 'utf8'), context);
+  vm.runInContext(fs.readFileSync('internal/service/assets/management-lan.js', 'utf8'), context);
   vm.runInContext(source.replace(marker, hook + marker), context);
   const c = sandbox.management;
   c.state.authenticated = true;

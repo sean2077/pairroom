@@ -1,6 +1,6 @@
 # Getting started
 
-Choose the host mode before following commands. **Embedded** lets PairRoom drive the adapters and is the quickest first trial; **Native** keeps your original sessions and is recommended for daily work, though still experimental. Neither is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
+**Native is the default and recommended host mode.** Start with the [Native path](#keep-codex-desktop-a-native-room) to connect your original sessions. **Embedded** is an optional mode for PairRoom-owned adapters, per-slot Provider overrides, or a Mock demonstration. Select Embedded explicitly when following the Embedded examples below. Neither mode is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
 
 ## Prerequisites
 
@@ -33,7 +33,7 @@ pairroom service --mock --data-root "$HOME/.pairroom-demo"
 
 Open the printed Management URL if a browser does not open automatically. Do not share the authenticated URL. Keep the foreground process running; `Ctrl+C` requests normal shutdown.
 
-In Management, register the disposable repository's absolute path as a **Project**, then create an **Embedded Room** with two new Bindings. Inspect the Agent selections, default/custom collaboration instructions, and permissions. Send Agent 1 a small task and inspect conversation, Turn activity, and message state. Project registration does not copy files.
+In Management, register the disposable repository's absolute path as a **Project**, then change the default Native selection to **Embedded** and create the Room with two new Bindings. Inspect the Agent selections, default/custom collaboration instructions, and permissions. Send Agent 1 a small task and inspect conversation, Turn activity, and message state. Project registration does not copy files.
 
 Mock is deterministic control-plane verification, not a language model or a vendor-authentication test. Use fresh real Rooms for real execution, not a Mock transcript as an existing native session.
 
@@ -68,9 +68,9 @@ Check actual repository evidence, one active participant Turn at a time, and pee
 
 ## Keep Codex Desktop: a Native Room
 
-This path also applies to Claude Code, Grok Build, and Gemini CLI. Native is experimental: it keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
+This path also applies to Claude Code, Grok Build, and Gemini CLI. Native keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
 
-Start/reuse a non-Mock Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
+To host the Room on this machine, start/reuse a non-Mock Service. To join a colleague's LAN Room, use CLI/hooks directly and follow the [LAN invitation workflow](LAN_NATIVE.md); that path uses `preflight --join` before admission and needs no local Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
 
 ```bash
 pairroom relay install --runtime claude,codex
@@ -92,7 +92,7 @@ To confirm setup once, let each bound session finish a turn and check that `pair
 
 A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
 
-Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
+Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake; a LAN participant needs a running optional local observer for that enhancement. With no live collector, hook or observer, messages remain queued at the host. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
 
 ## Review first, execute where it fits
 

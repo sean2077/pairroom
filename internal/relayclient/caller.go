@@ -122,19 +122,31 @@ func applyCallerDefaults(root, action string, o *options) error {
 		return err
 	}
 	var matches []State
+	// The documented offline unbind may still identify a binding whose
+	// owner-only boundary was lost (restored from a backup, copied from another
+	// machine, an inherited Windows DACL); every other action keeps the strict
+	// read and any operation on the binding still reloads strictly.
+	recovery := action == "unbind" && o.localOnly
 	for _, path := range paths {
 		var s State
-		if err := readPrivate(path, &s); err != nil {
+		if err := readDiscoveryState(path, &s, recovery); err != nil {
 			return err
 		}
-		if s.Schema != 2 || s.Generation == 0 || s.SessionID != caller.session || s.Runtime != caller.runtime {
+		if !validStateFormat(s) || s.Generation == 0 || s.SessionID != caller.session || s.Runtime != caller.runtime {
+			continue
+		}
+		if !safePart(s.Room) || !s.Slot.ValidParticipant() || filepath.Base(filepath.Dir(path)) != string(s.Slot) || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) != s.Room {
+			return errors.New("invalid local relay binding identity")
+		}
+		current, err := currentDirectBinding(s)
+		if err != nil {
+			return err
+		}
+		if !current {
 			continue
 		}
 		if action == "bind" && o.create {
 			return errors.New("this native session is already associated; use pairroom relay bind to resume it, not bind --create")
-		}
-		if !safePart(s.Room) || !s.Slot.ValidParticipant() || filepath.Base(filepath.Dir(path)) != string(s.Slot) || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) != s.Room {
-			return errors.New("invalid local relay binding identity")
 		}
 		if (o.room != "" && o.room != s.Room) || (o.slot != "" && o.slot != string(s.Slot)) {
 			continue
@@ -145,6 +157,9 @@ func applyCallerDefaults(root, action string, o *options) error {
 		return errors.New("native session matches multiple relay bindings; inspect them and pass --room/--slot explicitly")
 	}
 	if len(matches) == 1 {
+		if action == "join" {
+			return nil // join validates the exact host-scoped Room before reuse
+		}
 		s := matches[0]
 		o.room, o.slot = s.Room, string(s.Slot)
 		if action == "bind" && o.endpoint == "" {
@@ -152,7 +167,7 @@ func applyCallerDefaults(root, action string, o *options) error {
 		}
 		return nil
 	}
-	if action == "bind" {
+	if action == "bind" || action == "join" {
 		// New bindings still resolve against the Service's active Room and pair
 		// selections, then associate from the harness session id at bind.
 		return nil

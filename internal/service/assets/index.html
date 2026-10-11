@@ -155,9 +155,16 @@
           <label><span class="field-label" data-i18n="ui.roomName">Room name</span><input id="room-name" type="text" maxlength="160" aria-describedby="room-name-hint" autocomplete="off" placeholder="For example: Auth refactor review" data-i18n-placeholder="ui.forExampleAuthRefactorReview"><span id="room-name-hint" class="field-hint" data-i18n="room.temporaryNameHint">Optional.</span></label>
         </div>
         <section class="collaboration-config" data-room-only>
-          <label><span class="field-label" data-i18n="ui.native.hostMode">Host mode</span><select id="room-host-mode"><option value="embedded" data-i18n="ui.native.embedded">Embedded · PairRoom manages sessions</option><option value="native" data-i18n="ui.native.native">Native · relay between your native sessions (experimental)</option></select></label>
+          <label><span class="field-label" data-i18n="ui.native.hostMode">Host mode</span><select id="room-host-mode"><option value="native" data-i18n="ui.native.native">Native · recommended (default)</option><option value="embedded" data-i18n="ui.native.embedded">Embedded · PairRoom manages sessions</option></select></label>
           <p id="room-native-help" class="field-help" data-i18n="ui.native.help" hidden>Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.</p>
+          <p id="room-embedded-help" class="field-help" data-i18n="ui.native.embeddedHelp" hidden>Native is recommended for new Rooms. Choose Embedded when you need PairRoom-owned sessions and adapter controls, or a Mock demonstration.</p>
           <div data-native-setup data-native-source="room-native-help" hidden></div>
+          <label id="room-lan-choice" class="checkbox-label"><input id="room-share-lan" type="checkbox"><span data-i18n="room.lan.share">Invite the other side over LAN</span></label>
+          <div id="room-lan-fields" hidden>
+            <label><span class="field-label" data-i18n="room.lan.ownerSlot">My Agent's slot</span><select id="room-lan-owner-slot"><option value="slot1" data-i18n="agent.agent1">Agent 1</option><option value="slot2" data-i18n="agent.agent2">Agent 2</option></select></label>
+            <p class="field-help" data-i18n="room.lan.createHelp">Only this Room's host needs a Service. The other side joins directly with CLI/hooks; their actual Runtime is recorded when you accept their join receipt.</p>
+            <a href="#/settings/lan" id="room-lan-settings" data-i18n="room.lan.openSettings">Configure this Service's LAN listener</a>
+          </div>
         </section>
         <section class="collaboration-config" aria-labelledby="collaboration-label" data-room-only>
           <label><span id="collaboration-label" class="field-label" data-i18n="room.collaboration.mode">Collaboration</span>
@@ -169,7 +176,7 @@
         </section>
         <p data-room-only class="callout warning compact-callout" data-i18n="room.collaboration.yoloWarning">New Rooms default to YOLO. Both Agents may modify files and run commands without routine approval. Use trusted workspaces, or choose a narrower native policy below.</p>
 
-        <section class="pair-profile-controls" aria-label="Agent pair profiles" data-i18n-aria-label="agent.pairProfile.title">
+        <section id="room-pair-profile-controls" class="pair-profile-controls" aria-label="Agent pair profiles" data-i18n-aria-label="agent.pairProfile.title">
           <label id="pair-profile-picker" title="Fills both Agents. Changes here affect only this Room unless you save the profile." data-i18n-title="agent.pairProfile.templateHelp"><span class="field-label" data-i18n="agent.pairProfile.singular">Agent pair profile</span><select id="room-pair-profile"><option value="" data-i18n="agent.pairProfile.serviceDefaults">Service defaults (no profile)</option></select></label>
           <p id="pair-profile-help" class="field-help" hidden></p>
           <details id="pair-profile-save-options">
@@ -185,6 +192,7 @@
           </details>
         </section>
         <div class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p data-room-only class="field-help" data-i18n="room.agentConfigurationImmutable">Fixed once the Room is created.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
+        <p id="room-lan-peer" class="field-help" data-i18n="room.lan.awaitingPeerHelp" hidden>Other slot: awaiting the other side. No Runtime or native session is selected for them.</p>
         <div class="binding-grid">
           <fieldset class="binding-card" data-actor="slot1">
             <legend><span class="agent-avatar slot1">1</span><span><strong id="slot1-responsibility-label" data-i18n="room.collaboration.leadSlot">Agent 1 · Lead</strong></span></legend>
@@ -240,6 +248,7 @@
     <button id="context-close-room" type="button" role="menuitem" data-i18n="ui.closeRoomTabLabel">Close Room tab</button>
     <div id="context-room-order" role="group" aria-label="Move item" data-i18n-aria-label="workspace.ordering.actions"></div>
     <button id="context-archive-room" type="button" role="menuitem" data-i18n="ui.archiveRoom">Archive Room</button>
+    <button id="context-lan-room" type="button" role="menuitem" data-i18n="room.lan.roomAccess" hidden>LAN access</button>
   </div>
 
   <dialog id="rename-dialog" class="modal modal-small" aria-labelledby="rename-dialog-title">
@@ -285,6 +294,11 @@
     </form>
   </dialog>
 
+  <dialog id="lan-room-dialog" class="modal modal-large" aria-labelledby="lan-room-title">
+    <header class="modal-header"><h2 id="lan-room-title" data-i18n="room.lan.roomAccess">LAN access</h2><button class="icon-button modal-close" type="button" data-close-dialog="lan-room-dialog" aria-label="Close" data-i18n-aria-label="common.close">×</button></header>
+    <div id="lan-room-body" class="modal-body"></div>
+    <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="lan-room-dialog" data-i18n="common.close">Close</button></footer>
+  </dialog>
   <div id="toasts" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
   <script src="/_pairroom/i18next.min.js" defer=""></script>
   <script src="/_pairroom/catalogs.js" defer=""></script>
@@ -292,6 +306,8 @@
   <script src="/_pairroom/desktop.js" defer=""></script>
   <script src="/management-diagnostics.js" defer></script>
   <script src="/management-order.js" defer></script>
+  <script src="/_pairroom/native-outbox.js" defer></script>
+  <script src="/management-lan.js" defer></script>
   <script src="/management.js" defer=""></script>
   <script src="/management-ux.js" defer=""></script>
 
