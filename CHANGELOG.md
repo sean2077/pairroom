@@ -4,6 +4,11 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Added
+
+- Guide an unbound Native Room from its own page: while a slot this machine owns has no confirmed session, the main view shows each Agent's Runtime and observed binding state with the exact `pairroom relay bind --room <id> --slot N` command the hosting Service renders — including `--service-file` when its data root is not the CLI default — and a copy button that falls back to selecting the command for manual copy. The guide follows the observed binding state, so it returns whenever a locally owned slot is unassociated again, and a LAN guest slot is never offered a local bind because it joins through its invitation.
+- Join a Room the human names by ID: `加入 pairroom <room-id>` or `/pairroom-relay join <room-id>` in a native session with the current relay skill loaded runs a complete command unchanged, keeping its `--service-file`/`--repo`/`--slot` selectors, and treats a bare Room ID as `pairroom relay bind --room <exact-id>` with `--slot` only when that was requested, otherwise following the CLI's runtime-matched slot or its candidate list. It never guesses a slot, creates a Room, or replaces a binding implicitly, and a Room ID is never treated as a LAN invitation.
+
 ## [v5.14.0] — 2026-10-11
 
 ### Fixed

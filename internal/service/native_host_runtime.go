@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,21 +27,26 @@ import (
 )
 
 type nativeHostRuntime struct {
-	room      Room
-	project   Project
-	engine    *relay.Engine
-	media     *attachment.Store
-	token     string
-	baseURL   string
-	sessions  *websession.Store
-	http      *http.Server
-	cancel    context.CancelFunc
-	wakeCtx   context.Context
-	waker     *nativeWaker
-	done      chan struct{}
-	reclaimed chan struct{}
-	active    atomic.Int64
-	last      atomic.Int64
+	room    Room
+	project Project
+	engine  *relay.Engine
+	media   *attachment.Store
+	token   string
+	baseURL string
+	// endpointPath is this hosting Service's owner-only endpoint file; it is the
+	// only way a pasted bind command can name this Service when the data root is
+	// not the CLI default. Empty means "not resolvable": project no command
+	// rather than one that could bind against a different Service.
+	endpointPath string
+	sessions     *websession.Store
+	http         *http.Server
+	cancel       context.CancelFunc
+	wakeCtx      context.Context
+	waker        *nativeWaker
+	done         chan struct{}
+	reclaimed    chan struct{}
+	active       atomic.Int64
+	last         atomic.Int64
 	// serveFatal records an unexpected Room listener failure so Fatal can
 	// surface it instead of leaving a silently dead HTTP surface behind.
 	serveFatal atomic.Pointer[error]
@@ -107,7 +113,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	wakeConfig.Relay = engine
-	n := &nativeHostRuntime{room: durable, project: project, engine: engine, media: media, token: token, baseURL: "http://" + listener.Addr().String(), sessions: sessions, cancel: cancel, wakeCtx: runCtx, waker: newNativeWaker(wakeConfig), done: make(chan struct{}), reclaimed: make(chan struct{})}
+	n := &nativeHostRuntime{room: durable, project: project, engine: engine, media: media, token: token, baseURL: "http://" + listener.Addr().String(), endpointPath: filepath.Join(registry.Root(), relay.EndpointFile), sessions: sessions, cancel: cancel, wakeCtx: runCtx, waker: newNativeWaker(wakeConfig), done: make(chan struct{}), reclaimed: make(chan struct{})}
 	mux := http.NewServeMux()
 	webui.Mount(mux)
 	mux.HandleFunc("/", n.serve)
@@ -270,7 +276,34 @@ func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
 		}
 	}
 	room = cloneRoom(room)
-	return map[string]any{"room": room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(kinds)}
+	snapshot := map[string]any{"room": room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(kinds)}
+	// The join guide copies this text into an Agent session, so the Service that
+	// knows its own endpoint renders it once instead of the browser guessing.
+	if join := n.joinCommands(room); len(join) > 0 {
+		snapshot["join"] = join
+	}
+	return snapshot
+}
+
+// joinCommands projects the exact local bind command for each slot this machine
+// owns. A LAN guest slot is never projected: it joins through its invitation,
+// and a local bind there would name the wrong side's Service. An unresolvable
+// endpoint projects nothing at all rather than a command aimed at a Service that
+// happens to answer.
+func (n *nativeHostRuntime) joinCommands(room Room) map[model.ActorID]string {
+	if n.endpointPath == "" {
+		return nil
+	}
+	commands := make(map[model.ActorID]string, 2)
+	for _, slot := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
+		if room.Sharing == "lan" && slot != room.OwnerSlot {
+			continue
+		}
+		if command := relay.LocalBindCommand(n.endpointPath, room.ID, slot); command != "" {
+			commands[slot] = command
+		}
+	}
+	return commands
 }
 func (n *nativeHostRuntime) serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path

@@ -17,6 +17,9 @@ from playwright.async_api import async_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'internal/service/assets'
+# The Service renders these; a custom data root keeps its Service selector.
+JOIN_SLOT1 = 'pairroom relay bind --room native-fixture --slot 1'
+JOIN_SLOT2 = "pairroom relay bind --room native-fixture --slot 2 --service-file '/fixture root/relay-endpoint.json'"
 
 
 def fixture_html(isolated: bool = False) -> str:
@@ -35,11 +38,15 @@ def fixture_html(isolated: bool = False) -> str:
     window.__ids = 0;
     Object.defineProperty(crypto, 'randomUUID', {value:()=>'fixture-send-'+(++__ids)});
     window.__requests = [];
+    // An escaped copy rejection would otherwise be invisible to the assertions.
+    window.__rejections = [];
+    window.addEventListener('unhandledrejection', event => { window.__rejections.push(String(event.reason)); });
     // Use the browser's real localStorage and Web Locks on the intercepted
     // loopback origin. API/SSE remain fixtures, not authenticated transport.
     window.__snapshot = {
       room:{id:'native-fixture',name:'Native IM collaboration',agents:{slot1:{runtime:'grok'},slot2:{runtime:'grok'}}},
       identities:{slot1:{MentionHandle:'@grok0'},slot2:{MentionHandle:'@grok1'}},
+      join:__JOIN__,
       relay:{sequence:1,bindings:{slot1:{active:true,session_id:'fixture-1',generation:1,park_enabled:true},slot2:{active:true,session_id:'fixture-2',generation:1,park_enabled:true}},messages:[],audit:[]}
     };
     const labels = {
@@ -53,7 +60,11 @@ def fixture_html(isolated: bool = False) -> str:
       empty:'No published messages yet.', placeholder:'Queue a message for a native session…',
       awaitingPeer:'Awaiting the other side', awaitingPeerHelp:'Other slot: awaiting the other side. No Runtime or native session is selected for them.',
       remoteBindingHelp:'The other side uses CLI/hooks directly from their native session. They need no local Service. Native session paths, permissions and credentials remain on their machine.', member:'LAN member',
-      remoteHuman:'Other side', hostHuman:'Host owner'
+      remoteHuman:'Other side', hostHuman:'Host owner',
+      agent1:'Agent 1', agent2:'Agent 2', runtime:'Runtime', nativeDefault:'native default',
+      join:'Join this Room', setup:'Setup guide', help:'Run the command inside the matching Agent session.',
+      joinCopy:'Copy command', joinCopied:'Command copied', joinManual:'The browser could not copy. The command is selected; copy it manually.',
+      joinUnavailable:'This Service cannot name its own endpoint here.'
     };
     window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.split('.').pop()]||key;}};
     window.__message = (id,from='slot1',state='handed_off',text='Review '+id) => ({
@@ -93,6 +104,7 @@ def fixture_html(isolated: bool = False) -> str:
     '''
     # All inline scripts/styles here are repository-authored fixture content,
     # never Room input; real CSP is covered by test_native_host_browser.py.
+    fixture = fixture.replace('__JOIN__', json.dumps({'slot1': JOIN_SLOT1, 'slot2': JOIN_SLOT2}))
     return html.replace('</head>', '<style>'+styles+'</style></head>').replace(
         '</body>', '<script>'+fixture+'</script><script>'+script+'</script></body>')
 
@@ -308,6 +320,67 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await expect(file_message.locator('.message-author')).to_have_text('You · Other side')
             await expect(page.locator('#messages [data-message-id="lan-host"] .message-author')).to_have_text('You · Host owner')
             await page.evaluate('__snapshot=__beforeLAN;__update()')
+            # The join guide comes from durable binding state, not from a
+            # dismissal: it returns by itself after a replacement, keeps the
+            # retry command for an unconfirmed binding, and never offers a local
+            # bind to a LAN guest slot.
+            guide = page.locator('#join-guide')
+            await expect(guide).to_be_hidden()
+            await page.evaluate("__snapshot.relay.bindings.slot1={active:false};__update()")
+            await expect(guide).to_be_visible()
+            await expect(guide.locator('.join-slot')).to_have_count(2)
+            assert await guide.locator('.join-slot.slot2 pre').count() == 0, 'a bound slot kept a join command'
+            await expect(guide.locator('.join-slot.slot1 pre code')).to_have_text(JOIN_SLOT1)
+            await expect(guide.locator('.join-slot.slot2 .join-state')).to_have_text('Associated')
+            # An active binding without a confirmed session is not a free slot:
+            # it keeps the same service-targeted retry command.
+            await page.evaluate("__snapshot.relay.bindings.slot1={active:true,generation:1};__update()")
+            await expect(guide.locator('.join-slot.slot1 .join-state')).to_have_text('Pending')
+            await expect(guide.locator('.join-slot.slot1 pre code')).to_have_text(JOIN_SLOT1)
+            await page.evaluate("__snapshot.relay.bindings.slot1={active:false};__snapshot.relay.bindings.slot2={active:false};__update()")
+            await expect(guide.locator('.join-slot.slot2 pre code')).to_have_text(JOIN_SLOT2)
+            await context.grant_permissions(['clipboard-read', 'clipboard-write'])
+            await guide.locator('[data-join-focus="slot2-copy"]').click()
+            assert await page.evaluate('navigator.clipboard.readText()') == JOIN_SLOT2
+            await expect(page.locator('#status')).to_contain_text('Command copied')
+            # Clipboard APIs refused: the command is selected for manual copy
+            # instead of leaving the human without the instruction.
+            await page.evaluate("""() => {
+              Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true});
+              window.__execCommand=document.execCommand.bind(document);document.execCommand=()=>false;
+            }""")
+            await guide.locator('[data-join-focus="slot1-copy"]').click()
+            assert await page.evaluate('window.getSelection().toString()') == JOIN_SLOT1
+            await expect(page.locator('#status')).to_contain_text('copy it manually')
+            assert await page.evaluate("document.querySelectorAll('textarea.sr-only').length") == 0, 'the clipboard textarea survived'
+            # A throwing execCommand must reach the same manual path, remove its
+            # temporary textarea and leave no unhandled rejection behind.
+            await page.evaluate("() => { document.execCommand = () => { throw new Error('execCommand refused by fixture'); }; }")
+            await guide.locator('[data-join-focus="slot1-copy"]').click()
+            await expect(page.locator('#status')).to_contain_text('copy it manually')
+            assert await page.evaluate("document.querySelectorAll('textarea.sr-only').length") == 0, 'a throwing copy left its textarea behind'
+            assert await page.evaluate('window.__rejections.length') == 0, 'a copy failure escaped as an unhandled rejection'
+            assert await page.locator('[data-join-focus="slot1-copy"]').is_enabled()
+            await page.evaluate("document.execCommand=window.__execCommand")
+            # Both slots bound hides the guide; an unbind brings it back without a reload.
+            await page.evaluate("__snapshot.relay.bindings.slot1={active:true,session_id:'fixture-1',generation:1};__snapshot.relay.bindings.slot2={active:true,session_id:'fixture-2',generation:1};__update()")
+            await expect(guide).to_be_hidden()
+            await page.evaluate("__snapshot.relay.bindings.slot2={active:false};__update()")
+            await expect(guide).to_be_visible()
+            await page.evaluate("""() => {
+              __beforeLANGuide=structuredClone(__snapshot);
+              __snapshot.room.sharing='lan';__snapshot.room.owner_slot='slot1';
+              __snapshot.room.agents.slot2={awaiting_peer:true};
+              __snapshot.relay.bindings.slot1={active:false};__snapshot.relay.bindings.slot2={};__update();
+            }""")
+            # The host still binds its own slot; the guest joins by invitation.
+            await expect(guide).to_be_visible()
+            await expect(guide.locator('.join-slot.slot1 pre code')).to_have_text(JOIN_SLOT1)
+            assert await guide.locator('.join-slot.slot2 pre').count() == 0, 'a LAN guest slot was offered a local bind command'
+            await expect(guide.locator('.join-slot.slot2 .join-state')).to_have_text('Awaiting the other side')
+            await page.evaluate("__snapshot.relay.bindings.slot1={active:true,session_id:'fixture-1',generation:1};__update()")
+            await expect(guide).to_be_hidden()
+            await page.evaluate('__snapshot=__beforeLANGuide;__update()')
             # Locale changes retranslate handles/state without replacing input.
             await page.locator('#message-text').fill('仍保留草稿')
             await page.evaluate("PairRoomI18n.lang='zh-CN';document.dispatchEvent(new Event('pairroom:lang'))")
@@ -324,6 +397,10 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
                     await expect(page.locator('#send')).to_be_in_viewport()
                     assert await page.locator('#messages').evaluate('el=>el.clientHeight>50'), (width,height)
                     assert await page.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), (theme,width)
+                    # An unbound Room keeps both the transcript and the copy
+                    # affordance reachable, including on a very short window.
+                    assert await page.locator('#join-guide').is_visible(), (theme,width)
+                    await expect(page.locator('[data-join-focus="slot2-copy"]')).to_be_in_viewport()
                     if await page.locator('#native-inspector').is_visible():
                         await page.locator('#inspector-toggle').click()
                     await page.locator('#inspector-toggle').click()
@@ -360,7 +437,8 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
                 'real_vendor_e2e':False,'checks':['three-column panels and independent toggles','visible Agent metadata','single-line participant card header','chip row only while participants are collapsed','pager/attachment affordances','delivery summary','narrow panel focus/inertness','IM alignment','duplicate runtime identities','initial and incoming scroll',
                 'history anchor','draft/node preservation','binding disclosure/focus','safe Markdown/quotes/attachments',
                 'retry confirmation/cancel','uncertain send identity','real cross-window Web Locks','300-message bound',
-                'LAN awaiting/admitted peer honesty','LAN human provenance','text evidence download safety','locale switch','responsive light/dark'],
+                'LAN awaiting/admitted peer honesty','LAN human provenance','text evidence download safety','locale switch','responsive light/dark',
+                'join guide state/unbind/LAN/copy/manual fallback and short-viewport reachability'],
                 'browser_errors':errors},indent=2)+'\n',encoding='utf-8')
             print('Native IM browser fixture passed (not vendor E2E)',flush=True)
         finally:

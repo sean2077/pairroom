@@ -11,7 +11,9 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -20,8 +22,31 @@ from test_service_browser import ROOT, Service, read_json, wait_snapshot
 from test_native_chat_browser import verify as verify_chat
 
 
+def preserve_playwright_browsers() -> None:
+    """Keep Playwright's installed browsers reachable under a test-owned profile.
+
+    Playwright resolves its browser cache from the user profile, so moving HOME
+    or LOCALAPPDATA would hide an existing Chromium install. An explicit
+    override wins; otherwise pin the first candidate that exists.
+    """
+    if os.environ.get('PLAYWRIGHT_BROWSERS_PATH'):
+        return
+    candidates = []
+    if os.name == 'nt':
+        candidates = [Path(base) / 'ms-playwright' for base in (os.environ.get('LOCALAPPDATA'), os.environ.get('USERPROFILE', '') + '\\AppData\\Local') if base]
+    elif sys.platform == 'darwin':
+        candidates = [Path.home() / 'Library' / 'Caches' / 'ms-playwright']
+    else:
+        candidates = [Path.home() / '.cache' / 'ms-playwright']
+    for candidate in candidates:
+        if candidate.is_dir():
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(candidate)
+            return
+
+
 async def verify(binary: Path | None, browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
+    preserve_playwright_browsers()
     await verify_chat(browser_path, artifacts/'im')
     with tempfile.TemporaryDirectory(prefix='pairroom-native-browser-') as temporary:
         root = Path(temporary)
@@ -33,12 +58,14 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         repo.mkdir()
         subprocess.run(['git', 'init', '-q', str(repo)], check=True)
         subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-qm', 'Initial review fixture'], check=True)
-        service = Service(binary, root)
+        # os.UserConfigDir reads APPDATA on Windows and HOME/Library on macOS; the
+        # Service and every CLI call get the same test-owned profile so neither
+        # reads or writes the operator's real relay session identity store.
+        profile = {'HOME': str(root/'home'), 'USERPROFILE': str(root/'home'), 'XDG_CONFIG_HOME': str(root/'home'/'.config'),
+                   'APPDATA': str(root/'home'/'AppData'/'Roaming'), 'LOCALAPPDATA': str(root/'home'/'AppData'/'Local')}
+        service = Service(binary, root, profile)
         env = os.environ.copy()
-        # os.UserConfigDir reads APPDATA on Windows and HOME/Library on macOS; keep
-        # relay session locators out of the real profile on every platform.
-        env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'),
-                   APPDATA=str(root/'home'/'AppData'/'Roaming'), LOCALAPPDATA=str(root/'home'/'AppData'/'Local'))
+        env.update(profile)
         env['PATH'] = str(binary.parent) + os.pathsep + env.get('PATH', '')
         # bind associates from the official session id the harness exposes to its
         # tool-call subprocess. Expose exactly one per invocation (clearing the
@@ -123,15 +150,40 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 csrf = (await read_json(context, origin+'/api/v1/session'))['csrf_token']
                 headers = {'X-PairRoom-CSRF': csrf}
                 endpoint = root/'state'/'relay-endpoint.json'
+                print('Native browser: unbound Room shows the join guide, and its own command binds', flush=True)
+                # The guide is the human's entry point: its command must name this
+                # Service (custom data root here) and actually bind when pasted.
+                join_guide = frame.locator('#join-guide')
+                await expect(join_guide).to_be_visible()
+                await expect(join_guide.locator('.join-slot')).to_have_count(2)
+                await expect(join_guide.locator('.join-slot.slot1 .join-state')).to_have_text('Unbound')
+                command = await frame.locator('.join-slot.slot1 pre code').text_content()
+                parts = shlex.split(command)
+                assert parts[0] == 'pairroom' and parts[1:3] == ['relay', 'bind'], parts
+                assert parts[parts.index('--room')+1] == room_id and parts[parts.index('--slot')+1] == '1', parts
+                assert parts[parts.index('--service-file')+1] == str(endpoint), parts
+                await frame.locator('#language-button').click()
+                await expect(frame.locator('#join-title')).to_have_text('加入此房间')
+                await frame.locator('#language-button').click()
+                await expect(frame.locator('#join-title')).to_have_text('Join this Room')
                 print('Native browser: approved-hook setup fixture and bind-time environment association through real CLI', flush=True)
                 for slot, runtime, svar in (('slot1', 'claude', 'CLAUDE_CODE_SESSION_ID'), ('slot2', 'codex', 'CODEX_SESSION_ID')):
                     await asyncio.to_thread(cli, ['install','--runtime',runtime])
+                raw = await asyncio.to_thread(cli, parts[2:], None, ('CLAUDE_CODE_SESSION_ID', 'synthetic-slot1'))
+                bound = json.loads(raw)
+                # bind associates immediately from the harness environment; no
+                # nonce echo round-trip is required or returned.
+                assert bound['binding']['session_id'] == 'synthetic-slot1', bound['binding']
+                assert 'bind_nonce' not in bound, bound
+                await expect(join_guide.locator('.join-slot.slot1 .join-state')).to_have_text('Associated')
+                await expect(join_guide.locator('.join-slot.slot1 pre')).to_have_count(0)
+                for slot, svar in (('slot2', 'CODEX_SESSION_ID'),):
                     raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)], None, (svar, 'synthetic-'+slot))
                     bound = json.loads(raw)
-                    # bind associates immediately from the harness environment; no
-                    # nonce echo round-trip is required or returned.
                     assert bound['binding']['session_id'] == 'synthetic-'+slot, bound['binding']
                     assert 'bind_nonce' not in bound, bound
+                await expect(join_guide).to_be_hidden()
+                for slot in ('slot1','slot2'):
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park', headers=headers, data={'enabled':False})
                     assert response.status == 200
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:all(b.get('session_id') for b in s['relay']['bindings'].values()))

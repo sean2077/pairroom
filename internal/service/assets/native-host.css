@@ -228,3 +228,42 @@ body.workbench-native.native-chat{height:100vh;height:100dvh;overflow:hidden}
 }
 .native-chat .notice>details{margin:0}
 .native-chat .notice>details>summary{font-weight:600}
+
+/* Main-view join guide: persistent while a slot of this machine is unbound, and
+   bounded so the transcript and the composer keep their space on short screens. */
+.native-chat .join-guide{flex:none;max-height:34vh;overflow:auto;padding:9px 20px;border-bottom:1px solid var(--line);background:var(--wb-panel,var(--panel))}
+.native-chat .join-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.native-chat .join-guide h2{font-size:13px}
+.native-chat .join-head button{min-height:26px;padding:2px 10px;font-size:11px;white-space:nowrap}
+.native-chat .join-guide>.muted{margin:4px 0 7px}
+.native-chat .join-slots{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.native-chat .join-slot{display:grid;gap:6px;min-width:0}
+.native-chat .join-slot-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}
+.native-chat .join-slot-meta strong{font-size:12px}
+.native-chat .join-handle{font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.native-chat .join-slot-meta .muted,.native-chat .join-slot>p{margin:0;font-size:11px}
+.native-chat .join-state{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)}
+.native-chat .join-state::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--muted)}
+.native-chat .join-state.bound::before{background:var(--wb-green,#1f6743)}
+.native-chat .join-state.pending::before{background:var(--wb-amber,#7d5309)}
+.native-chat .join-command{display:flex;align-items:center;gap:8px;min-width:0}
+.native-chat .join-command pre{flex:1;min-width:0;margin:0;overflow-x:auto}
+.native-chat .join-command :is(pre,code){white-space:pre}
+.native-chat .join-copy{flex:none;min-height:28px;padding:3px 10px;font-size:11px;white-space:nowrap}
+@media(max-width:600px){.native-chat .join-guide{padding:8px 12px}}
+/* A short window keeps the guide scrollable rather than pushing the transcript
+   and the composer out of view; the first slot's command stays reachable. */
+@media(max-height:760px){.native-chat .join-guide{max-height:22vh}.native-chat .join-guide>.muted{display:none}}
+@media(max-width:420px) and (max-height:760px){.native-chat .join-guide{padding:6px 12px}}
+/* A very short window fits one line per unbound slot: a heading and stacked rows
+   would push the transcript and the composer out of view. The setup guide stays
+   reachable from the Participants panel. */
+@media(max-height:560px){
+  .native-chat .join-guide{max-height:9vh;padding:4px 20px}
+  .native-chat .join-guide>.muted,.native-chat .join-head{display:none}
+  .native-chat .join-slot{display:flex;align-items:center;gap:10px}
+  .native-chat .join-slot-meta{flex:none}
+  .native-chat .join-command{flex:1;min-width:0}
+  /* Only actionable rows: a bound slot shows nothing here anyway. */
+  .native-chat .join-slot:not(:has(.join-command)){display:none}
+}
