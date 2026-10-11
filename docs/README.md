@@ -9,10 +9,12 @@ Documentation on `main` tracks development, which may be ahead of the package yo
 | Starting point | Read in this order | Where you end up |
 |---|---|---|
 | New to PairRoom or the tool names | [Overview](../README.md) → [Core concepts](CONCEPTS.md) → [Why PairRoom](WHY_PAIRROOM.md) | Knowing whether Native or Embedded suits you |
-| Connect two existing coding sessions | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay, including Gemini CLI](NATIVE_RELAY.md) | Both sessions bound, and a Stop hook seen running in each |
+| Connect two existing coding sessions on this machine | [Agent-assisted setup](AGENT_SETUP.md) → [Native relay, including Gemini CLI](NATIVE_RELAY.md) | Both sessions bound, with their approved response hooks observed |
 | Collaborate with a teammate on the LAN | [Native LAN collaboration](LAN_NATIVE.md) → [Security boundary](../SECURITY.md) | One shared Room with an accepted teammate and independent local native permissions |
 | Try the interface without a model account | [Installation](INSTALLATION.md) → [Getting started](GETTING_STARTED.md) | A throwaway Mock Room with Embedded explicitly selected (no real model involved) |
 | Change versions or investigate stalled work | [Upgrading](UPGRADING.md) or [Troubleshooting](TROUBLESHOOTING.md) → [Operations](OPERATIONS.md) | A specific recovery step that keeps state and does not replay work |
+
+For a LAN Room, only the host runs a Service. The guest starts with the LAN guide and uses CLI/hooks directly; an optional local Service adds the Joined Rooms dashboard and supported idle-wake observation. A machine can host and join Rooms through different sessions at the same time. The LAN guide owns that complete path, so the same-machine setup is not a prerequisite for guests.
 
 None of these paths requires reading the technical contracts below.
 
@@ -24,8 +26,8 @@ None of these paths requires reading the technical contracts below.
 | Decide whether PairRoom fits | [Why PairRoom](WHY_PAIRROOM.md) and dated [Alternatives](ALTERNATIVES.md) |
 | Install, upgrade, or uninstall a package | [Installation](INSTALLATION.md) |
 | Let a coding Agent install and check the environment step by step | [Agent-assisted setup](AGENT_SETUP.md) |
-| First Mock/Embedded Room and optional plan/implementation review guidance | [Getting started](GETTING_STARTED.md) |
-| Native install, create/join, publication, wake, UI, and recovery | [Native relay, including Gemini CLI](NATIVE_RELAY.md) |
+| First Native pair, optional Mock/Embedded walkthrough, and review guidance | [Getting started](GETTING_STARTED.md) |
+| Local Native install/bind, publication, wake, UI, and recovery | [Native relay, including Gemini CLI](NATIVE_RELAY.md) |
 | Invite a colleague, accept their receipt, share evidence, or leave | [Native LAN collaboration](LAN_NATIVE.md) |
 | Native cwd/worktree identity and locator recovery | [Native session workspace discovery](NATIVE_SESSION_WORKSPACE.md) |
 | Tool names, host modes, Bindings, responsibilities, controls, and receipts | [Core concepts](CONCEPTS.md) |

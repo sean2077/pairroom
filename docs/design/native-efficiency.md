@@ -12,6 +12,11 @@ reasoning and dated external research behind the native reliability review.
 semantics. Test results belong to the CI run for the reviewed commit, not to a
 permanent claim that a moving branch or vendor release is verified.
 
+The file-sharing and full-snapshot observations below describe the local Native
+path reviewed in September. Direct LAN participants use explicit `--file`
+uploads and bounded snapshots; see [Native LAN collaboration](../LAN_NATIVE.md).
+Those later transport differences do not revise the historical measurements.
+
 ## Keep the current ownership model
 
 The useful split is: the vendor owns inference, tools, approvals, credentials and

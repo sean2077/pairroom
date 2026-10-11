@@ -24,11 +24,11 @@ Codex uses `.codex/hooks.json`; Claude Code uses `.claude/settings.json`. Grok B
 
 Review and approve the exact installed definitions in the harness: Codex `/hooks`, Claude project hook consent, Grok hook approval plus folder trust, and Gemini `/hooks` approval/reload of both BeforeTool and AfterAgent plus workspace trust. Follow native trust/restart guidance; PairRoom never grants consent for you.
 
-Before binding, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks, without changing anything, that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the Stop hook is installed, then prints ordered `next_steps` and exits nonzero until setup is ready. A Service version mismatch, or a `pairroom` on PATH that is not the running binary, only warns: read `next_steps` even when `ready` is `true`. It cannot see approval, and neither can bind: bind rejects only a missing or disabled hook, so an installed but unapproved hook lets bind succeed while Stop replies never publish. The first finished turn's `last_hook_at` in `relay doctor` confirms approval; until the hook has run, `doctor` and `status` show a local `hook_hint`.
+Before binding to a local Service, run `pairroom relay preflight` in each Agent session (or any shell in the Project). It checks that the bare `pairroom` command resolves on that shell's PATH, the Service is reachable and from the same release, and the required hooks are installed. It creates no Project, Room or binding, changes no hook configuration, and contacts no model. It prints ordered `next_steps` and exits nonzero until setup is ready. A Service version mismatch, or a `pairroom` on PATH that is not the running binary, only warns: read `next_steps` even when `ready` is `true`. It cannot see approval, and neither can bind: bind rejects missing or disabled hooks, so an installed but unapproved response hook can leave a successful binding unable to publish Stop replies. Gemini additionally needs an approved BeforeTool hook to supply bind-time identity. The first finished turn's `last_hook_at` in `relay doctor` records that the response hook ran; until then, `doctor` and `status` show a local `hook_hint`.
 
-For an invited LAN session that is not yet bound, run **`pairroom relay preflight --join`** instead. It checks CLI, workspace, native session eligibility and hooks without reading a local Service endpoint or requiring one to run. Then follow `relay join` and exact-receipt acceptance in the [LAN guide](LAN_NATIVE.md#create-request-accept). After a remote binding exists, ordinary `preflight` resolves that session's host directly. Starting or stopping an optional local Service does not change the binding's destination.
+For an invited LAN session that is not yet bound, run **`pairroom relay preflight --join`** instead. It checks CLI, workspace, native session eligibility and hooks without reading a local Service endpoint or requiring one to run. Then follow `relay join` and exact-receipt acceptance in the [LAN guide](LAN_NATIVE.md#create-request-accept). After a remote binding exists, ordinary `preflight` checks that session's host contact and admission directly; it can activate a suspended host Room. The direct check does not compare host versions: `relay doctor` reports the host release and protocol once that Room is active. Starting or stopping an optional local Service does not change the binding's destination.
 
-After setup, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever the Service reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
+For local Service transport, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever a Service response reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. Direct LAN transport does not supply this automatic warning; inspect its doctor report. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
 
 Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, and Gemini's `GEMINI_CLI_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
 
@@ -60,6 +60,11 @@ Official references: [hooks and payloads](https://github.com/google-gemini/gemin
 
 ## Create, join, collaborate
 
+The following flow connects sessions to the **same local Service**. To host a
+Room for a colleague or join a remote host directly, follow
+[Create, request, accept](LAN_NATIVE.md#create-request-accept); its `relay join`
+invitation replaces the local peer-bind command below.
+
 Inside the first native session, invoke `/pairroom-relay <topic>` with the skill loaded, or ask its Agent to run:
 
 ```bash
@@ -70,7 +75,7 @@ Pass the printed `peer_join_local` command to the other session using the same S
 
 Alternatively, create a **Native** Room in Management and bind the two sessions to it. Do not also run `--create`. When exactly one matching active Room/slot is available, `pairroom relay bind` needs no selectors; otherwise follow the candidate list. Slots are Agent 1/2 (`--slot 1|2`), not vendor names. The creating session becomes Agent 1 by default; existing Rooms are not reordered. Creation uses the detected caller and the Service's selected pair; `--peer-runtime` is available when an explicit peer choice is needed.
 
-Each bind associates immediately from the official tool-call environment: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`; Gemini instead uses approved BeforeTool metadata described below. Run it **inside the intended Agent session**, not a detached terminal or Grok's user shell mode (`!`). Missing or conflicting identity fails closed; do not manufacture an environment value. Bind also checks the installed hook. No nonce echo, initial Stop, or status check is needed to unlock confirmed relay. Reuse the existing binding for later reviews.
+Each bind associates immediately from the official tool-call environment: `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, or `GROK_SESSION_ID`; Gemini instead uses the approved [BeforeTool metadata](#native-setup). Run it **inside the intended Agent session**, not a detached terminal or Grok's user shell mode (`!`). Missing or conflicting identity fails closed; do not manufacture an environment value. Bind also checks the installed hooks. No nonce echo, initial Stop, or status check is needed to unlock confirmed relay. Reuse the existing binding for later reviews.
 
 If creation succeeded but bind failed, finish the printed recovery command for that Room instead of creating another. If the bind response was lost, rerun bind for the same Room/slot without `--create` or a new `--replace`. Explicit replacement is for an intentional session change and cannot stop work in the old harness. It is refused while the slot still holds unpublished Stop replies; run `relay reconcile` to publish them (or `reconcile --discard` to drop each explicitly) before replacing.
 
@@ -119,6 +124,14 @@ pairroom relay send --id report-01 --text-file "/absolute/task/report.md"
 
 `--text-file -` reads stdin. Repeatable `--ref PATH` appends a local path/size/SHA-256 reference **without uploading file contents**; the receiver needs access to those retained bytes. Relative paths resolve from the actual tool-call cwd, not the binding workspace. References are evidence, not permission to read arbitrary paths.
 
+For a downloadable report, patch or log, use repeatable `--file PATH` on `send`
+or `exchange`; it uploads verified UTF-8 text evidence up to 5 MiB per file.
+Use `--attach PATH` for supported images. These uploads work for local and LAN
+Native Rooms, so a colleague can receive the bytes without access to the
+sender's filesystem. [File-based messages](CLI_REFERENCE.md#file-based-messages-and-evidence)
+compares the four options; [LAN evidence](LAN_NATIVE.md#share-a-useful-bug-report)
+explains remote download and storage limits.
+
 `wait` / `exchange --output-file NEW_PATH` can persist the complete incoming envelope and return a locator. Read the full saved output before acting when a harness shows only a clipped preview. File output does not strengthen `handed_off` into model acceptance. Body size, UTF-8 validation, path semantics, and no-overwrite rules belong in [file-based messages](CLI_REFERENCE.md#file-based-messages-and-evidence).
 
 Grok never publishes clipped Stop text as a complete reply. Send the full text explicitly through a file or stdin instead. Its readiness hint does not claim or acknowledge the inbox body. See [Grok Native](CLI_REFERENCE.md#grok-build-native).
@@ -147,7 +160,7 @@ The CLI requires an affirmative `handed_off: true` acknowledgement, not merely H
 
 A detached background waiter whose output never reaches the model may nevertheless be terminally `handed_off`. Another `wait` cannot re-collect it. Inspect the authorized message/history and actual workspace before deciding a fresh instruction; do not blindly duplicate the original task body.
 
-Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` re-uploads each image under a new attachment ID; the Service still returns the original receipt when every image has the same bytes (SHA-256 and size), media type and file name in the same order. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**; use `history` or `doctor` for read-only inspection.
+Same-client-ID recovery requires the same body, target, attachments, quote, and optional review version. Rerunning `send --attach` or `send --file` re-uploads evidence under new attachment IDs; the Service still returns the original receipt when the ordered attachments have the same kind, bytes (SHA-256 and size), media type and file name. Changed content under the same ID fails with a definite "already used for a different message" error: nothing new was published, so inspect the original instead of retrying that ID. A new ID is a new publication, even for identical text. `status` / `reconcile` default to bounded body-free summaries, but **can reconcile a pending Stop publication**. `history` reads message evidence without publishing or collecting; it can activate a suspended Room and resume configured wake processing. `doctor` also leaves a suspended Room inactive.
 
 For a local binding, `status --brief=false` returns the full snapshot. Direct LAN
 bindings instead return a bounded recent window of complete messages and audit
@@ -190,6 +203,11 @@ A long collaboration without a human keeps moving only while each idle receiver 
 | Claude Code | Up to eight consecutive message blocks | Service inbox wake (rate-limited, fail-closed on inbound policy or a stale capability), or a harness-tracked background `wait` | Good when wake or a background wait is available |
 | Codex | Up to eight consecutive message blocks | Service `codex queue` wake (rate-limited), or tracked background work | Good when wake is available |
 | Grok Build | At most **seven** readiness continuations; Grok skips Stop hooks after eight, and other hooks share that budget | **No Service wake.** Only a harness-owned background `wait` whose completion wakes the session (4/4 in the recorded experiment above) | Limited: depends entirely on keeping one background wait alive |
+| Gemini CLI | Up to eight consecutive message blocks while continuation text can be isolated safely | **No Service wake.** Foreground `wait` / `exchange`, or tracked background completion when the harness surfaces it | Limited: an idle session can need a human nudge; no Gemini idle-wake experiment is recorded here |
+
+For a LAN guest, the Service wake entries mean the **optional local observer**;
+the remote host cannot invoke a guest's native process. Direct foreground and
+hook collection remain available without a guest Service.
 
 After Grok's seventh continuation the chain ends and the session goes idle. Queued input then waits until that session's background wait returns it, the human nudges it, or the session's next turn collects it; nothing on the Service side can restart it. Grok also clips Stop replies over 32,768 characters, so a long reply needs explicit `send`/`exchange --text-file` or it is not relayed. For a long unattended run, prefer Claude Code or Codex for any slot that must recover from idleness on its own. Grok works when its session keeps exactly one long background `relay wait` (see the relay skill's *Stay reachable* rule) and sends long results explicitly. Treat the Grok slot as the first place to check when such a run stalls. These are integration boundaries, not authenticated multi-round acceptance results.
 
@@ -219,7 +237,7 @@ Participant cards show stored Runtime/Provider/model/effort/permission metadata,
 
 Peer messages show queue-to-claim timing after handoff or an uncertain delivery; it ends at the collector's claim, not model acceptance. When a message has a wake reservation or slot wake evidence, expand it to see the message's exact reservation, its wake outcome, and up to three slot observations while it waited. An outcome event that names a message ID is an exact message-specific effect; an outcome without one remains inferred from slot event order, so inferred outcomes and slot observations stay distinct from a confirmed effect. Submitted/accepted wake does not prove that the model began a turn. Missing or negative timing is left unmeasured.
 
-Pending items are independent of the recent chat tail. Use `relay history --pending` for oldest-first unresolved work or `relay history --id ID` for one message. Normal history is newest-first; follow returned cursors. Reading never claims, acknowledges, or retries a message. `relay doctor` and the Native diagnostic button inspect the current Room without a model call; CLI doctor also checks local installation observations. Doctor never activates a suspended Room, such as one not yet reopened after a Service restart; its error names `relay status --brief`, which activates the Room. Hook approval and model acceptance remain unknown.
+Pending items are independent of the recent chat tail. Use `relay history --pending` for oldest-first unresolved work or `relay history --id ID` for one message. Normal history is newest-first; follow returned cursors. Reading never claims, acknowledges, or retries a message, though history can activate a suspended Room. `relay doctor` and the Native diagnostic button inspect the current Room without a model call; CLI doctor also checks local installation observations. Doctor never activates a suspended Room, such as one not yet reopened after a Service restart. Run `relay status --brief` to activate it, then repeat doctor. Direct LAN doctor reports direct collection and host contact; it does not certify an optional local observer's wake capability. Hook approval and model acceptance remain unknown.
 
 Browser refresh restores an unconfirmed immutable original-ID draft and checks its receipt without sending. Explicit same-ID recovery preserves payload; Forget only removes local recovery state, not an accepted/in-flight task. Same-origin localStorage may contain private text and is not encrypted archival. Do not clear it merely to dismiss uncertainty.
 

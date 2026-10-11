@@ -70,24 +70,29 @@ semantics; [Security](../SECURITY.md) owns the trust and network boundaries.
 5. The guest repeats the same `join` command after acceptance. It promotes the
    confirmed local binding and prints the final bootstrap with the actual
    runtime-derived mention handles. Later, `pairroom relay bind` resumes that
-   same association. Normal `send`, `wait`, `exchange`, Stop publication,
+   same association. Normal `send`, `wait`, `exchange`, automatic response publication,
    `status`, and `history` commands connect directly to the recorded host.
    Ordinary `preflight` now resolves this bound session's remote transport
-   without consulting a local Service endpoint.
+   without consulting a local Service endpoint. Its direct check establishes
+   host contact and admission; use `doctor` to compare the reported host release
+   and Native protocol with the CLI once the Room is active.
 
-The invitation expires after ten minutes by default. A host can use
-`pairroom relay invite` to recover the current unexpired invitation, or to
-issue a fresh one once the previous invitation expired or was consumed. Each
-invitation accepts a bounded number of join attempts — eight per certificate
-and 256 in total — so one holder cannot keep appending durable join facts with
-fresh request IDs or spend the invitation before a colleague uses it; a spent
-invitation needs a fresh one. For
-an expired pending join, use the new invitation in the same guest session. The
-client settles the old request before renewing its request ID and keeps the
-per-Room private key. A confirmed member reconnects with its existing key and
-generation after a network interruption, CLI restart or host Service restart,
-without another invitation or repeated owner approval. Revocation and archive
-do not authorize an automatic new join.
+An invitation lasts ten minutes. While the peer slot is unoccupied,
+`pairroom relay invite` returns the current unexpired invitation; it issues a
+fresh one after expiry or after a consumed invitation's member has left or been
+revoked. Repeating `invite` does not rotate an unexpired invitation. Each
+invitation allows at most 32 pending keys, eight recorded attempts per
+certificate and 256 recorded attempts in total. Repeating the same request
+settles its original result instead of using another attempt. If the attempt
+budget is exhausted, wait for expiry before asking the host for a fresh
+invitation.
+
+For an expired pending join, use the new invitation in the same guest session.
+The client settles the old request before renewing its request ID and keeps
+the per-Room private key. A confirmed member reconnects with its existing key
+and generation after a network interruption, CLI restart or host Service
+restart, without another invitation or repeated owner approval. Revocation
+and archive do not authorize an automatic new join.
 
 A shared Room is created explicitly with `--share lan`. An existing local Room
 cannot be silently converted to shared history. The host can queue explicit
@@ -108,7 +113,8 @@ pairroom relay send --id checkout-bug-01 \
   --file ./repro.sh --file ./checkout.log
 ```
 
-`--file` uploads a regular UTF-8 text artifact, up to 5 MiB per file. Scripts,
+`--file` uploads a regular UTF-8 text artifact, up to 5 MiB per file. It also
+works for locally hosted Native Rooms. Scripts,
 patches, configuration fragments, and logs remain private, inert data files;
 PairRoom never executes them, extracts archives, or overwrites a working file.
 Only select content that the colleague and hosting Service may read. Image
@@ -197,9 +203,17 @@ metadata stay complete. `total_messages` and `total_audit` retain the exact
 counts for the Room's retained history; omitted entries have not been deleted.
 Use paginated `pairroom relay history` with its returned cursors, or
 `history --id ID`, to inspect older evidence. As with brief status, this command
-can reconcile pending Stop publications; history and doctor are the read-only
-inspection paths. A local binding's `status --brief=false` retains its full
+can reconcile pending Stop publications. `history` and `doctor` do not publish
+or collect messages. A local binding's `status --brief=false` retains its full
 snapshot behavior.
+
+Ordinary admitted requests, including history and bound `preflight`, may
+activate a suspended host Room and resume its configured wake processing.
+`doctor` deliberately leaves it suspended. If doctor cannot inspect an inactive
+Room, run `pairroom relay status --brief` to activate it, then repeat doctor.
+Direct preflight does not compare CLI and host versions, and direct commands
+do not receive the local Management transport's automatic version-warning
+header; inspect doctor's `service_version`, `protocol` and `local` matches.
 
 | Observation | Meaning and recovery |
 |---|---|
@@ -224,10 +238,11 @@ Room was archived. Contact and membership status therefore describe separate
 facts: a reachable host can refuse access. An active collector, native hook
 approval and model acceptance are also separate observations. A contact
 timestamp does not prove continuous reachability or that either Agent is
-online or working. `relay doctor` checks the current local native capability
-and remote transport without sending a
-wake; a suspended host Room must be activated with `status` before doctor can
-inspect it.
+online or working. Direct `relay doctor` reports the host's queue and collector
+observations plus local hook installation and version/protocol comparisons.
+Its `tracked_wait_only` capability describes direct receive support; it does
+not probe or certify an optional local Service observer's Claude/Codex wake
+capability. Doctor sends no wake.
 
 The private guest journal records original delivery receipts before returning an
 envelope locally. It records successful collector stdout before forwarding an

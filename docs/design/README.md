@@ -1,6 +1,6 @@
 # Design records
 
-These pages explain decisions and recorded implementation evidence. They do not override current source, authorize new work, or replace the [documentation owners](../README.md). The operator path is [Native relay](../NATIVE_RELAY.md); wire/state contracts belong in [Protocol](../PROTOCOL.md) and [Storage](../STORAGE.md).
+These pages explain decisions and recorded implementation evidence. They do not override current source, authorize new work, or replace the [documentation owners](../README.md). Operator paths are [Native relay](../NATIVE_RELAY.md) for local sessions and [Native LAN collaboration](../LAN_NATIVE.md) for a host and direct guest; wire/state contracts belong in [Protocol](../PROTOCOL.md) and [Storage](../STORAGE.md).
 
 | Record | How to use it |
 |---|---|
@@ -8,6 +8,7 @@ These pages explain decisions and recorded implementation evidence. They do not 
 | [Native efficiency boundaries](native-efficiency.md) | Dated external research, bounded-history tradeoffs, and limits on efficiency claims; not a fresh benchmark |
 | [Automatic wake](auto-wake.md) | Reservation, budget, and no-retry rationale; current limits are specified by Protocol |
 | [Claude inbox wake](claude-inbox-wake.md) | Private capability transport and security rationale; submission is not model acceptance |
+| [Claude nudge verification, superseded](claude-nudge-pending-verification.md) | Original 2026-10-08 assertions with their 2026-10-09 correction; retained to explain the correction, not current vendor timing or test evidence |
 | [Native review and recovery closure](native-review-closure.md) | The 2026-09-22 implementation record, acceptance map, and historical microbenchmarks; current UI/workflow lives in Native relay |
 | [Participant-slot cutover](slot-actor-migration.md) | Completed historical decision, with a pinned copy of the original plan; not pending phases or a purge instruction |
 

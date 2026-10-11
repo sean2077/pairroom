@@ -1,6 +1,6 @@
 # Getting started
 
-**Native is the default and recommended host mode.** Start with the [Native path](#keep-codex-desktop-a-native-room) to connect your original sessions. **Embedded** is an optional mode for PairRoom-owned adapters, per-slot Provider overrides, or a Mock demonstration. Select Embedded explicitly when following the Embedded examples below. Neither mode is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
+**Native is the default and recommended host mode.** Start with your [first Native Room](#first-native-room) to connect your original sessions, or the [LAN workflow](LAN_NATIVE.md) to work with a colleague. **Embedded** is an optional mode for PairRoom-owned adapters, per-slot Provider overrides, or a Mock demonstration. Select Embedded explicitly when following the Embedded examples below. Neither mode is an in-place conversion of the other. See [Concepts](CONCEPTS.md) for the boundary and [Native setup](NATIVE_RELAY.md) for the complete Native workflow.
 
 ## Prerequisites
 
@@ -16,6 +16,38 @@ Prebuilt packages do **not** require Go. Install only the Runtimes you will use:
 ## Install a release
 
 Follow [Installation](INSTALLATION.md) for the appropriate platform/channel, then verify `pairroom version`. A Desktop installation does not by itself prove that `pairroom` is discoverable in each native Agent's tool shell; check PATH there before Native setup, and use the CLI from the same release as the Service.
+
+<a id="keep-codex-desktop-a-native-room"></a>
+
+## First Native Room
+
+Use this path for Claude Code, Codex CLI/Desktop, Grok Build, or Gemini CLI. Native keeps the original sessions and their configuration, permissions, and process controls. Both slots may use the same Runtime. Confirm that each selected harness works independently before binding it.
+
+The steps below connect two sessions on this machine through one non-Mock Service. To join a colleague's Room, follow the [LAN invitation workflow](LAN_NATIVE.md) instead: it uses `preflight --join` before admission and needs no local Service. Different sessions can keep local and joined Rooms at the same time.
+
+Start or reuse the local Service, then install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
+
+```bash
+pairroom relay install --runtime claude,codex
+```
+
+Reload each harness if it requires that, then run `pairroom relay preflight` in both sessions. Read its `next_steps` even when `ready` is `true`, because a local CLI/Service version mismatch is only a warning. Preflight cannot see hook approval. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) has the full sequence.
+
+In the first Agent session, load the installed skill and invoke:
+
+```text
+/pairroom-relay Log-upload plan review
+```
+
+That session creates and binds one Room, then prints the peer's join command. Ask the **other Agent** to execute that command through its native tool environment. Bind reads official tool-call session metadata (Gemini uses its approved BeforeTool hook; see [Gemini setup](NATIVE_RELAY.md#gemini-cli)) and is immediately ready; do not echo a nonce, wait for an initial Stop, or add a status check after every success. A detached terminal or Grok `!` shell is not the intended tool-call environment.
+
+Alternatively, create a Native Room with the intended pair in Management and bind to it; skip skill-based creation. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
+
+To confirm setup once, let each bound session finish a turn and check that `pairroom relay doctor` shows a recent `last_hook_at`, which means the response hook (Stop, or Gemini's AfterAgent) ran. There is no need to repeat this every round.
+
+A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
+
+Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake; a LAN participant needs a running optional local observer for that enhancement. With no live collector, hook or observer, messages remain queued at the host. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
 
 ## First run without vendor calls
 
@@ -37,9 +69,11 @@ In Management, register the disposable repository's absolute path as a **Project
 
 Mock is deterministic control-plane verification, not a language model or a vendor-authentication test. Use fresh real Rooms for real execution, not a Mock transcript as an existing native session.
 
-## First real Room
+<a id="first-real-room"></a>
 
-These steps are for **Embedded**. To retain an independent Claude Code terminal, Codex CLI/Desktop, Grok Build, or Gemini CLI session, use the [Native path](#keep-codex-desktop-a-native-room).
+## First Embedded Room
+
+These steps are for **Embedded**. To retain an independent Claude Code terminal, Codex CLI/Desktop, Grok Build, or Gemini CLI session, use the [Native path](#first-native-room).
 
 Confirm the chosen CLI works independently as the same OS user in the intended repository:
 
@@ -54,7 +88,7 @@ pairroom doctor --repo /absolute/path/to/repository --json
 
 `doctor` checks Claude Code plus Codex unless you pass `--config` for another pair; [Agent-assisted setup](AGENT_SETUP.md#3-check-git-and-the-runtimes) has an example, including the optional live check. Neither version output nor `doctor` checks that you are signed in. Resolve executable, Provider/login, and native-policy failures in the harness first. PairRoom does not log in for you.
 
-Stop the isolated Mock Service, then start a non-Mock `pairroom service` or open Desktop without starting a competing owner. In a fresh Embedded Room, choose Runtime, Provider, model/effort, instructions, collaboration, permissions, and new/existing Bindings. Empty overrides inherit native configuration. A read-only [CC Switch](https://github.com/farion1231/cc-switch) Profile reference is optional; its catalog lists your local Profiles, not models for sale. See [Configuration](CONFIGURATION.md).
+If you started the isolated Mock demo, stop it when finished. Start or reuse a non-Mock Service through `pairroom service` or Desktop, keeping one owner per data root. In a fresh Embedded Room, choose Runtime, Provider, model/effort, instructions, collaboration, permissions, and new/existing Bindings. Empty overrides inherit native configuration. A read-only [CC Switch](https://github.com/farion1231/cc-switch) Profile reference is optional; its catalog lists your local Profiles, not models for sale. Gemini uses native authentication without CC Switch or effort overrides, and Embedded cannot resume an accepted Gemini session after its process exits; see [Gemini boundaries](NATIVE_RELAY.md#gemini-cli). See [Configuration](CONFIGURATION.md) for supported selections.
 
 **Both participants default to YOLO, the most permissive native permission setting.** For the first real test, explicitly select supported native read-only restrictions, then send:
 
@@ -65,34 +99,6 @@ Do not modify files. End when the answer is complete.
 ```
 
 Check actual repository evidence, one active participant Turn at a time, and peer delivery after a reliable native Turn boundary. Relay needs the peer's exact displayed handle; an unaddressed Embedded answer remains visible but ends relay. Only then grant permissions needed for implementation. Effective permission changes require an idle Room with no queued work or pending approval; Runtime/Provider/model and saved collaboration remain creation-time selections.
-
-## Keep Codex Desktop: a Native Room
-
-This path also applies to Claude Code, Grok Build, and Gemini CLI. Native keeps the original sessions and does not own their processes. Provider, model, effort, and permissions remain native-controlled; displayed Room metadata does not apply overrides. Historical or synthetic evidence is not current authenticated multi-round acceptance.
-
-To host the Room on this machine, start/reuse a non-Mock Service. To join a colleague's LAN Room, use CLI/hooks directly and follow the [LAN invitation workflow](LAN_NATIVE.md); that path uses `preflight --join` before admission and needs no local Service. Install the intended project's hooks and approve them in each harness, following [Native setup](NATIVE_RELAY.md#one-time-project-setup):
-
-```bash
-pairroom relay install --runtime claude,codex
-```
-
-Reload each harness if it requires that, then run `pairroom relay preflight` in both sessions. Read its `next_steps` even when `ready` is `true`, because a CLI/Service version mismatch is only a warning. Preflight cannot see hook approval. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) has the full sequence.
-
-In the first Agent session, load the installed skill and invoke:
-
-```text
-/pairroom-relay Log-upload plan review
-```
-
-That session creates and binds one Room, then prints the peer's join command. Ask the **other Agent** to execute that command through its native tool environment. Bind reads official tool-call session metadata (Gemini uses its approved BeforeTool hook; see [Gemini setup](NATIVE_RELAY.md#gemini-cli)) and is immediately ready; do not echo a nonce, wait for an initial Stop, or add a status check after every success. A detached terminal or Grok `!` shell is not the intended tool-call environment.
-
-Alternatively, create a Native Room with the intended pair in Management and bind to it; skip skill-based creation. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
-
-To confirm setup once, let each bound session finish a turn and check that `pairroom relay doctor` shows a recent `last_hook_at`, which means the Stop hook ran. There is no need to repeat this every round.
-
-A peer-directed Stop reply is published in full; `@user` publishes a human-facing result. Without either handle, the private reply body is **not** copied to the Room. Explicit `send`/`exchange` instead uses its command target; avoid a second peer-directed final reply after explicit publication unless duplication is intentional.
-
-Hooks receive during bounded park windows. Outside them, eligible Claude inbox and Codex queue capabilities can receive a body-free Service wake; a LAN participant needs a running optional local observer for that enhancement. With no live collector, hook or observer, messages remain queued at the host. Grok/Gemini, unavailable capabilities, or restrictive inbound policies need the documented foreground `wait` / human fallback; harness-owned background completion is useful only where it is surfaced to the model. `handed_off` is stdout evidence, not model acceptance. Use [Native recovery](NATIVE_RELAY.md#recovery-and-review-surface) rather than starting a duplicate session or blindly resending.
 
 ## Review first, execute where it fits
 

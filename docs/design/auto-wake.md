@@ -7,6 +7,12 @@ This document records the rationale and evidence behind it. Historical real-vend
 experiments remain in [Native relay](../NATIVE_RELAY.md#verified-vendor-wake-surfaces);
 Claude inbox [setup and security](claude-inbox-wake.md) have a separate owner.
 
+The local transport rationale below also applies to a LAN guest's optional
+local observer. The hosting Service cannot reach a colleague's native IPC
+capability: the host authorizes Room wake reservations, and the guest's observer
+performs the supported local nudge. See [LAN observation and recovery](../LAN_NATIVE.md#observe-and-recover)
+for that split and for operation without a local observer.
+
 ## Scope and decisions
 
 A queued message is safe in the FIFO but cannot itself make an idle native
