@@ -176,6 +176,8 @@ func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
 		"skill-identity":               "name: pairroom-relay",
 		"agent-tool-entry":             "Use this session's tools",
 		"preflight":                    "before first bind or on setup failure run read-only pairroom relay preflight",
+		"lan-join-preflight":           "initial LAN join: add --join",
+		"gemini-no-service-wake":       "Gemini: approve BeforeTool/AfterAgent; standalone run_shell_command; no Service wake",
 		"ready-next-steps":             "follow next_steps until ready",
 		"cwd-not-binding":              "not rebinding on cwd changes",
 		"reuse-collaboration":          "reuse the Room, follow its collaboration rules",

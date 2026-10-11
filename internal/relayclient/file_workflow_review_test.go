@@ -61,7 +61,7 @@ func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
 		"tool-cwd":                 "Paths use the tool cwd",
 		"current-cli":              "these flags need the current CLI",
 		"direct-join":              "CLI/hooks need no local Service or --service-file",
-		"review-anchor":            "--review; pairroom relay review --id <published-id>",
+		"review-anchor":            "pairroom relay send/exchange --review; pairroom relay review --id <published-id>",
 		"review-checkout":          "--review-repo <task-checkout> for another checkout",
 		"evidence-not-approval":    "observations are not atomic or approval",
 		"independent-review":       "Review independently; pin base/head SHAs+dirty hash",
