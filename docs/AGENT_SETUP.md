@@ -124,7 +124,7 @@ Use Management for this path; if the Agent has no authorized UI access, give the
 2. Register the repository's absolute path as a **Project**.
 3. Change the default Native selection to **Embedded** when creating the Room. For each Agent choose Runtime, supported optional Provider, model and effort fields; empty fields inherit native configuration. Gemini uses native Provider settings and does not support effort overrides.
 4. Both participants default to **YOLO**. For the first test, select read-only native permissions explicitly.
-5. Send the first task from [Getting started](GETTING_STARTED.md#first-real-room).
+5. Send the first task from [Getting started](GETTING_STARTED.md#first-embedded-room).
 
 **Settings → Diagnostics** in Management repeats these checks, offers the live check behind a confirmation, and downloads a safe report for support requests.
 
