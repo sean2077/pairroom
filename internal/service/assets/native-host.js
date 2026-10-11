@@ -9,7 +9,7 @@
   const readControllers = new Set();
   const currentPage = epoch => pageActive && epoch === pageEpoch;
 
-  let bindingsKey = '', auditKey = '', attentionKey = '', activityTimer = null, messagesRendered = false;
+  let bindingsKey = '', joinKey = '', auditKey = '', attentionKey = '', activityTimer = null, messagesRendered = false;
   let outboxRoom = '', outboxBroken = false, pendingCursor = '', pendingNext = '', pendingKey = '', pendingRequest = 0;
   let historyNext = '', historyFilter = '', historyRequest = 0;
   const outbox = window.PairRoomNativeOutbox;
@@ -112,9 +112,12 @@
   function translations() {
     window.PairRoomI18n.apply(document);
     renderConnection(connectionState);
-    $('message-text').placeholder=tr('placeholder'); bindingsKey='';auditKey='';attentionKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
+    $('message-text').placeholder=tr('placeholder'); bindingsKey='';joinKey='';auditKey='';attentionKey='';pendingKey='';messageNodes.forEach(v=>{v.key='';});
     if (snapshot) { render(snapshot); renderOutbox(); }
   }
+  // One rule decides which slots this machine owns: a LAN guest slot joins by
+  // invitation, so it must never be offered a local bind or command.
+  const remoteSlot = (value, slot, binding) => Boolean(binding.remote_key) || (value.room.sharing === 'lan' && value.room.owner_slot !== slot);
   function renderBindings(value) {
     const key=JSON.stringify([value.relay.bindings,value.room.agents,value.identities,language()]);if(key===bindingsKey)return;bindingsKey=key;
     // Activity refreshes must not collapse a binding's open command/config detail.
@@ -123,7 +126,7 @@
     const chips = [];
     const nodes=['slot1','slot2'].map((slot,index)=>{
       const b=value.relay.bindings[slot]||{};const selection=value.room.agents[slot]||{};
-      const remote = Boolean(b.remote_key) || (value.room.sharing === 'lan' && value.room.owner_slot !== slot);
+      const remote = remoteSlot(value, slot, b);
       const state = selection.awaiting_peer ? window.PairRoomI18n.t('room.lan.awaitingPeer') : remote && b.active ? window.PairRoomI18n.t('room.lan.member') : tr(!b.active?'unbound':b.session_id?'bound':'pending');
       const chip = element('button', undefined, `participant-chip ${slot}`);
       chip.type = 'button'; chip.dataset.participant = slot; chip.dataset.nativeFocus = `${slot}-chip`;
@@ -177,6 +180,87 @@
     for(const option of $('target').options) option.textContent=handle(option.value);
     if(focused)[...document.querySelectorAll('[data-native-focus]')].find(node=>node.dataset.nativeFocus===focused)?.focus({preventScroll:true});
   }
+  // The Service projects the exact bind command for this machine, so the page
+  // never assembles one: only the Service knows whether its data root needs
+  // --service-file. A slot that still lacks a confirmed session keeps that
+  // command as its retry, and a LAN guest slot is never offered a local bind —
+  // it joins through its invitation instead.
+  function joinSlots(value) {
+    return ['slot1', 'slot2'].map((slot, index) => {
+      const b = value.relay.bindings[slot] || {}, selection = value.room.agents[slot] || {};
+      const remote = remoteSlot(value, slot, b);
+      return {slot, index, b, selection, remote, bound: Boolean(b.active && b.session_id)};
+    });
+  }
+  function selectCommandText(code) {
+    // Clipboard APIs are unavailable or refused: select the command so the human
+    // can copy it by hand instead of losing the instruction.
+    const range = document.createRange(); range.selectNodeContents(code);
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    status(tr('joinManual'), true);
+  }
+  async function copyJoinCommand(button, code, command) {
+    button.disabled = true;
+    try {
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try { await navigator.clipboard.writeText(command); copied = true; } catch (_) { /* fall back below */ }
+      }
+      if (!copied) {
+        const source = document.createElement('textarea');
+        source.value = command; source.setAttribute('readonly', ''); source.className = 'sr-only';
+        document.body.append(source); source.select();
+        copied = document.execCommand('copy'); source.remove();
+      }
+      if (copied) status(tr('joinCopied')); else selectCommandText(code);
+    } finally { button.disabled = false; }
+  }
+  function renderJoin(value) {
+    // Visibility is derived from durable binding state, never from a dismissal:
+    // a replaced binding must bring the guidance back on the next refresh.
+    const key = JSON.stringify([value.join, value.relay.bindings, value.room.agents, value.room.sharing, value.room.owner_slot, language()]);
+    if (key === joinKey) return;
+    joinKey = key;
+    const focused = document.activeElement?.dataset.joinFocus;
+    const rows = []; let open = false;
+    for (const {slot, index, b, selection, remote, bound} of joinSlots(value)) {
+      if (!remote && !bound) open = true;
+      const row = element('li', undefined, `join-slot ${slot}`);
+      const meta = element('div', undefined, 'join-slot-meta');
+      meta.append(element('span', String(index + 1), 'participant-avatar'), element('strong', window.PairRoomI18n.t(`room.native.agent${index + 1}`)));
+      if (!selection.awaiting_peer) {
+        const mention = handle(slot);
+        if (mention && mention !== slot) meta.append(element('span', mention, 'join-handle'));
+        const runtime = selection.runtime || window.PairRoomI18n.t('room.nativeDefault');
+        meta.append(element('span', `${window.PairRoomI18n.t('agent.runtime')} ${runtime}`, 'muted'));
+      }
+      const state = remote
+        ? window.PairRoomI18n.t(selection.awaiting_peer ? 'room.lan.awaitingPeer' : 'room.lan.member')
+        : tr(bound ? 'bound' : b.active ? 'pending' : 'unbound');
+      meta.append(element('span', state, `join-state ${remote ? 'remote' : bound ? 'bound' : b.active ? 'pending' : 'unbound'}`));
+      row.append(meta);
+      if (!remote && !bound) {
+        const command = value.join?.[slot];
+        if (command) {
+          const pre = element('pre'), code = element('code', command);
+          pre.append(code);
+          const copy = element('button', tr('joinCopy'), 'join-copy');
+          copy.type = 'button'; copy.dataset.joinFocus = `${slot}-copy`;
+          copy.addEventListener('click', () => { void copyJoinCommand(copy, code, command); });
+          const line = element('div', undefined, 'join-command');
+          line.append(pre, copy);
+          row.append(line);
+        } else {
+          row.append(element('p', tr('joinUnavailable'), 'muted'));
+        }
+      }
+      rows.push(row);
+    }
+    $('join-slots').replaceChildren(...rows);
+    $('join-guide').hidden = !open;
+    if (focused) [...document.querySelectorAll('[data-join-focus]')].find(node=>node.dataset.joinFocus===focused)?.focus({preventScroll:true});
+  }
+  $('join-setup').addEventListener('click', () => showPanel('participants', true));
   async function confirmAction(title,body){$('confirm-retry').textContent=title==='retryTitle'?tr('retry'):tr('forgetDraft');$('confirm-title').textContent=tr(title);$('confirm-body').textContent=tr(body);const dialog=$('confirm-dialog');dialog.returnValue='cancel';return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();});}
   const confirmRetry=()=>confirmAction('retryTitle','retryBody');
   const MAX_RENDERED_MESSAGES=300;
@@ -366,7 +450,7 @@
   function renderAudit(value){const key=JSON.stringify([value.relay.audit,language()]);if(key===auditKey)return;auditKey=key;
     $('audit').replaceChildren(...(value.relay.audit||[]).slice(-80).reverse().map(a=>{const li=element('li');li.append(element('strong',auditNames[a.kind]?tr(auditNames[a.kind]):a.kind),element('time',time(a.at)));const detail=auditDetail(a);if(detail)li.append(element('p',detail));return li;}));
   }
-  function render(value, unchangedTail = false){snapshot=value;$('lan-access').hidden=value.room.sharing!=='lan'||window.parent===window;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderBindings(value);if(!unchangedTail)renderMessages(value);renderDelivery(value);if(!unchangedTail)renderAudit(value);}
+  function render(value, unchangedTail = false){snapshot=value;$('lan-access').hidden=value.room.sharing!=='lan'||window.parent===window;restoreOutbox();renderAttention(value);refreshPending().catch(e=>status(e.message,true));$('room-name').textContent=value.room.name;document.title=`${value.room.name} · PairRoom Native`;renderJoin(value);renderBindings(value);if(!unchangedTail)renderMessages(value);renderDelivery(value);if(!unchangedTail)renderAudit(value);}
   function renderConnection(value) {
     connectionState = value;
     $('connection').textContent = tr(value);

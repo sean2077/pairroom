@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -123,15 +124,40 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 csrf = (await read_json(context, origin+'/api/v1/session'))['csrf_token']
                 headers = {'X-PairRoom-CSRF': csrf}
                 endpoint = root/'state'/'relay-endpoint.json'
+                print('Native browser: unbound Room shows the join guide, and its own command binds', flush=True)
+                # The guide is the human's entry point: its command must name this
+                # Service (custom data root here) and actually bind when pasted.
+                join_guide = frame.locator('#join-guide')
+                await expect(join_guide).to_be_visible()
+                await expect(join_guide.locator('.join-slot')).to_have_count(2)
+                await expect(join_guide.locator('.join-slot.slot1 .join-state')).to_have_text('Unbound')
+                command = await frame.locator('.join-slot.slot1 pre code').text_content()
+                parts = shlex.split(command)
+                assert parts[0] == 'pairroom' and parts[1:3] == ['relay', 'bind'], parts
+                assert parts[parts.index('--room')+1] == room_id and parts[parts.index('--slot')+1] == '1', parts
+                assert parts[parts.index('--service-file')+1] == str(endpoint), parts
+                await frame.locator('#language-button').click()
+                await expect(frame.locator('#join-title')).to_have_text('加入此房间')
+                await frame.locator('#language-button').click()
+                await expect(frame.locator('#join-title')).to_have_text('Join this Room')
                 print('Native browser: approved-hook setup fixture and bind-time environment association through real CLI', flush=True)
                 for slot, runtime, svar in (('slot1', 'claude', 'CLAUDE_CODE_SESSION_ID'), ('slot2', 'codex', 'CODEX_SESSION_ID')):
                     await asyncio.to_thread(cli, ['install','--runtime',runtime])
+                raw = await asyncio.to_thread(cli, parts[2:], None, ('CLAUDE_CODE_SESSION_ID', 'synthetic-slot1'))
+                bound = json.loads(raw)
+                # bind associates immediately from the harness environment; no
+                # nonce echo round-trip is required or returned.
+                assert bound['binding']['session_id'] == 'synthetic-slot1', bound['binding']
+                assert 'bind_nonce' not in bound, bound
+                await expect(join_guide.locator('.join-slot.slot1 .join-state')).to_have_text('Associated')
+                await expect(join_guide.locator('.join-slot.slot1 pre')).to_have_count(0)
+                for slot, svar in (('slot2', 'CODEX_SESSION_ID'),):
                     raw = await asyncio.to_thread(cli, ['bind','--room',room_id,'--slot',slot,'--service-file',str(endpoint)], None, (svar, 'synthetic-'+slot))
                     bound = json.loads(raw)
-                    # bind associates immediately from the harness environment; no
-                    # nonce echo round-trip is required or returned.
                     assert bound['binding']['session_id'] == 'synthetic-'+slot, bound['binding']
                     assert 'bind_nonce' not in bound, bound
+                await expect(join_guide).to_be_hidden()
+                for slot in ('slot1','slot2'):
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park', headers=headers, data={'enabled':False})
                     assert response.status == 200
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:all(b.get('session_id') for b in s['relay']['bindings'].values()))

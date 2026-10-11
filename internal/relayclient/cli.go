@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -738,13 +737,7 @@ func writeJSON(out io.Writer, v any) error {
 	}
 	return err
 }
-func defaultEndpoint() (string, error) {
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, "pairroom", relay.EndpointFile), nil
-}
+func defaultEndpoint() (string, error) { return relay.DefaultEndpointPath() }
 func management(ctx context.Context, endpoint relay.Endpoint, method, path string, payload, result any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -793,13 +786,9 @@ func management(ctx context.Context, endpoint relay.Endpoint, method, path strin
 }
 
 // Commands are pasted into the native PowerShell (Windows) or POSIX shell.
-// Quote paths as literals so spaces, quotes and shell expansion are preserved.
-func quoteShellPath(value string) string {
-	if runtime.GOOS == "windows" {
-		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
+// Quoting and the default endpoint stay in the shared relay package, so the CLI
+// and the Room join guide print the same paste-safe text.
+func quoteShellPath(value string) string { return relay.QuoteShellPath(value) }
 
 // bindCommand renders a literal, paste-safe bind command. An unresolved slot is
 // omitted rather than rendered as a guessed Agent number; the accompanying
@@ -812,15 +801,10 @@ func bindCommand(root, endpoint, room string, slot model.ActorID) string {
 	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
 }
 
+// localBindCommand is the same-machine join command; relay owns its text so the
+// Room join guide cannot drift from CLI stdout.
 func localBindCommand(endpoint, room string, slot model.ActorID) string {
-	command := fmt.Sprintf("pairroom relay bind --room %s --slot %d", room, slotNumber(slot))
-	// A fresh peer cannot infer a custom Service root from the creator's binding.
-	// Omit only the default endpoint, never a selector needed to find this Room.
-	standard, err := defaultEndpoint()
-	if err != nil || filepath.Clean(endpoint) != filepath.Clean(standard) {
-		command += " --service-file " + quoteShellPath(endpoint)
-	}
-	return command
+	return relay.LocalBindCommand(endpoint, room, slot)
 }
 
 func createRetryCommand(root, endpoint string, o options) string {

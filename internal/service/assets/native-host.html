@@ -21,6 +21,13 @@
 </aside>
 <section class="conversation panel" aria-labelledby="messages-title"><header class="section-header"><div><h2 id="messages-title" data-i18n="room.native.messages" title="Only published messages, not full native transcripts." data-i18n-title="room.native.messagesHelp">Relay messages</h2></div><div class="toolbar-actions"><span id="message-count" class="count">0</span><button id="scroll-bottom" type="button" data-i18n="ui.jumpToLatest">Jump to latest</button></div></header>
 <div id="participant-summary" class="participant-summary" aria-label="Native session bindings" data-i18n-aria-label="room.native.bindings"></div>
+<!-- Persistent while a slot of this machine is unbound: the exact command has to
+     stay reachable without opening a side panel. -->
+<section id="join-guide" class="join-guide" hidden aria-labelledby="join-title">
+  <div class="join-head"><h2 id="join-title" data-i18n="room.native.join.title">Join this Room</h2><button type="button" id="join-setup" data-i18n="room.native.join.setup">Setup guide</button></div>
+  <p class="muted" data-i18n="room.native.join.help">Install and approve the project hooks first, then run the command inside the matching Agent session so its tool call supplies the official session identity.</p>
+  <ul id="join-slots" class="join-slots"></ul>
+</section>
 <section id="attention" class="attention-bar" aria-live="polite"></section>
 <div id="messages" class="messages" role="log" aria-labelledby="messages-title" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
 <div class="composer-wrap"><div id="status" class="status" role="status" aria-live="polite"></div>

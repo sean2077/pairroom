@@ -1,6 +1,6 @@
 {
   "name": "pairroom",
-  "description": "Native-session relay skills for PairRoom.",
+  "description": "Native-session relay skills for PairRoom: create, join by Room ID, or resume a Room.",
   "skills": [
     "./skills/pairroom-relay"
   ]

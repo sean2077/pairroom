@@ -84,13 +84,9 @@ func (r *Registry) setEventLogOwnerCheck(check func(roomID string) bool) {
 	r.eventLogOwned = check
 }
 
-func DefaultRoot() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locate user config directory: %w", err)
-	}
-	return filepath.Join(base, "pairroom"), nil
-}
+// DefaultRoot is the user-scoped Service data root, shared with the CLI's
+// default endpoint lookup so a locally hosted Service stays discoverable.
+func DefaultRoot() (string, error) { return relay.DefaultDir() }
 
 func OpenRegistry(ctx context.Context, cfg RegistryConfig) (*Registry, error) {
 	root, err := ResolveRoot(cfg.Root)

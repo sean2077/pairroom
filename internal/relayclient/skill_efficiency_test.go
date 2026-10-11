@@ -49,8 +49,12 @@ func TestNativeSkillCostAndCompleteOutput(t *testing.T) {
 	// (findings need location/evidence/impact; pin base/head SHAs and the dirty
 	// hash; retest fixes at the new revision and report unrun tests) costs about
 	// 220 bytes, so the compact operating rules are held to 5250 rather than
-	// deleting another safety clause.
-	if len(skillContent) > 5250 {
-		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5250", len(skillContent))
+	// deleting another safety clause. Joining a Room the human names (exact Room
+	// ID, slot inference, no guess or implicit create/replace, a Room ID is not
+	// an invitation, and an explicit join intent outranking generic preflight
+	// create guidance) costs about 390 more, so the cap carries that guidance
+	// instead of dropping a reachability, LAN, unknown or review clause for it.
+	if len(skillContent) > 5650 {
+		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5650", len(skillContent))
 	}
 }

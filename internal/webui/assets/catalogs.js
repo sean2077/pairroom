@@ -2431,7 +2431,14 @@ Object.assign(window.PairRoomLocales["en"].translation, {
   "room.native.theme": "Theme",
   "room.native.bindings": "Native session bindings",
   "room.native.agent1": "Agent 1",
-  "room.native.agent2": "Agent 2"
+  "room.native.agent2": "Agent 2",
+  "room.native.join.title": "Join this Room",
+  "room.native.join.setup": "Setup guide",
+  "room.native.join.help": "Install and approve the project hooks first, then run the command inside the matching Agent session so its tool call supplies the official session identity. The app never starts or binds that session for you.",
+  "room.native.join.copy": "Copy command",
+  "room.native.join.copied": "Command copied",
+  "room.native.join.manual": "The browser could not copy. The command is selected; copy it manually.",
+  "room.native.join.unavailable": "This Service cannot name its own endpoint here. Open the setup guide and bind from inside the Agent session instead."
 });
 
 Object.assign(window.PairRoomLocales["zh-CN"].translation, {
@@ -2503,7 +2510,14 @@ Object.assign(window.PairRoomLocales["zh-CN"].translation, {
   "room.native.theme": "主题",
   "room.native.bindings": "原生会话绑定",
   "room.native.agent1": "Agent 1",
-  "room.native.agent2": "Agent 2"
+  "room.native.agent2": "Agent 2",
+  "room.native.join.title": "加入此房间",
+  "room.native.join.setup": "安装指南",
+  "room.native.join.help": "先安装并批准项目 hook，再在对应 Agent 会话内执行命令：由该会话的工具调用提供官方 session 身份。应用不会替你启动或绑定该会话。",
+  "room.native.join.copy": "复制命令",
+  "room.native.join.copied": "已复制命令",
+  "room.native.join.manual": "浏览器无法复制，命令已选中，请手动复制。",
+  "room.native.join.unavailable": "该 Service 无法在此给出自身的 endpoint 定位命令。请打开安装指南，改在对应的 Agent 会话内执行 bind。"
 });
 
 Object.assign(window.PairRoomLocales["en"].translation, {

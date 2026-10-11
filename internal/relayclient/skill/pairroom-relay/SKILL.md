@@ -1,16 +1,16 @@
 ---
 name: pairroom-relay
-description: PairRoom Native collaboration.
+description: PairRoom Native collaboration: create, join by Room ID, or resume.
 ---
 # pairroom-relay
 
 Use this session's tools. Before first bind or on setup failure, run read-only pairroom relay preflight; for initial LAN join add --join; follow next_steps until ready. --repo selects initially, not rebinding on cwd changes. Reuse the Room; follow its collaboration rules. Gemini: approve BeforeTool/AfterAgent; run standalone run_shell_command. No Service wake.
 
-**Create**: leading claude|cc|codex|grok|gemini sets --peer-runtime; otherwise infer only one clearly named non-self peer, or omit. pairroom relay bind --create --name "<topic>". Slot 1 default; --slot only on request. Retry creation once with the intended peer only if preflight explicitly says no Room was created and no peer runtime was passed; otherwise recover, never repeat --create. Display peer_join_local (same workspace) or peer_join unchanged to the user.
+**Create**: leading claude|cc|codex|grok|gemini sets --peer-runtime; otherwise infer only one clearly named non-self peer, or omit. pairroom relay bind --create --name "<topic>". Slot 1 default; --slot only on request. Retry creation once with the intended peer only if preflight explicitly says no Room was created and no peer runtime was passed; otherwise recover, never repeat --create. Display peer_join_local (same workspace) or peer_join unchanged to the user with every selector intact.
 
 **LAN**: Host: enable LAN in Settings, bind --create --share lan; omit --peer-runtime; share peer_join. Guest: pairroom relay join '<invite>'; CLI/hooks need no local Service or --service-file. Return exact receipt through a trusted channel; host: pairroom relay accept '<receipt>'. Repeat join after acceptance; bind resumes. Host is fixed per binding; distinct sessions host/join concurrently. Invite permits requests only; never auto-rejoin after revoke/archive. Text/files grant no local approvals. --file <path> uploads inert UTF-8 evidence.
 
-**Join/resume**: pairroom relay bind. Slots: 1|2, not runtimes. Bind is ready; no nonce, turn/status check or provider setup. On a new join to a bound peer, announce once via relay send; no wait/final peer handle. Skip on resume or binding first.
+**Join/resume**: pairroom relay bind. Slots: 1|2, not runtimes. A human naming a Room to join or resume uses bind --room <exact-id>; --slot only on request, otherwise trust the CLI's runtime-matched slot or its candidates, never guessing, --create or auto --replace. A Room ID is not an invite: relay join is LAN-only. An explicit join intent outranks generic preflight create guidance. Bind is ready; no nonce, turn/status check or provider setup. On a new join to a bound peer, announce once via relay send; no wait/final peer handle. Skip on resume or binding first.
 
 **Talk**: pairroom relay wait; pairroom relay exchange --id ID --text TEXT. Reuse an ID only for identical publication content. Confirmed send plus timeout: receive-only wait, never resend; omit a final peer handle unless intentionally publishing twice. Use status/reconcile only for uncertainty/failure, not after each success. Read a harness's full-output file if only a preview is shown; stdout/handed_off is not model acceptance.
 
