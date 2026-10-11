@@ -145,7 +145,13 @@ Provider/model and permission profile, with redacted outcomes and limitations:
    an uncertain delivery followed by inspection before any explicit Retry.
    `handed_off` proves stdout delivery only; confirm receipt in the actual native
    session separately. PairRoom does not start/stop those user-owned processes.
-3. In both modes: check human approval/input boundaries, duplicate-click/late
+3. Native LAN: use one hosting Service and a guest with only the CLI and approved
+   hooks. Exercise request/receipt approval, both message directions, explicit
+   text evidence, host restart, leave/revocation and deliberate local detach.
+   Confirm different sessions can retain local and remote bindings concurrently.
+   Test optional guest-observer wake separately from foreground/hook collection;
+   a host reservation is not evidence that the remote model received a nudge.
+4. In both modes: check human approval/input boundaries, duplicate-click/late
    response behavior, and interrupted recovery for the exercised combination.
    Distinguish skipped, failed, and passed cases; publish no credentials or private
    transcripts. Synthetic fixtures, the no-auth probe, and authenticated runs are
@@ -216,11 +222,11 @@ make docs-check
 
 The checker covers repository Markdown paths/images (including nested and newly added non-ignored files), the curated public-guide set, and source-derived CLI/API/config inventories. It does **not** verify external links, every heading fragment, example execution, or semantic accuracy. Review changed fragment links and commands separately; a passing inventory cannot detect a false statement such as applying Embedded Turn ownership to Native.
 
-Keep one owner for each detailed contract and link to it from overview/recipes. Current technical documents are English; root English/Chinese READMEs must remain equivalent. Avoid release-number churn in those entry points. Scope process ownership, permissions, scheduling, identity, and recovery by host mode. Distinguish a desktop-owned embedded Service from an Embedded Room.
+Keep one owner for each detailed contract and link to it from overview/recipes. Current technical documents are English; root English/Chinese READMEs must remain equivalent. Avoid release-number churn in those entry points. Scope process ownership, permissions, scheduling, identity, and recovery by host mode. Distinguish a desktop-owned embedded Service from an Embedded Room. For Native, also distinguish the local Room owner, LAN host, and direct LAN guest: guests need no local Service, and local and joined Rooms may coexist. [Native LAN collaboration](docs/LAN_NATIVE.md) owns that setup and recovery path.
 
 Use source/`--help` for flags, production registrations for routes, strict parsers/model structs for configuration, and Store/apply code for schemas. Preserve generated inventory markers and entries when only prose changes. Breaking changes update [Changelog](CHANGELOG.md) and [Upgrading](docs/UPGRADING.md); documentation corrections need neither fictional migrations nor release bumps.
 
-Preserve published release/validation evidence as dated history. Completed plans must not keep instructing Agents to start implementation or purge data; retain rationale and a historical source link, then point to current contracts. New plans and one-off audits belong in Issues/PRs unless they add a durable design decision. A small flat status/date is sufficient where history and current design could be confused; do not introduce a documentation workflow framework.
+Preserve published release/validation evidence as dated history. Completed plans must not keep instructing Agents to start implementation or purge data; retain rationale and a historical source link, then point to current contracts. Include every retained design record in the [design index](docs/design/README.md), with superseded evidence clearly identified. New plans and one-off audits belong in Issues/PRs unless they add a durable design decision. A small flat status/date is sufficient where history and current design could be confused; do not introduce a documentation workflow framework.
 
 Why/Alternatives explain fit, not new product behavior. Keep their source revisions, review dates, and distinction between observations, inference, and measurements. Recheck primary sources before changing external claims; a repository snapshot or issue is not release certification.
 

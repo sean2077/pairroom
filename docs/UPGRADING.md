@@ -14,7 +14,9 @@ The host requests only the fixed public GitHub latest-release endpoint, without 
 
 ## Supported Room formats
 
-The 5.0.0 development cutover retired old formats without migration. Current readers support existing local **Store schema 12/provisioning 5** and new **Store schema 13/provisioning 6**, with explicit immutable `host_mode`. Registry checkpoint 3 remains readable and new checkpoints use 4. Local relay state 2 and Agent pair profile storage 2 retain their existing contracts; direct LAN client bindings use relay state 3 with a private per-user client store separate from Service roots. Existing current local Rooms and bindings do not need to be recreated or rewritten. LAN facts and awaiting-peer selections require the new 13/6 Room format; old Room logs and metadata are not rewritten. A retired Service root fails as a whole before recovery/replay/repair/rewrite. Start a new root and recreate registrations, Rooms, and profiles; moving only old Room directories cannot repair an incompatible root checkpoint.
+Current readers support existing local **Store schema 12/provisioning 5** and new **Store schema 13/provisioning 6**, with explicit immutable `host_mode`. Registry checkpoint 3 remains readable and new checkpoints use 4. Local relay state 2 and Agent pair profile storage 2 retain their existing contracts; direct LAN client bindings use relay state 3 with a private per-user client store separate from Service roots. **Existing current local Rooms and bindings do not need to be recreated or rewritten.** LAN facts and awaiting-peer selections require the new 13/6 Room format. [Storage](STORAGE.md#event-log) owns the writer/read-compatibility table and the standalone `serve` exception.
+
+The 5.0.0 development cutover retired older formats without migration. A retired Service root fails as a whole before recovery/replay/repair/rewrite. For such a root, start a new root and recreate registrations, Rooms and profiles; moving only old Room directories cannot repair an incompatible root checkpoint. This retirement rule does not require recreation of supported 12/5 local Rooms during a LAN-capable upgrade.
 
 A newer checkpoint, Agent pair profile, or Room Store/provisioning schema also rejects the whole root before startup cleanup, including staged and quarantined Rooms. Provisioning compatibility is checked from the two initial creation records; incomplete staging can still be cleaned after a crash. Use a matching or newer binary; do not downgrade format numbers to make an older reader accept the data.
 
@@ -28,7 +30,7 @@ Startup preserves known Room identities: an absent active Room directory, or a p
 
 ## Before upgrading
 
-Record PairRoom and selected native CLI versions, read release notes, and stop/drain the PairRoom owner. For Native, separately pause work in the original harnesses: archive/quit cannot stop them. Verify workspace side effects before replacing binaries.
+Record PairRoom and selected native CLI versions, read release notes, and stop/drain the PairRoom owner. For Native, separately pause work in the original harnesses and stop active CLI/hooks before copying their recovery state. Quit cannot stop user-owned harnesses, and archiving a LAN Room revokes its guest membership. Use Service shutdown when preserving that membership. Verify workspace side effects before replacing binaries.
 
 Preserve the entire stopped Service root, including profiles/navigation preferences, and any external Room directories. For direct LAN participants, also preserve both per-user stores (`pairroom/lan-clients` and `pairroom/native-identities`) and matching workspace binding state while their CLI/hooks and optional observer are stopped; these are outside the Service-root backup. Verify Room archives with the matching binary, but do not mistake them for complete Service, repository, vendor-session, or Native workspace-credential backups. Keep the matching configuration and binary alongside the backup. See [Operations](OPERATIONS.md#backup).
 
@@ -69,15 +71,20 @@ Only an incomplete final JSONL record in a supported store is repairable. Never 
 
 ## Native rollout and rollback
 
-Native is the default and recommended Room host mode; Embedded remains available when PairRoom should own the adapter processes. Authenticated multi-round acceptance for the actual Claude/Codex/Grok versions and settings is separate from synthetic hooks, browser fixtures, and dated working-session reports. Consult the [design record](design/native-host-mode.md) for rationale, not a promise that current vendor acceptance has run.
+Native is the default and recommended Room host mode; Embedded remains available when PairRoom should own the adapter processes. Authenticated multi-round acceptance for the actual Claude/Codex/Grok/Gemini versions and settings is separate from synthetic hooks, browser fixtures, and dated working-session reports. Consult the [design record](design/native-host-mode.md) for rationale, not a promise that current vendor acceptance has run.
 
 **Routine compatible upgrades do not require unbinding or replacing valid sessions.** Update CLI/Service together and refresh/review installed hooks/skill when their definitions change. Use idempotent bind to restore discovery without rotating generation.
 
 For a direct LAN participant, update the CLI to match the Room's hosting Service;
 there is no required guest Service to upgrade. Existing local relay state 2 stays
 local, and direct state 3 retains its original host identity. Use
-`preflight --join` before a first invitation, or ordinary `preflight` from a
-bound remote session. Changing the default local Service or opening Desktop
+`pairroom relay preflight --join` before a first invitation, or ordinary
+`pairroom relay preflight` from a bound remote session for setup/reachability.
+For version evidence, run `pairroom version` locally and inspect
+`pairroom relay doctor`'s host `service_version`/`protocol`, or ask the host to
+confirm its running build. Direct LAN preflight does not report `build_match`,
+and the local-transport automatic version hint is not a LAN build check.
+Changing the default local Service or opening Desktop
 does not move that binding. For a replacement native session in the same
 remote Room, use a fresh invitation with explicit `join --replace` in the
 original workspace after the host confirms the old membership ended. Fresh

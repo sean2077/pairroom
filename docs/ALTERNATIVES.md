@@ -10,7 +10,7 @@ This comparison asks **which coordination problem a tool solves**, not which pro
 
 Product names link to their upstream projects. None of them is a PairRoom prerequisite or integration.
 
-This comparison preserves its dated baselines, including the Native experimental label at that time. Current PairRoom uses Native as its default and recommended mode; see [Core concepts](CONCEPTS.md) for current behavior.
+This comparison preserves its dated baselines, including the Native experimental label and local, single-user scope at that time. Current PairRoom uses Native as its default and recommended mode and supports [one-host LAN collaboration](LAN_NATIVE.md). Use [Core concepts](CONCEPTS.md) for current PairRoom behavior; the comparison tables below have not been re-benchmarked or expanded to compare today's LAN capabilities.
 
 ## Research scope
 

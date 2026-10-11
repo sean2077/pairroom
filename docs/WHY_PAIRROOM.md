@@ -1,12 +1,12 @@
 ---
 status: active
 kind: explanation
-reviewed: 2026-09-29
+reviewed: 2026-10-11
 ---
 
 # Why PairRoom?
 
-**Two independent coding agents, one problem. Keep the harness; add a second opinion only when it earns its cost.** PairRoom is for repeated cross-review between two supported native sessions, not for replacing their execution engines with another agent framework.
+**Two independent coding agents, one problem. Keep the harness; add a second opinion when it earns its cost.** PairRoom supports repeated cross-review between two native sessions, on one machine or across a shared LAN Room.
 
 A useful outcome can be just a reviewed plan. Once assumptions and material objections are resolved, the user can let either native agent execute with its own tools, skills, permissions, and subagents. PairRoom need not manage every implementation step. Review and implementation can also stay in the Room when that is useful; neither path is a mandatory pipeline.
 
@@ -14,9 +14,9 @@ This is a selection guide, not evidence that two agents are always more accurate
 
 ## The problem it addresses
 
-The recurring work is between two agents: carrying a proposal to the other session, returning a concrete objection, checking the revision against repository evidence, and knowing when another opinion is no longer useful. The point is not to maximize agent count or divide every task into parallel jobs. It is to improve one decision without making the human a message courier.
+The recurring work is between two agents: carrying a proposal to the other session, returning a concrete objection, checking the revision against repository evidence, and knowing when another opinion is no longer useful. PairRoom handles the repeated message transport so the human can focus on decisions and results.
 
-Two is a deliberate limit. Two participants can cover each other's gaps over the shortest communication path; more agents add coordination and token overhead that this job rarely repays. Each participant is an official harness ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), or [Grok Build](https://docs.x.ai/build/overview)) with its own tools and subagents; PairRoom adds no model/tool loop of its own.
+Two is a deliberate product limit: one peer relationship per Room, with task decomposition left to each harness. Each participant uses [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview), or [Gemini CLI](https://github.com/google-gemini/gemini-cli), retaining its own tools and subagents. PairRoom adds no model/tool loop of its own.
 
 Automatic relay publishes an explicitly addressed complete response at the native Turn boundary, keeps the sessions' identities, and records delivery state. It does not make agents agree, prove a plan correct, or replace human product decisions. An independent review must add evidence, a counterexample, or a meaningful correction; agreement alone is not verification.
 
@@ -24,21 +24,27 @@ Automatic relay publishes an explicitly addressed complete response at the nativ
 
 Keeping a native harness and keeping its original desktop/terminal UI are different promises. Choose the Room's immutable host mode accordingly:
 
-| Need | Embedded Room | Native Room (default and recommended) |
+| Need | Native Room (default and recommended) | Embedded Room (optional) |
 |---|---|---|
-| Where you interact | PairRoom's conversation and controls; adapters drive the supported native harness interfaces | Your own Claude Code / Codex / Grok Build sessions, including the intended Codex Desktop workflow; approved hooks bind them to the relay |
-| Who owns execution | PairRoom schedules the two participants' Turns; each harness still runs its own tools and subagents | The original harness owns its process, tools, permissions, input and interruption; PairRoom does not launch or interrupt it |
-| Provider / model / effort | Each slot independently selects supported overrides or inherits native configuration | Configured in each original harness; Room selection fields are metadata, not applied overrides |
-| Delivery and control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control |
-| Important limit | Native tool execution does not expose every interactive vendor feature or preserve an independent Desktop UI | Automatic continuation is bounded by park; authenticated multi-round vendor E2E remains a release gate |
+| Where you interact | Your own Claude Code / Codex CLI or Desktop / Grok Build / Gemini CLI sessions, connected through approved hooks | PairRoom's conversation and controls; adapters drive the supported native harness interfaces |
+| Who owns execution | The original harness owns its process, tools, permissions, input and interruption | PairRoom schedules the two participants' Turns; each harness still runs its own tools and subagents |
+| Provider / model / effort | Configured in each original harness; Room selection fields are display-only | Each slot independently selects supported overrides or inherits native configuration |
+| Delivery and control | Durable per-slot FIFO and binding audit; advisory Turn ownership, no process lock or Interrupt control | Single Room Turn owner, FIFO, supported steering, queue, cancel, interrupt and explicit retry |
+| Important limit | Response-hook collection is bounded; later delivery needs a collector, a supported wake capability, or human input | Adapter support differs by Runtime; Gemini cannot resume an accepted session after its process exits |
 
 Native is the default and recommended mode for daily work: you keep interacting in your usual terminal or client, each side's work stays visible there, and you can stop or correct it directly. Embedded is an optional path for PairRoom-owned adapter controls, Mock demonstrations, and independent per-slot Provider selection. In both modes the exchange between the Agents is visible in the Room.
 
-A requirement to keep **Codex Desktop** is a reason to evaluate Native, not to claim Embedded is a transparent attachment to that application. Native supports Claude Code, Codex and Grok Build. Grok uses bounded Hook readiness hints and foreground collection to avoid clipped inputs; clipped Stop replies require explicit full-text publication. See [Grok Native](CLI_REFERENCE.md#grok-build-native). Hook parking and continuation have Runtime-specific bounds; beyond them, messages remain queued for a supported collector, an eligible wake, or human intervention. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Native continuation limits](NATIVE_RELAY.md#long-unattended-runs-by-runtime), [Protocol](PROTOCOL.md#native-host-protocol-v8), and [Support](../SUPPORT.md).
+Native is the path for keeping **Codex Desktop** or another independent native UI. Hook parking and continuation have Runtime-specific bounds: Grok uses readiness hints and foreground collection to avoid clipped inputs; Gemini uses BeforeTool and AfterAgent hooks and has no Service wake. Pending messages wait for a supported receive opportunity. Neither `handed_off` nor synthetic hook tests prove model acceptance. See [Native continuation limits](NATIVE_RELAY.md#long-unattended-runs-by-runtime), [Gemini boundaries](NATIVE_RELAY.md#gemini-cli), and [Support](../SUPPORT.md).
+
+### Collaborate across two machines
+
+A shared Native Room can connect your Agent with one colleague's Agent. For example, one session can reproduce a failure and send the reproduction and selected logs; the other can investigate in its own workspace and return a patch or explanation. The machines may use different repositories, branches, paths, Runtimes and Providers. Share selected file contents through messages or explicit evidence uploads; a path reference alone does not make the other machine's files accessible.
+
+Only the Room's host needs a Service. The guest joins through CLI/hooks after the host accepts its exact receipt. Different native sessions on one machine can host local Rooms and join Rooms on other hosts concurrently, with each binding retaining its own destination. A local Service on the guest is optional for a dashboard and supported wake observation. This preserves each user's native configuration and local authority; the host can read shared content, and the selected models may receive it through their Providers. [LAN collaboration](LAN_NATIVE.md) owns the workflow and [Security](../SECURITY.md) defines the boundary.
 
 ### Independent configuration without a Provider manager
 
-PairRoom is not itself a Provider manager. Embedded selections can optionally reference supported [CC Switch](https://github.com/farion1231/cc-switch) Profiles without changing that external configuration manager's current Profile. CC Switch is not required when inheriting native configuration. References are read-only and revalidated; they do not freeze the external Profile or make unsupported authentication work. Save a usual pair as an [Agent pair profile](CONFIGURATION.md#agent-pair-profiles).
+Embedded selections can optionally reference supported [CC Switch](https://github.com/farion1231/cc-switch) Profiles without changing that external configuration manager's current Profile. CC Switch is not required when inheriting native configuration. References are read-only and revalidated; they do not freeze the external Profile or make unsupported authentication work. Gemini currently uses native Provider configuration and has no CC Switch or effort overrides. Save a usual local pair as an [Agent pair profile](CONFIGURATION.md#agent-pair-profiles).
 
 Native preserves the configuration chosen in each original session rather than injecting child-process overrides. Do not present Embedded Provider selection as a Native feature. PairRoom is not a credential store or a universal Provider marketplace. [Configuration](CONFIGURATION.md) owns the exact support boundary.
 
@@ -46,12 +52,7 @@ Native preserves the configuration chosen in each original session rather than i
 
 The default Lead/Executor responsibilities are flexible instructions, not mandatory ranks or phases. Both participants can be high-capability reviewers. A user may ask them to challenge a plan, stop at a decision, and only later assign execution to either one. A custom Room can express that preference without introducing another mode.
 
-```text
-One problem -> proposal <-> evidence-based objections and revisions
-            -> reviewed plan + remaining uncertainty -> user chooses execution
-```
-
-This is an example interaction, not a state machine. Relay requires the peer's exact displayed handle; `@user` without a peer handle returns the decision to the human, and no peer handle ends Agent relay. Do not mention the peer merely to acknowledge, agree, or ceremonially return a Turn.
+The pair can start with one proposal, exchange evidence-based objections and revisions, then return the reviewed plan and remaining uncertainty for the user to decide on execution. Relay requires the peer's exact displayed handle; `@user` without a peer handle returns the decision to the human, and no peer handle ends Agent relay. Mention the peer only when another response can improve the result.
 
 Codex and Claude Code already provide native delegation/subagent capabilities; Claude also documents agent teams. PairRoom's reason to exist is not to recreate those mechanisms. It connects the two top-level sessions the user chose, while leaving native decomposition, tool use and subagent decisions to the executing harness. If native delegation already supplies the required second opinion, use it directly. See the [native-harness comparison](ALTERNATIVES.md#native-harnesses-the-default-alternative-to-adding-infrastructure).
 
@@ -69,9 +70,9 @@ Assign one writer when sharing a task worktree. Embedded's single-Turn ownership
 
 ## The native conversation loop
 
-The Native-mode highlight is not “two agents can talk” but the shape of the loop: your addressed visible reply can be the transport. The approved Stop hook publishes the complete addressed reply into the Room's durable FIFO, mention handles route it, and no retelling, summary or acknowledgement turn is required on top. An unaddressed Stop reply remains private; explicit `send`/`exchange` follows its command target instead. The protocol's byte budgets still apply to what the receiving side injects. See [publication rules](NATIVE_RELAY.md#what-is-published).
+In Native, the addressed visible reply can be the transport. The approved response hook publishes the complete addressed reply into the Room's durable FIFO, mention handles route it, and no retelling, summary or acknowledgement turn is required on top. An unaddressed reply remains private; explicit `send`/`exchange` follows its command target instead. The protocol's byte budgets still apply to what the receiving side injects. See [publication rules](NATIVE_RELAY.md#what-is-published).
 
-Reachability across turn boundaries is layered: a bounded Stop-hook park collects immediate answers; outside it, a wake-enabled Room can use an available Claude inbox or Codex queue for a fixed body-free nudge. Foreground collection remains available, and a harness-owned background `relay wait` is useful only when the harness surfaces its completion to the model. Grok has no Service wake. PairRoom never starts or interrupts agent sessions, and queued messages survive restarts instead of being lost. [Native relay](NATIVE_RELAY.md#long-unattended-runs-by-runtime) owns the Runtime-specific limits, recovery, and [dated vendor observations](NATIVE_RELAY.md#verified-vendor-wake-surfaces).
+Reachability across turn boundaries is layered: a bounded response-hook park collects immediate answers; outside it, a wake-enabled Room can use an available Claude inbox or Codex queue for a fixed body-free nudge. Foreground collection remains available, and a harness-owned background `relay wait` is useful only when the harness surfaces its completion to the model. Grok and Gemini have no Service wake. A LAN guest needs a running optional local Service observer for Claude/Codex wake; the remote host cannot wake its native process by itself. PairRoom never starts or interrupts agent sessions, and queued messages survive restarts. [Native relay](NATIVE_RELAY.md#long-unattended-runs-by-runtime) owns the Runtime-specific limits, recovery, and [dated vendor observations](NATIVE_RELAY.md#verified-vendor-wake-surfaces).
 
 `exchange`/`wait` poll and renew their lease inside the CLI process, so **waiting costs no model calls**. What a delivered message costs is another matter: wakes, continuations, native context, and the work the model then does all count, and there is no fixed per-message turn or token cost. Full peer replies, code reads, reasoning, and retries add up. Keep messages focused, and measure real usage from the Provider rather than inferring it from delivery receipts.
 
@@ -87,7 +88,9 @@ Both sessions retain their native context. Full peer replies, repeated code read
 
 The target is **accuracy, efficiency and acceptable total cost together**. Better convenience alone does not justify materially worse results or an unacceptable bill. There is no automatic relay-count or cost ceiling; choose a simpler single-agent path when peer review does not earn its overhead.
 
-## Orca is a useful workbench, not an imaginary non-collaborator
+<a id="orca-is-a-useful-workbench-not-an-imaginary-non-collaborator"></a>
+
+## Where Orca's workbench fits
 
 In the [dated comparison](ALTERNATIVES.md#research-scope), Orca combines terminals, workspaces, notifications, review tools and an experimental structured orchestration layer. Its explicit messages, blocking ask/reply and existing-terminal reuse can support repeated review of the **same** problem, not just independent parallel jobs. It also supports externally created worktrees. Calling it “parallel only” would be incorrect. [Alternatives](ALTERNATIVES.md#orca-workbench-and-supervised-coordination-versus-a-pair-relay) documents the evidence and Provider distinction.
 
@@ -106,7 +109,7 @@ Adopting Orca's terminal/notification surface does not require adopting its orch
 | An architect/editor model split without two preserved native sessions | [Aider](https://aider.chat/docs/usage/modes.html) |
 | Cloud/team execution or enforced workflow budgets and gates | A product with those explicit deployment and control guarantees |
 
-PairRoom adds a hosting Service, bindings, storage and compatibility maintenance. It is not zero setup, a generic agent graph, a full editor, cloud sync, or a replacement for every native session feature. Native supports one colleague per shared Room over the LAN with explicit membership approval. Only the Room's host needs a Service; the guest uses CLI/hooks directly. Different native sessions on one machine can host local Rooms and join Rooms on other hosts concurrently. Management and Room views stay on loopback; the optional TLS listener serves only the shared Native relay. The selected models may still receive code through their Providers. See [LAN collaboration](LAN_NATIVE.md) and [Security](../SECURITY.md).
+PairRoom adds a hosting Service, bindings, storage and compatibility maintenance. It suits a persistent pair relationship with explicit local or LAN setup. Cloud sync, broad team orchestration, enforced workflow budgets, and a full editor require other tools. Management and Room views stay on loopback; the optional TLS listener serves only the shared Native relay.
 
 ## Expose uncertainty instead of silently repeating work
 
@@ -124,7 +127,7 @@ Separate “does this surface make the same pair easier to operate?” from “d
 
 ## Implementation evidence and maintenance
 
-The PairRoom statements here were checked against [commit `42827c959c4760c4306e91d2c9b7d1c96d0bb283`](https://github.com/sean2077/pairroom/tree/42827c959c4760c4306e91d2c9b7d1c96d0bb283) by reading source and documentation; no new vendor or billing test was run. External comparisons keep the dates and revisions listed in [Alternatives](ALTERNATIVES.md#research-scope). Where this page and the technical references disagree, the references win.
+The current PairRoom behavior on this page was checked on **2026-10-11** against [v5.14.0, commit `9e65bee00e69ef1b001b4f81ec1d119f64473eee`](https://github.com/sean2077/pairroom/tree/9e65bee00e69ef1b001b4f81ec1d119f64473eee) by reading source and contracts; no new vendor or billing test was run. The September working-session report remains historical evidence. External comparisons retain the separate dates and revisions listed in [Alternatives](ALTERNATIVES.md#research-scope); this source review does not refresh them. Where this page and the technical references disagree, the references win.
 
 | Claim | Implementation / contract entry |
 |---|---|
@@ -132,6 +135,8 @@ The PairRoom statements here were checked against [commit `42827c959c4760c4306e9
 | Exact-handle relay and byte budgets | [Versioned protocol](../internal/protocol/contract.go), [Room Engine](../internal/room/engine.go) |
 | Independent Embedded selections | [Selection model](../internal/model/agent_selection.go), [CC Switch boundary](../internal/ccswitch/) |
 | Native process/configuration boundary and bounded continuation | [Native protocol](PROTOCOL.md#native-host-protocol-v8), [relay client](../internal/relayclient/) |
+| Native default, four Runtimes and actual LAN peer selection | [Host modes](../internal/model/host.go), [Runtime identities](../internal/model/runtime.go), [LAN membership](../internal/relay/lan.go) |
+| Service-free LAN guest and coexistence with local Rooms | [Direct transport](../internal/relayclient/lan_transport.go), [native identity reservations](../internal/nativeidentity/identity.go), [optional guest wake](../internal/service/lan_guest_wake.go) |
 | Persistent state and explicit recovery | [Engine regressions](../internal/room/engine_test.go), [Storage](STORAGE.md) |
 
 Revisit positioning when native harnesses or close competitors change. Product breadth, stars and marketing claims do not establish superiority; no single ingredient here is claimed exclusive to PairRoom.

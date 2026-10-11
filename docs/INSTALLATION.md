@@ -14,7 +14,7 @@ Room, install the CLI and approve the project's hooks, then follow the
 [invitation workflow](LAN_NATIVE.md). Desktop and a local Service are optional
 on the participating machine.
 
-Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview)) must be installed and signed in separately. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
+Neither entry requires Go. Both need Git and a local Git repository; for real Agents, each selected native CLI ([Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Grok Build](https://docs.x.ai/build/overview), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)) must be installed and signed in separately. A LAN guest needs only its own Runtime. The full readiness table is in [Getting started](GETTING_STARTED.md#prerequisites).
 
 Release packages are unsigned development artifacts until Windows code signing and Apple Developer ID signing/notarization actually run. [Releases](https://github.com/sean2077/pairroom/releases/latest) distinguish `pairroom-cli-…` from `pairroom-desktop-…` assets. Verify downloads against the checksums published with each release: CLI assets, `install.sh`, and source archives are listed in `SHA256SUMS`, and desktop packages in `pairroom-desktop-vX.Y.Z-SHA256SUMS` (for example `sha256sum -c --ignore-missing pairroom-desktop-vX.Y.Z-SHA256SUMS` next to the downloaded package; on Windows compare `Get-FileHash` output with the listed digest). The checksums detect corrupted or substituted downloads relative to that Release page; they are not a code signature.
 
@@ -22,11 +22,13 @@ Release packages are unsigned development artifacts until Windows code signing a
 
 ### winget
 
-**Not yet available from the official WinGet source.** As checked on 2026-09-30, the [5.10.0 submission](https://github.com/microsoft/winget-pkgs/pull/443238) has passed manifest validation but remains open awaiting moderator approval. Validation and PR submission do not mean the package has been published. Install the [Windows setup.exe from Releases](#setupexe-from-releases) for now.
+The [Windows setup.exe from Releases](#setupexe-from-releases) is the direct installation path. Before choosing WinGet, check whether its official source currently publishes PairRoom:
 
-The proposed package identifier is `sean2077.PairRoom` (moniker `pairroom`). After upstream approval and source indexing, check availability with `winget show --id sean2077.PairRoom --exact --source winget` before using that channel. If no package is found, continue with the release installer.
+```powershell
+winget show --id sean2077.PairRoom --exact --source winget
+```
 
-The submitted manifest is machine-scoped and declares Microsoft Edge WebView2 Runtime as a dependency. The release installer itself also provisions a missing runtime; see below. Restore WinGet installation and upgrade instructions only after verifying availability from the official source.
+Use that channel only if the query resolves the intended package and release; a submitted or validated manifest does not establish source availability. If no package is found, use the release installer. The installer provisions a missing Microsoft Edge WebView2 Runtime as described below.
 
 ### Setup.exe from Releases
 
@@ -100,16 +102,22 @@ Alternatively, download the matching `pairroom-cli-…` asset directly, verify i
 
 ## Verify an installation
 
-Run these from the intended project repository:
+Run these from the intended project repository and, for Native, inside the Agent's own tool shell:
 
 ```bash
 pairroom version
-pairroom doctor --repo . --json
+git --version
 ```
 
-`version` shows which CLI release this shell runs. `doctor` checks Git and the Runtime executables without calling a model, and checks Claude Code plus Codex unless you pass `--config` for another pair; see [Agent-assisted setup](AGENT_SETUP.md#3-check-git-and-the-runtimes). Neither command checks that you are signed in.
+`version` shows which CLI release this shell runs; it does not prove native authentication. Use the CLI from the hosting Service's release, then follow the check for your path:
 
-For Native, run `pairroom version` in both Agents' tool shells as well, and use the CLI from the same release as the Service. Run `pairroom relay preflight` before binding and `pairroom relay doctor` after. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) gives the full sequence; [CLI reference](CLI_REFERENCE.md) documents each command.
+| Path | Next check |
+|---|---|
+| Host or join a local Native Room | Install and approve the project's hooks, run `pairroom relay preflight` in each session, then bind. |
+| Join a colleague's LAN Room | Install and approve hooks for the joining Runtime, run `pairroom relay preflight --join`, then use the invitation. No local Service or two-adapter check is required. After admission, ordinary `preflight` checks the recorded host. |
+| Embedded | Run `pairroom doctor --repo . --json`; it probes Claude Code plus Codex by default. Pass `--config` for another pair. This checks executables and protocol support without calling a model. |
+
+After Native binding and a completed turn, `pairroom relay doctor` reports whether the response hook ran. [Agent-assisted setup](AGENT_SETUP.md#6-native-bind-two-existing-sessions) gives the sequence and the limits of each check; [CLI reference](CLI_REFERENCE.md) owns command semantics.
 
 Desktop opens Management in its own window. A CLI Service prints a Management URL instead; it contains a login token, so don't share it.
 
