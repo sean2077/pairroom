@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.14.0] — 2026-10-11
+
 ### Fixed
 
 - Keep LAN upload disk commits outside the Room engine lock while preserving the transfer barrier that serializes them with member revocation.

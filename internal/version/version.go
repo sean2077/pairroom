@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	Current     = "5.13.1"
+	Current     = "5.14.0"
 	StoreSchema = 13
 	// LocalStoreSchema is the supported pre-LAN format. Its explicit local
 	// permissions and bindings are read unchanged; LAN facts require schema 13.
