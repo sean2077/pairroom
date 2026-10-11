@@ -13,6 +13,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -21,8 +22,31 @@ from test_service_browser import ROOT, Service, read_json, wait_snapshot
 from test_native_chat_browser import verify as verify_chat
 
 
+def preserve_playwright_browsers() -> None:
+    """Keep Playwright's installed browsers reachable under a test-owned profile.
+
+    Playwright resolves its browser cache from the user profile, so moving HOME
+    or LOCALAPPDATA would hide an existing Chromium install. An explicit
+    override wins; otherwise pin the first candidate that exists.
+    """
+    if os.environ.get('PLAYWRIGHT_BROWSERS_PATH'):
+        return
+    candidates = []
+    if os.name == 'nt':
+        candidates = [Path(base) / 'ms-playwright' for base in (os.environ.get('LOCALAPPDATA'), os.environ.get('USERPROFILE', '') + '\\AppData\\Local') if base]
+    elif sys.platform == 'darwin':
+        candidates = [Path.home() / 'Library' / 'Caches' / 'ms-playwright']
+    else:
+        candidates = [Path.home() / '.cache' / 'ms-playwright']
+    for candidate in candidates:
+        if candidate.is_dir():
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(candidate)
+            return
+
+
 async def verify(binary: Path | None, browser_path: str | None, artifacts: Path) -> None:
     artifacts.mkdir(parents=True, exist_ok=True)
+    preserve_playwright_browsers()
     await verify_chat(browser_path, artifacts/'im')
     with tempfile.TemporaryDirectory(prefix='pairroom-native-browser-') as temporary:
         root = Path(temporary)
@@ -34,12 +58,14 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         repo.mkdir()
         subprocess.run(['git', 'init', '-q', str(repo)], check=True)
         subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-qm', 'Initial review fixture'], check=True)
-        service = Service(binary, root)
+        # os.UserConfigDir reads APPDATA on Windows and HOME/Library on macOS; the
+        # Service and every CLI call get the same test-owned profile so neither
+        # reads or writes the operator's real relay session identity store.
+        profile = {'HOME': str(root/'home'), 'USERPROFILE': str(root/'home'), 'XDG_CONFIG_HOME': str(root/'home'/'.config'),
+                   'APPDATA': str(root/'home'/'AppData'/'Roaming'), 'LOCALAPPDATA': str(root/'home'/'AppData'/'Local')}
+        service = Service(binary, root, profile)
         env = os.environ.copy()
-        # os.UserConfigDir reads APPDATA on Windows and HOME/Library on macOS; keep
-        # relay session locators out of the real profile on every platform.
-        env.update(HOME=str(root/'home'), USERPROFILE=str(root/'home'), XDG_CONFIG_HOME=str(root/'home'/'.config'),
-                   APPDATA=str(root/'home'/'AppData'/'Roaming'), LOCALAPPDATA=str(root/'home'/'AppData'/'Local'))
+        env.update(profile)
         env['PATH'] = str(binary.parent) + os.pathsep + env.get('PATH', '')
         # bind associates from the official session id the harness exposes to its
         # tool-call subprocess. Expose exactly one per invocation (clearing the

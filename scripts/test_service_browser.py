@@ -23,8 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Service:
-    def __init__(self, binary: Path, root: Path):
+    def __init__(self, binary: Path, root: Path, env_overrides: dict[str, str] | None = None):
         self.binary, self.root = binary, root
+        # Test-owned profile variables (HOME, APPDATA, ...) so the Service and
+        # the CLI under test share one profile and never touch the operator's
+        # real PairRoom state.
+        self.env_overrides = dict(env_overrides or {})
         self.process = None
         self.output = None
         self.log = root / 'service.log'
@@ -34,6 +38,7 @@ class Service:
         home = self.root / 'home'
         home.mkdir(exist_ok=True)
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'))
+        env.update(self.env_overrides)
         self.output = self.log.open('w')
         self.process = subprocess.Popen(
             [str(self.binary), 'service', '--mock', '--no-browser', '--recover-stale-lock', '--listen', '127.0.0.1:0',

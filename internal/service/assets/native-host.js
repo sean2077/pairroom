@@ -199,21 +199,29 @@
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
     status(tr('joinManual'), true);
   }
+  function legacyCopy(command) {
+    // execCommand is deprecated and can throw or be refused outright; the
+    // temporary textarea is removed on every path, including a throw.
+    const source = document.createElement('textarea');
+    source.value = command; source.setAttribute('readonly', ''); source.className = 'sr-only';
+    try { document.body.append(source); source.select(); return document.execCommand('copy') === true; }
+    catch (_) { return false; }
+    finally { source.remove(); }
+  }
   async function copyJoinCommand(button, code, command) {
     button.disabled = true;
+    let copied = false;
     try {
-      let copied = false;
       if (navigator.clipboard?.writeText) {
-        try { await navigator.clipboard.writeText(command); copied = true; } catch (_) { /* fall back below */ }
+        try { await navigator.clipboard.writeText(command); copied = true; } catch (_) { /* legacy path below */ }
       }
-      if (!copied) {
-        const source = document.createElement('textarea');
-        source.value = command; source.setAttribute('readonly', ''); source.className = 'sr-only';
-        document.body.append(source); source.select();
-        copied = document.execCommand('copy'); source.remove();
-      }
+      if (!copied) copied = legacyCopy(command);
+    } catch (_) { copied = false; }
+    finally {
+      button.disabled = false;
+      // A refused copy still leaves the command selected for manual copying.
       if (copied) status(tr('joinCopied')); else selectCommandText(code);
-    } finally { button.disabled = false; }
+    }
   }
   function renderJoin(value) {
     // Visibility is derived from durable binding state, never from a dismissal:

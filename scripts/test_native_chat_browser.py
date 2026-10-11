@@ -38,6 +38,9 @@ def fixture_html(isolated: bool = False) -> str:
     window.__ids = 0;
     Object.defineProperty(crypto, 'randomUUID', {value:()=>'fixture-send-'+(++__ids)});
     window.__requests = [];
+    // An escaped copy rejection would otherwise be invisible to the assertions.
+    window.__rejections = [];
+    window.addEventListener('unhandledrejection', event => { window.__rejections.push(String(event.reason)); });
     // Use the browser's real localStorage and Web Locks on the intercepted
     // loopback origin. API/SSE remain fixtures, not authenticated transport.
     window.__snapshot = {
@@ -349,6 +352,15 @@ async def verify(browser_path: str | None, artifacts: Path, isolated: bool = Fal
             await guide.locator('[data-join-focus="slot1-copy"]').click()
             assert await page.evaluate('window.getSelection().toString()') == JOIN_SLOT1
             await expect(page.locator('#status')).to_contain_text('copy it manually')
+            assert await page.evaluate("document.querySelectorAll('textarea.sr-only').length") == 0, 'the clipboard textarea survived'
+            # A throwing execCommand must reach the same manual path, remove its
+            # temporary textarea and leave no unhandled rejection behind.
+            await page.evaluate("() => { document.execCommand = () => { throw new Error('execCommand refused by fixture'); }; }")
+            await guide.locator('[data-join-focus="slot1-copy"]').click()
+            await expect(page.locator('#status')).to_contain_text('copy it manually')
+            assert await page.evaluate("document.querySelectorAll('textarea.sr-only').length") == 0, 'a throwing copy left its textarea behind'
+            assert await page.evaluate('window.__rejections.length') == 0, 'a copy failure escaped as an unhandled rejection'
+            assert await page.locator('[data-join-focus="slot1-copy"]').is_enabled()
             await page.evaluate("document.execCommand=window.__execCommand")
             # Both slots bound hides the guide; an unbind brings it back without a reload.
             await page.evaluate("__snapshot.relay.bindings.slot1={active:true,session_id:'fixture-1',generation:1};__snapshot.relay.bindings.slot2={active:true,session_id:'fixture-2',generation:1};__update()")
