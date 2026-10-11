@@ -109,11 +109,31 @@ func archiveLANAttempt(root string, attempt lanJoinAttempt) error {
 // Called with the original slot lock held, after membership is retired. The
 // complete publication WAL is retained as private evidence, never replayed.
 func archiveLANWorkspaceState(root, slotDir string, state State) error {
+	return archiveLANWorkspaceStateWith(root, slotDir, state, false)
+}
+
+// archiveLANWorkspaceStateWith is the archive reached by the offline recovery:
+// a copied workspace keeps inherited ACEs on its parent directories, so only the
+// binding's own archive directory must be created owner-private before content
+// lands in it.
+func archiveLANWorkspaceStateWith(root, slotDir string, state State, recovery bool) error {
 	if !validStateFormat(state) || state.LAN == nil || !safePart(state.BindID) || !sameWorkspace(state.Workspace, root) {
 		return errors.New("invalid retired direct LAN workspace identity")
 	}
 	dir, err := secureLANJoinDir(root, "retired", state.BindID)
-	if err != nil {
+	if err != nil && recovery && errors.Is(err, privatefile.ErrPrivate) {
+		// The parents keep inherited ACEs in a copied workspace; the binding's
+		// own archive directory is still created (and checked) owner-private
+		// before any content lands in it.
+		base, baseErr := secureDir(root, ".pairroom", "retired")
+		if baseErr != nil {
+			return err
+		}
+		if baseErr = privatefile.Mkdir(filepath.Join(base, state.BindID)); baseErr != nil {
+			return err
+		}
+		dir = filepath.Join(base, state.BindID)
+	} else if err != nil {
 		return err
 	}
 	var archived State

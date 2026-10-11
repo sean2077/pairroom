@@ -73,3 +73,16 @@ func directLANLockDirectory(dir string) bool {
 	room := filepath.Dir(parent)
 	return (filepath.Base(dir) == "slot1" || filepath.Base(dir) == "slot2") && filepath.Base(parent) == "slots" && strings.HasPrefix(filepath.Base(room), "lan_") && filepath.Base(filepath.Dir(room)) == "rooms" && filepath.Base(filepath.Dir(filepath.Dir(room))) == ".pairroom"
 }
+
+// lockSlotRecovery takes the same mutual-exclusion lock as lockSlot without
+// requiring the sensitive-directory boundary first. The documented offline
+// retirement removes the credentials instead of using them, so a workspace that
+// lost its owner DACL (restored from a backup, copied from another machine)
+// must remain retirable; concurrent normal users of the directory hold the same
+// lock, so exclusion is unchanged.
+func lockSlotRecovery(ctx context.Context, dir string) (func(), error) {
+	if directLANLockDirectory(dir) {
+		return privatelock.Lock(ctx, dir)
+	}
+	return lockSlot(ctx, dir)
+}

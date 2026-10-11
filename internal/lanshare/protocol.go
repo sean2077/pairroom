@@ -26,10 +26,15 @@ import (
 const Version = 1
 const MaxResponseBytes = 8 << 20
 
-// HostUnavailableCode marks a host-side refusal the member cannot fix: the
-// Room's runtime cannot be served right now, while the admission itself stays
-// valid. It must not be reported as an authentication failure.
-const HostUnavailableCode = "lan_host_unavailable"
+// Stable wire codes for LAN refusals the member can act on. A code here means
+// the host deliberately replaced its private detail (paths, storage state) with
+// a fixed instruction, so the client renders its own wording for it.
+const (
+	HostUnavailableCode = "lan_host_unavailable"
+	HostStorageCode     = "lan_host_storage_failed"
+	SharedQuotaCode     = "lan_shared_quota"
+	TemporaryQuotaCode  = "lan_temporary_quota"
+)
 
 // EndpointForAddress preserves a numeric listener address while escaping an
 // IPv6 interface zone as required by a URL. The address itself still passes
@@ -107,6 +112,12 @@ func ParseInvite(value string) (Invite, error) {
 	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF {
 		return v, errors.New("invalid PairRoom invitation")
 	}
+	// The pinned host key is compared byte-exactly against the lowercase
+	// fingerprint the host emits, and the local routing identity derives from
+	// its spelling. A hand-edited or third-party invitation may carry uppercase
+	// hex, which would validate and then never authenticate; canonicalize it
+	// here instead of failing the pinned comparison later.
+	v.HostPin = strings.ToLower(v.HostPin)
 	return v, v.Validate()
 }
 

@@ -748,35 +748,54 @@ func TestLANUnauthorizedRequestsCannotActivateSuspendedRooms(t *testing.T) {
 // The listener's capacity is shared, not first-come: one certified key that
 // parks long-polls or transfers must not consume every slot and reject the
 // members of other hosted Rooms with a capacity error.
-func TestLANCapacityKeepsEveryCertifiedKeyWithinItsShare(t *testing.T) {
-	h := &lanHostServer{inflight: make(map[string]int)}
+func TestLANCapacityKeepsEveryCertifiedKeyAndRoomWithinItsShare(t *testing.T) {
+	h := &lanHostServer{inflight: make(map[string]int), roomLoad: make(map[string]int)}
 	for i := 0; i < maxLANConcurrentPerKey; i++ {
-		if !h.enter("member-a") {
-			t.Fatalf("share refused at request %d", i)
+		if !h.enter("room-a", "member-a") {
+			t.Fatalf("key share refused at request %d", i)
 		}
 	}
-	if h.enter("member-a") {
+	if h.enter("room-a", "member-a") {
 		t.Fatal("one certified key occupied more than its share")
 	}
-	if !h.enter("member-b") {
+	if !h.enter("room-a", "member-b") {
 		t.Fatal("a saturated key rejected another member's request")
 	}
 	for i := 0; i < maxLANConcurrentPerKey; i++ {
-		h.leave("member-a")
+		h.leave("room-a", "member-a")
 	}
 	if h.inflight["member-a"] != 0 {
 		t.Fatalf("released key stayed in the map: %d", h.inflight["member-a"])
 	}
+	// One hosted Room cannot take more than its own share either.
+	for i := 0; h.roomLoad["room-a"] < maxLANConcurrentPerRoom; i++ {
+		if !h.enter("room-a", fmt.Sprintf("member-%d", i)) {
+			t.Fatalf("Room share refused request %d", i)
+		}
+	}
+	if h.enter("room-a", "member-over") {
+		t.Fatal("one Room occupied more than its share")
+	}
+	if !h.enter("room-b", "member-b") {
+		t.Fatal("a saturated Room rejected another Room's member")
+	}
+	// Global saturation still applies to every Room.
+	var lastRoom, lastKey string
 	for i := 0; h.inflightTotal < maxLANConcurrent; i++ {
-		if !h.enter(fmt.Sprintf("member-%d", i)) {
+		lastRoom, lastKey = fmt.Sprintf("room-%d", i), fmt.Sprintf("member-c-%d", i)
+		if !h.enter(lastRoom, lastKey) {
 			t.Fatalf("global capacity refused request %d", i)
 		}
 	}
-	if h.enter("member-late") {
+	if h.enter("room-late", "member-late") {
 		t.Fatal("over-subscribed listener admitted another request")
 	}
 	if h.inflightTotal != maxLANConcurrent {
 		t.Fatalf("in-flight total = %d, want %d", h.inflightTotal, maxLANConcurrent)
+	}
+	h.leave(lastRoom, lastKey)
+	if h.inflightTotal != maxLANConcurrent-1 || h.roomLoad[lastRoom] != 0 {
+		t.Fatalf("accounting did not release: total=%d room=%d", h.inflightTotal, h.roomLoad[lastRoom])
 	}
 }
 

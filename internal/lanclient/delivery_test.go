@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -397,5 +398,36 @@ func TestRetainedOriginalCannotBePrintedAgainButExplicitRetryHasNewIdentity(t *t
 	r, _ := c.read(context.Background())
 	if len(r.Deliveries) != 2 || r.Deliveries[0].ID != original.ID || r.Deliveries[0].State != "claimed" {
 		t.Fatal("explicit retry rewrote the original unresolved receipt")
+	}
+}
+
+// A long-lived membership accumulates definitively refused acknowledgements that
+// can never settle. They must not wedge collection, and a full journal sheds
+// them instead of refusing new work.
+func TestTerminalDeliveryReceiptsDoNotWedgeCollection(t *testing.T) {
+	full := record{Schema: 1}
+	for i := 0; i < maxDeliveries; i++ {
+		full.Deliveries = append(full.Deliveries, delivery{ID: fmt.Sprintf("relay-terminal-%d", i), Receipt: "receipt", Generation: 1, State: "unknown"})
+	}
+	if err := deliveryCapacity(full); err != nil {
+		t.Fatalf("terminal receipts wedged collection: %v", err)
+	}
+	trimmed, err := trimDeliveries(full.Deliveries, "relay-next")
+	if err != nil || len(trimmed) != 0 {
+		t.Fatalf("full journal did not shed terminal receipts: %d %v", len(trimmed), err)
+	}
+	recoverable := record{Schema: 1}
+	for i := 0; i < maxDeliveries; i++ {
+		recoverable.Deliveries = append(recoverable.Deliveries, delivery{ID: fmt.Sprintf("relay-stdout-%d", i), Receipt: "receipt", Generation: 1, State: "stdout"})
+	}
+	if err := deliveryCapacity(recoverable); err == nil {
+		t.Fatal("recoverable receipts exceeded their own bound")
+	}
+	kept, err := trimDeliveries(recoverable.Deliveries, "relay-next")
+	if err != nil || len(kept) != maxDeliveries {
+		t.Fatalf("recoverable receipts were shed: %d %v", len(kept), err)
+	}
+	if _, err := trimDeliveries(full.Deliveries, "relay-terminal-0"); err == nil {
+		t.Fatal("an already retained receipt was accepted twice")
 	}
 }

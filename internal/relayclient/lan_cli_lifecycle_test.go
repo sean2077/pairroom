@@ -673,3 +673,48 @@ func TestLANCLIOfflineDetachDoesNotHideActiveIdentityConflict(t *testing.T) {
 		t.Fatalf("failed detach disturbed the newer native owner: %v", err)
 	}
 }
+
+// A joined workspace copied to another machine keeps inherited ACEs, so its
+// directories are no longer owner-private either. The documented offline detach
+// must still retire it instead of failing on a directory boundary.
+func TestLANCLIOfflineDetachRetiresCopiedWorkspace(t *testing.T) {
+	f := newLANCLIWire(t)
+	invite, _ := f.bind(t, "copied-workspace-session")
+	f.server.Close()
+	room := lanRoutingID(invite)
+	joinDir := filepath.Join(f.root, ".pairroom", "lan-joins", room)
+	slotDir := filepath.Join(f.root, ".pairroom", "rooms", room, "slots", "slot2")
+	for _, path := range []string{
+		filepath.Join(f.root, ".pairroom", "lan-joins"), joinDir, filepath.Join(joinDir, "join-attempt.json"),
+		slotDir, filepath.Join(slotDir, "state.json"), filepath.Join(slotDir, "credentials"),
+	} {
+		breakOwnerBoundary(t, path)
+	}
+	t.Chdir(sessionGitRoot(t))
+	if output, err := f.run(t, "copied-workspace-session", false, "unbind", "--local-only", "--room", room); err != nil || !bytes.Contains(output, []byte("local-only")) {
+		t.Fatalf("copied-workspace offline detach: %s, %v", output, err)
+	}
+	if _, err := os.Stat(filepath.Join(slotDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("retired binding files survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(slotDir, "credentials")); !os.IsNotExist(err) {
+		t.Fatalf("retired credential file survived: %v", err)
+	}
+}
+
+// A session that already holds an accepted joined Room must not be told it is
+// ready to join another one: preflight has to check the same session
+// eligibility that join enforces.
+func TestLANCLIPreflightJoinRejectsAnAlreadyJoinedSession(t *testing.T) {
+	f := newLANCLIWire(t)
+	f.bind(t, "joined-session")
+	f.server.Close()
+	t.Chdir(sessionGitRoot(t))
+	output, err := f.run(t, "joined-session", false, "preflight", "--join")
+	if err == nil {
+		t.Fatalf("preflight promised a join for an already joined session: %s", output)
+	}
+	if !bytes.Contains(output, []byte("already belongs to a joined LAN Room")) {
+		t.Fatalf("preflight hint did not name the existing association: %s", output)
+	}
+}

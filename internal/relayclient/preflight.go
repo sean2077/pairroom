@@ -106,12 +106,20 @@ func runPreflight(ctx context.Context, o options, out io.Writer) error {
 	case bindingErr != nil:
 		report.Mode = "unresolved"
 		report.Service = preflightService{Status: checkFail, Hint: bindingErr.Error()}
+	case binding != nil && o.joinCheck:
+		// A session that already holds an association — locally hosted or joined
+		// over LAN — cannot join another Room. Report the join attempt instead of
+		// the current association, so preflight never promises a join that
+		// `join` will refuse.
+		report.Mode = "lan_join"
+		hint := "This native session already belongs to a locally hosted Room. Use a separate native session to join a remote Room while keeping the local association."
+		if binding.LAN != nil {
+			hint = "This native session already belongs to a joined LAN Room. Use a separate native session to join another Room, or leave this association first."
+		}
+		report.Service = preflightService{Status: checkFail, Transport: "lan_direct", Hint: hint}
 	case binding != nil && binding.LAN != nil:
 		report.Mode = "lan_direct"
 		report.Service = preflightLANState(ctx, *binding)
-	case binding != nil && o.joinCheck:
-		report.Mode = "lan_join"
-		report.Service = preflightService{Status: checkFail, Transport: "lan_direct", Hint: "This native session already belongs to a locally hosted Room. Use a separate native session to join a remote Room while keeping the local association."}
 	case binding != nil:
 		report.Mode = "local"
 		report.Service = preflightServiceState(ctx, binding.EndpointPath, report.Workspace.Root)

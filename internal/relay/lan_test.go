@@ -393,7 +393,7 @@ func TestLANJoinRetriesStayBoundedAndRevocationFreesTheRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	stuck := Digest("stuck-peer")
-	for i := 0; i < 64; i++ {
+	for i := 0; i < 8; i++ {
 		if _, status, err := e.RequestLANJoin(LANJoinRequest{InviteID: invite.ID, RequestID: fmt.Sprintf("stuck-request-%d", i), Key: stuck, Runtime: model.RuntimeCodex}); err != nil || status != "pending" {
 			t.Fatalf("retry %d: %q %v", i, status, err)
 		}
@@ -401,12 +401,17 @@ func TestLANJoinRetriesStayBoundedAndRevocationFreesTheRuntime(t *testing.T) {
 	if len(e.lanRequests) != 1 {
 		t.Fatalf("one key's retries kept %d requests", len(e.lanRequests))
 	}
+	// The durable per-certificate budget stops this holder from appending
+	// unbounded join facts with fresh request IDs.
+	if _, _, err := e.RequestLANJoin(LANJoinRequest{InviteID: invite.ID, RequestID: "stuck-request-8", Key: stuck, Runtime: model.RuntimeCodex}); err == nil {
+		t.Fatal("a certificate spent more than its join attempts")
+	}
 	// A different colleague can still request against the same live invitation.
 	second := Digest("second-peer")
 	if _, status, err := e.RequestLANJoin(LANJoinRequest{InviteID: invite.ID, RequestID: "second-request", Key: second, Runtime: model.RuntimeClaude}); err != nil || status != "pending" {
 		t.Fatalf("second key after retries: %q %v", status, err)
 	}
-	if _, err := e.AcceptLANJoin("stuck-request-63", stuck); err != nil {
+	if _, err := e.AcceptLANJoin("stuck-request-7", stuck); err != nil {
 		t.Fatal(err)
 	}
 	if kind := e.Runtimes()[model.ActorSlot2]; kind != model.RuntimeCodex {
@@ -433,7 +438,7 @@ func TestLANJoinRetriesStayBoundedAndRevocationFreesTheRuntime(t *testing.T) {
 		t.Fatalf("successor runtime = %s", kind)
 	}
 	// The superseded member's own request reads the explicit retirement answer.
-	if _, status, err := e.LANJoinStatus("stuck-request-63", stuck); err != nil || status != "revoked" {
+	if _, status, err := e.LANJoinStatus("stuck-request-7", stuck); err != nil || status != "revoked" {
 		t.Fatalf("superseded member status = %q %v", status, err)
 	}
 }

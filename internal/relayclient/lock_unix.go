@@ -34,3 +34,7 @@ func lockSlot(ctx context.Context, dir string) (func(), error) {
 		}
 	}
 }
+
+// lockSlotRecovery takes the same lock as lockSlot: the Unix lock is a flock on
+// the directory and imposes no privacy boundary of its own.
+func lockSlotRecovery(ctx context.Context, dir string) (func(), error) { return lockSlot(ctx, dir) }

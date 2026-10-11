@@ -10,8 +10,8 @@ import (
 
 // breakOwnerBoundary reproduces the boundary a joined workspace loses when it is
 // restored from a backup or copied from another machine: the bytes stay, the
-// owner-only DACL does not. The parent directory keeps its own private boundary,
-// so the LAN slot lock still accepts the directory.
+// owner-only DACL does not. Directories and files are both covered, so a copied
+// workspace with inherited ACEs on its directories can be exercised end to end.
 func breakOwnerBoundary(t *testing.T, path string) {
 	t.Helper()
 	everyone, err := windows.CreateWellKnownSid(windows.WinWorldSid)

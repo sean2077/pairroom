@@ -201,7 +201,9 @@ func (c *Client) Relay(ctx context.Context, auth relay.Auth, action string, payl
 
 func (c *Client) ownerRecord(ctx context.Context, leaving bool) (record, error) {
 	return c.withRecord(ctx, func(r *record) error {
-		if r.Room == nil || r.Status == "detached" || r.Status != "accepted" && !leaving {
+		// Leaving may retire a record that never held a Room: a pending request
+		// was never admitted, so it has no host membership to unbind.
+		if r.Status == "detached" || r.Room == nil && !leaving || r.Status != "accepted" && !leaving {
 			return relay.ErrAuth
 		}
 		if leaving {
@@ -251,6 +253,15 @@ func (c *Client) Owner(ctx context.Context, action string, payload, result any) 
 		remotePayload = relay.SendRequest{ID: req.ID, Text: req.Text, To: req.To, QuoteID: req.QuoteID, AttachmentIDs: req.AttachmentIDs, Review: req.Review}
 		value = &relay.Message{}
 	case "leave":
+		if r.Room == nil {
+			// A pending or denied request holds no host membership: leaving it
+			// retires the local record exactly like an explicit local detach,
+			// instead of reporting a remote refusal that never happened.
+			if err := c.detach(ctx, nil); err != nil {
+				return err
+			}
+			return assignResult(result, map[string]bool{"unbound": true})
+		}
 		action, value = "unbind", &map[string]bool{}
 	default:
 		return errors.New("unsupported joined Room view operation")

@@ -67,6 +67,12 @@ func (e *Engine) initLAN() {
 	if e.lanAdmitted == nil {
 		e.lanAdmitted = make(map[string]bool)
 	}
+	if e.lanAttempts == nil {
+		e.lanAttempts = make(map[string]int)
+	}
+	if e.lanKeyAttempts == nil {
+		e.lanKeyAttempts = make(map[string]int)
+	}
 }
 
 // PruneLANRequests bounds the derived request projection shared by the Engine
@@ -135,6 +141,13 @@ func (e *Engine) applyLAN(ev model.Event) error {
 		// Replay retains those earlier facts until all admissions are known;
 		// the later unadmitted attempt replaces them, never an admitted one.
 		e.lanRequests[j.RequestID] = j
+		// Every join fact costs one attempt of its invitation and of the presenting
+		// certificate. Both budgets are derived from all facts and never pruned, so
+		// one holder of an invitation cannot append unbounded durable requests,
+		// while the per-certificate share keeps one client from spending the whole
+		// invitation and blocking a colleague.
+		e.lanAttempts[j.InviteID]++
+		e.lanKeyAttempts[j.InviteID+"\x00"+j.Key]++
 		e.pruneLANRequestsLocked()
 	case EventLANMember:
 		var m LANMember
@@ -259,6 +272,16 @@ func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error
 	}
 	if pending >= 32 {
 		return LANJoinRequest{}, "", errors.New("too many pending requests for this invitation")
+	}
+	// The durable budgets count every attempt the invitation ever accepted: a
+	// holder of one invitation cannot keep appending join facts under the pruning
+	// that bounds the live projection, and one certificate cannot spend the whole
+	// invitation before a colleague uses it.
+	if e.lanKeyAttempts[v.ID+"\x00"+j.Key] >= 8 {
+		return LANJoinRequest{}, "", errors.New("this certificate has used its join attempts for the invitation; ask the host for a fresh invitation")
+	}
+	if e.lanAttempts[v.ID] >= 256 {
+		return LANJoinRequest{}, "", errors.New("this invitation has used its join attempts; ask the host for a fresh invitation")
 	}
 	j.CreatedAt = e.cfg.Now()
 	if err := e.append(EventLANJoin, model.ActorSystem, j); err != nil {

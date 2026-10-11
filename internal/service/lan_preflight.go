@@ -41,21 +41,25 @@ func preflightLANState(root string) error {
 	if err := privatefile.CheckDirectory(dir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
-		return errors.New("invalid LAN identity directory; data was not modified")
+		// This directory holds the host's LAN TLS identity, so it fails closed
+		// like the other identity stores — but the operator needs to know where
+		// it is and what repairing it costs.
+		return fmt.Errorf("LAN identity directory %s is not an owner-private directory; data was not modified: restore its owner and permissions, or move it aside to start without LAN sharing (deleting it rotates the host key and invalidates outstanding invitations)", dir)
 	}
 	var host lanHostConfig
-	err := privatefile.ReadJSON(filepath.Join(dir, "host.json"), 16<<10, &host)
+	hostPath := filepath.Join(dir, "host.json")
+	err := privatefile.ReadJSON(hostPath, 16<<10, &host)
 	if err == nil {
 		if host.Schema != 1 || (host.Enabled && (host.Identity.CertificatePEM == "" || lanshare.ValidateEndpoint(lanshare.EndpointForAddress(host.Address)) != nil)) {
-			return errors.New("unsupported or invalid LAN host identity; data was not modified")
+			return fmt.Errorf("LAN host identity %s is unsupported or invalid; data was not modified: back it up, then move it aside to start without LAN sharing (deleting it rotates the host key and invalidates outstanding invitations)", hostPath)
 		}
 		if host.Identity.CertificatePEM != "" || host.Identity.PrivateKeyPEM != "" {
 			if _, err := host.Identity.Certificate(); err != nil {
-				return errors.New("invalid LAN host key pair; data was not modified")
+				return fmt.Errorf("LAN host key pair in %s is invalid; data was not modified: restore it from backup or move it aside to start without LAN sharing", hostPath)
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return errors.New("cannot validate LAN host identity; data was not modified")
+		return fmt.Errorf("cannot validate LAN host identity %s; data was not modified: restore it from backup or move it aside to start without LAN sharing", hostPath)
 	}
 	return nil
 }

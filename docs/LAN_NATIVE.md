@@ -77,7 +77,11 @@ semantics; [Security](../SECURITY.md) owns the trust and network boundaries.
 
 The invitation expires after ten minutes by default. A host can use
 `pairroom relay invite` to recover the current unexpired invitation, or to
-issue a fresh one once the previous invitation expired or was consumed. For
+issue a fresh one once the previous invitation expired or was consumed. Each
+invitation accepts a bounded number of join attempts — eight per certificate
+and 256 in total — so one holder cannot keep appending durable join facts with
+fresh request IDs or spend the invitation before a colleague uses it; a spent
+invitation needs a fresh one. For
 an expired pending join, use the new invitation in the same guest session. The
 client settles the old request before renewing its request ID and keeps the
 per-Room private key. A confirmed member reconnects with its existing key and

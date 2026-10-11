@@ -561,3 +561,8 @@ func cleanupAtomicTemps(dir string) {
 		}
 	}
 }
+
+// readLANAttemptFile is the strict reader for direct LAN attempt records.
+func readLANAttemptFile(path string, value any) error {
+	return privatefile.ReadJSON(path, maxPrivateFileBytes, value)
+}

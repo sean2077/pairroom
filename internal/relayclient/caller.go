@@ -122,9 +122,14 @@ func applyCallerDefaults(root, action string, o *options) error {
 		return err
 	}
 	var matches []State
+	// The documented offline unbind may still identify a binding whose
+	// owner-only boundary was lost (restored from a backup, copied from another
+	// machine, an inherited Windows DACL); every other action keeps the strict
+	// read and any operation on the binding still reloads strictly.
+	recovery := action == "unbind" && o.localOnly
 	for _, path := range paths {
 		var s State
-		if err := readPrivate(path, &s); err != nil {
+		if err := readDiscoveryState(path, &s, recovery); err != nil {
 			return err
 		}
 		if !validStateFormat(s) || s.Generation == 0 || s.SessionID != caller.session || s.Runtime != caller.runtime {

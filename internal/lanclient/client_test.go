@@ -514,3 +514,27 @@ func TestClientDirectoryCapacityStillBoundsAdmissionAndDiscovery(t *testing.T) {
 		t.Fatalf("discovery accepted an over-capacity client catalog: %v", err)
 	}
 }
+
+// Leaving a pending association has no host membership to unbind: it retires
+// the local record instead of reporting a remote refusal that never happened.
+func TestLeaveRetiresAPendingAssociationLocally(t *testing.T) {
+	ctx := context.Background()
+	s, f := newStore(t), newRemote(t)
+	f.status = "pending"
+	options := f.options(t)
+	c, joined, err := s.Join(ctx, options)
+	if err != nil || joined.Status != "pending" || joined.Binding != nil {
+		t.Fatalf("pending join: %+v %v", joined, err)
+	}
+	before := len(f.actions())
+	var result map[string]bool
+	if err := c.Owner(ctx, "leave", nil, &result); err != nil || !result["unbound"] {
+		t.Fatalf("pending leave: %+v %v", result, err)
+	}
+	if len(f.actions()) != before {
+		t.Fatal("pending leave contacted the host")
+	}
+	if meta, err := c.Metadata(ctx); err != nil || meta.Status != "detached" {
+		t.Fatalf("pending leave did not retire locally: %+v %v", meta, err)
+	}
+}

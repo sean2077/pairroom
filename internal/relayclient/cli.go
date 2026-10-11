@@ -616,7 +616,9 @@ func unbindLocalOnly(ctx context.Context, root, dir string, o options, out io.Wr
 }
 
 func unbindLocalOnlyWithMetadata(ctx context.Context, root, dir string, o options, expected *lanclient.Metadata, out io.Writer) error {
-	release, err := lockSlot(ctx, dir)
+	// Offline retirement takes the same lock without the sensitive-directory
+	// check: it removes the credentials instead of using them.
+	release, err := lockSlotRecovery(ctx, dir)
 	if err != nil {
 		return err
 	}
@@ -659,7 +661,7 @@ func unbindLocalOnlyWithMetadata(ctx context.Context, root, dir string, o option
 		if err := client.LAN.Detach(ctx, client.localAuth()); err != nil {
 			return err
 		}
-		if err := archiveLANWorkspaceState(root, dir, state); err != nil {
+		if err := archiveLANWorkspaceStateWith(root, dir, state, recovery); err != nil {
 			return err
 		}
 	}

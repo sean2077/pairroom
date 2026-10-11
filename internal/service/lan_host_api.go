@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/attachment"
+	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
@@ -57,41 +59,41 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 	switch action {
 	case "inspect":
 		b, err := n.engine.Inspect(a)
-		nativeResult(w, publicLANBinding(b), err)
+		lanMemberResult(w, publicLANBinding(b), err)
 	case "confirm":
 		b, err := n.engine.ConfirmLAN(a)
-		nativeResult(w, publicLANBinding(b), err)
+		lanMemberResult(w, publicLANBinding(b), err)
 	case "room":
 		b, err := n.engine.Inspect(a)
 		if err != nil {
-			nativeResult(w, nil, err)
+			lanMemberResult(w, nil, err)
 			return
 		}
-		nativeResult(w, h.owner.lanRoomInfo(n, b), nil)
+		lanMemberResult(w, h.owner.lanRoomInfo(n, b), nil)
 	case "report":
 		p, err := n.engine.Report(a, req.ReportSeq, req.Text)
 		if err == nil && p.Message != nil {
 			n.scheduleWake(p.Message.ID)
 		}
-		nativeResult(w, p, err)
+		lanMemberResult(w, p, err)
 	case "publication":
 		p, accepted, err := n.engine.Publication(a, req.ReportSeq)
-		nativeResult(w, map[string]any{"accepted": accepted, "publication": p}, err)
+		lanMemberResult(w, map[string]any{"accepted": accepted, "publication": p}, err)
 	case "send":
 		m, err := n.engine.Send(a, send)
 		if err == nil {
 			n.scheduleWake(m.ID)
 		}
-		nativeResult(w, m, err)
+		lanMemberResult(w, m, err)
 	case "user-send":
 		m, err := n.engine.SendLANUser(a, send)
 		if err == nil {
 			n.scheduleWake(m.ID)
 		}
-		nativeResult(w, m, err)
+		lanMemberResult(w, m, err)
 	case "user-receipt":
 		m, err := n.engine.LANUserReceipt(a, req.ID)
-		nativeResult(w, map[string]any{"accepted": m != nil, "message": m}, err)
+		lanMemberResult(w, map[string]any{"accepted": m != nil, "message": m}, err)
 	case "head":
 		seconds := req.TimeoutSeconds
 		if seconds <= 0 {
@@ -107,46 +109,46 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = nil
 		}
-		nativeResult(w, map[string]any{"head": head}, err)
+		lanMemberResult(w, map[string]any{"head": head}, err)
 	case "claim":
 		if req.Generation != a.Generation {
-			nativeResult(w, nil, relay.ErrAuth)
+			lanMemberResult(w, nil, relay.ErrAuth)
 			return
 		}
 		claim, err := n.engine.ClaimPrepared(r.Context(), a, req.ID, req.Digest, req.Park)
-		nativeResult(w, map[string]any{"claim": claim}, err)
+		lanMemberResult(w, map[string]any{"claim": claim}, err)
 	case "ack":
-		nativeResult(w, map[string]bool{"handed_off": true}, n.engine.Ack(a, req.ID, req.Receipt))
+		lanMemberResult(w, map[string]bool{"handed_off": true}, n.engine.Ack(a, req.ID, req.Receipt))
 	case "status":
 		snapshot, err := n.engine.AuthSnapshotTail(a)
-		nativeResult(w, snapshot, err)
+		lanMemberResult(w, snapshot, err)
 	case "doctor":
 		summary, err := n.engine.AuthSummary(a)
-		nativeResult(w, map[string]any{"relay": summary, "protocol": protocol.NativeVersion, "service_version": version.Current}, err)
+		lanMemberResult(w, map[string]any{"relay": summary, "protocol": protocol.NativeVersion, "service_version": version.Current}, err)
 	case "summary":
 		summary, err := n.engine.AuthSummary(a)
-		nativeResult(w, summary, err)
+		lanMemberResult(w, summary, err)
 	case "history":
 		page, err := n.engine.AuthHistory(a, relay.HistoryQuery{ID: req.ID, Cursor: req.Cursor, Limit: req.Limit, Pending: req.Pending, Since: req.Since})
-		nativeResult(w, page, err)
+		lanMemberResult(w, page, err)
 	case "peer":
 		b, err := n.engine.Peer(a)
 		b.Runtime = n.engine.Runtimes()[model.OtherParticipant(a.Slot)]
-		nativeResult(w, publicLANBinding(b), err)
+		lanMemberResult(w, publicLANBinding(b), err)
 	case "failure":
-		nativeResult(w, map[string]bool{"recorded": true}, n.engine.Failure(a, req.Error))
+		lanMemberResult(w, map[string]bool{"recorded": true}, n.engine.Failure(a, req.Error))
 	case "park":
-		nativeResult(w, map[string]bool{"enabled": req.Enabled}, n.engine.ParkAs(a, req.Enabled))
+		lanMemberResult(w, map[string]bool{"enabled": req.Enabled}, n.engine.ParkAs(a, req.Enabled))
 	case "leave", "unbind":
-		nativeResult(w, map[string]bool{"unbound": true}, n.engine.UnbindAs(a))
+		lanMemberResult(w, map[string]bool{"unbound": true}, n.engine.UnbindAs(a))
 	case "attachment":
 		value, err := n.engine.SharedAttachment(a, req.ID)
-		nativeResult(w, value, err)
+		lanMemberResult(w, value, err)
 	case "download":
 		h.download(w, r, n, a, req.ID)
 	case "wake-candidate":
 		candidate, err := n.engine.LANWakeCandidate(a, req.ID)
-		nativeResult(w, map[string]any{"candidate": candidate}, err)
+		lanMemberResult(w, map[string]any{"candidate": candidate}, err)
 	case "wake-reserve":
 		err := n.engine.ReserveLANWake(a, req.ID)
 		if errors.Is(err, relay.ErrWakeReserved) {
@@ -157,9 +159,9 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 			writeManagementJSON(w, 409, map[string]string{"error": err.Error(), "code": relay.WakeIneligibleCode})
 			return
 		}
-		nativeResult(w, map[string]bool{"reserved": true}, err)
+		lanMemberResult(w, map[string]bool{"reserved": true}, err)
 	case "wake-record":
-		nativeResult(w, map[string]bool{"recorded": true}, n.engine.RecordLANWake(a, req.ID, req.Outcome, req.Reason))
+		lanMemberResult(w, map[string]bool{"recorded": true}, n.engine.RecordLANWake(a, req.ID, req.Outcome, req.Reason))
 	default:
 		writeManagementError(w, 404, "unknown LAN member operation")
 	}
@@ -186,7 +188,7 @@ func (h *lanHostServer) upload(w http.ResponseWriter, r *http.Request, n *native
 	r.Body = http.MaxBytesReader(w, r.Body, limit+(64<<10))
 	transfer, reset, err := beginLANHTTPTransfer(w, r, n, a)
 	if err != nil {
-		nativeResult(w, nil, err)
+		lanMemberResult(w, nil, err)
 		return
 	}
 	defer reset()
@@ -204,7 +206,7 @@ func (h *lanHostServer) upload(w http.ResponseWriter, r *http.Request, n *native
 	defer part.Close()
 	staged, err := n.media.StageShared(kind, part.FileName(), part, "lan")
 	if err != nil {
-		nativeResult(w, nil, lanAttachmentError(err, kind))
+		lanMemberResult(w, nil, lanAttachmentError(err, kind))
 		return
 	}
 	defer staged.Close()
@@ -220,7 +222,30 @@ func (h *lanHostServer) upload(w http.ResponseWriter, r *http.Request, n *native
 		value, saveErr = staged.Commit()
 		return saveErr
 	})
-	nativeResult(w, value, lanAttachmentError(err, kind))
+	lanMemberResult(w, value, lanAttachmentError(err, kind))
+}
+
+// lanMemberResult answers a remote LAN caller. Only fixed, actionable errors
+// cross this boundary: a path-bearing operating-system failure (a store write
+// error embeds the host's private data root) and the shared-storage quotas are
+// replaced with their stable codes, exactly as the attachment path already
+// sanitized. Engine validation errors carry no private detail and stay useful.
+func lanMemberResult(w http.ResponseWriter, value any, err error) {
+	switch {
+	case err == nil:
+		writeManagementJSON(w, http.StatusOK, value)
+	case errors.Is(err, attachment.ErrSharedQuota):
+		writeManagementJSON(w, http.StatusConflict, map[string]string{"error": "the hosting Room's attachment storage is full", "code": lanshare.SharedQuotaCode})
+	case errors.Is(err, attachment.ErrTemporaryQuota):
+		writeManagementJSON(w, http.StatusConflict, map[string]string{"error": "the hosting Room's temporary upload storage is full", "code": lanshare.TemporaryQuotaCode})
+	default:
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			writeManagementJSON(w, http.StatusConflict, map[string]string{"error": "the hosting Room could not complete this operation", "code": lanshare.HostStorageCode})
+			return
+		}
+		nativeResult(w, value, err)
+	}
 }
 
 // Storage errors may contain the host's private data root. Expose only fixed
@@ -255,7 +280,7 @@ func (h *lanHostServer) download(w http.ResponseWriter, r *http.Request, n *nati
 	defer release()
 	accepted, err := n.engine.SharedAttachment(a, id)
 	if err != nil {
-		nativeResult(w, nil, err)
+		lanMemberResult(w, nil, err)
 		return
 	}
 	value, _, err := n.media.Resolve(id)
@@ -271,7 +296,7 @@ func (h *lanHostServer) download(w http.ResponseWriter, r *http.Request, n *nati
 	defer f.Close()
 	transfer, reset, err := beginLANHTTPTransfer(w, r, n, a)
 	if err != nil {
-		nativeResult(w, nil, err)
+		lanMemberResult(w, nil, err)
 		return
 	}
 	defer reset()

@@ -114,6 +114,15 @@ func safeError(err error) error {
 			// admission is intact, so this must not read as an auth failure.
 			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room is unavailable right now and the membership stays valid; retry after the host resolves it"}
 		}
+		if failure.Code == lanshare.SharedQuotaCode {
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room's attachment storage is full; ask the host owner to free space or start a new Room, then retry the same publication"}
+		}
+		if failure.Code == lanshare.TemporaryQuotaCode {
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Room's temporary upload storage is full; ask the host owner to clear leftover uploads, then retry the same publication"}
+		}
+		if failure.Code == lanshare.HostStorageCode {
+			return &Error{Status: failure.Status, Code: failure.Code, Message: "the hosting Service could not complete this operation; ask the host owner to inspect its Service state, then retry"}
+		}
 		return &Error{Status: failure.Status, Message: ErrUnavailable.Error()}
 	}
 	var transportFailure *url.Error

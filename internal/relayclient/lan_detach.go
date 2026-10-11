@@ -9,7 +9,6 @@ import (
 
 	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/lanshare"
-	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
@@ -44,13 +43,16 @@ func unbindLANLocalOnly(ctx context.Context, root string, o options, out io.Writ
 	if err != nil {
 		return err
 	}
-	release, err := lockSlot(ctx, dir)
+	// The offline escape takes the same mutual-exclusion lock without the
+	// sensitive-directory check, and reads its own attempt with the recovery
+	// tolerance: a copied workspace must stay retirable.
+	release, err := lockSlotRecovery(ctx, dir)
 	if err != nil {
 		return err
 	}
 	defer release()
 	var attempt lanJoinAttempt
-	readErr := privatefile.ReadJSON(filepath.Join(dir, "join-attempt.json"), maxPrivateFileBytes, &attempt)
+	_, readErr := readBindingFile(filepath.Join(dir, "join-attempt.json"), &attempt, readLANAttemptFile, true)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
 	}
@@ -63,7 +65,7 @@ func unbindLANLocalOnly(ctx context.Context, root string, o options, out io.Writ
 		// capability is eligible only when the installed private record names
 		// that exact new identity; no host call or new request is necessary.
 		var staged lanJoinAttempt
-		if err := privatefile.ReadJSON(filepath.Join(dir, lanReplacementAttemptFile), maxPrivateFileBytes, &staged); err != nil {
+		if _, err := readBindingFile(filepath.Join(dir, lanReplacementAttemptFile), &staged, readLANAttemptFile, true); err != nil {
 			return relay.ErrAuth
 		}
 		if staged.PreviousBindID == "" || !matches(staged) {

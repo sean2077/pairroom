@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -257,5 +258,39 @@ func TestFindHarnessAncestorWalksStubbedTable(t *testing.T) {
 	pid, name, ok := findHarnessAncestor()
 	if !ok || pid != 100 || name != "claude" {
 		t.Fatalf("ancestor = %d/%q/%v", pid, name, ok)
+	}
+}
+
+// A local binding whose state.json lost its owner-only boundary (restored from a
+// backup, copied from another machine, an inherited Windows DACL) must still be
+// retirable through the documented offline command from the bound session, not
+// only from a plain terminal.
+func TestRunUnbindLocalOnlyRetiresBindingWithLostOwnerBoundary(t *testing.T) {
+	isolateCaller(t)
+	root := t.TempDir()
+	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSlotState(t, root, "room1", "slot1", 0, "")
+	slotDir := filepath.Join(root, ".pairroom", "rooms", "room1", "slots", "slot1")
+	breakOwnerBoundary(t, filepath.Join(slotDir, "state.json"))
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"unbind", "--repo", root, "--room", "room1", "--slot", "1", "--local-only"}, nil, &out, io.Discard); err != nil {
+		t.Fatalf("wrong-mode offline unbind: %v", err)
+	}
+	if !strings.Contains(out.String(), `"unbound":"local-only"`) {
+		t.Fatalf("local-only receipt: %s", out.String())
+	}
+	// A schema-2 local binding only enforces the owner-only boundary on Unix;
+	// Windows local state is read without a DACL verdict by design.
+	if runtime.GOOS != "windows" && !strings.Contains(out.String(), "not owner-only") {
+		t.Fatalf("recovery was not disclosed: %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(slotDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("state.json still present: %v", err)
 	}
 }

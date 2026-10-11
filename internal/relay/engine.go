@@ -49,6 +49,8 @@ type Engine struct {
 	lanInvites      map[string]LANInvite
 	lanRequests     map[string]LANJoinRequest
 	lanAdmitted     map[string]bool
+	lanAttempts     map[string]int
+	lanKeyAttempts  map[string]int
 	lanMember       *LANMember
 	lanTransfers    lanTransferSet
 	lastUserMessage string
@@ -647,6 +649,12 @@ func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
 		return err
+	}
+	if slot == e.cfg.SharedSlot {
+		// The shared slot's park state belongs to its admitted member: only that
+		// member's own ParkAs may change it, exactly as it is the only side that
+		// can bind it.
+		return errors.New("the LAN peer slot's park state is controlled by its admitted member")
 	}
 	b, ok := e.bindings[slot]
 	if !ok || !b.Active {

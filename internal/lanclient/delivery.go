@@ -8,14 +8,19 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
+// deliveryCapacity bounds the recoverable receipts a collector must still
+// settle. A definitively refused acknowledgement ("unknown") and an attempt a
+// crash left before stdout ("claimed") can never settle, so they must not
+// consume the bound that exists to stop a collector losing track of printable
+// envelopes; a long-lived membership would otherwise wedge forever.
 func deliveryCapacity(r record) error {
-	unresolved := 0
+	recoverable := 0
 	for _, d := range r.Deliveries {
-		if d.State != "acknowledged" {
-			unresolved++
+		if d.State == "stdout" {
+			recoverable++
 		}
 	}
-	if unresolved >= maxDeliveries {
+	if recoverable >= maxDeliveries {
 		return errors.New("LAN delivery journal is full; inspect unresolved receipts before collecting")
 	}
 	return nil
@@ -41,14 +46,9 @@ func (c *Client) retainDelivery(ctx context.Context, auth relay.Auth, claim *lan
 		if !lanshare.ValidID(claim.ID) || !lanshare.ValidID(claim.Receipt) {
 			return relay.ErrAuth
 		}
-		next := make([]delivery, 0, len(r.Deliveries)+1)
-		for _, d := range r.Deliveries {
-			if d.ID == claim.ID {
-				return errors.New("LAN original delivery is already retained; its envelope cannot be printed again")
-			}
-			if len(r.Deliveries) < maxDeliveries || d.State != "acknowledged" {
-				next = append(next, d)
-			}
+		next, err := trimDeliveries(r.Deliveries, claim.ID)
+		if err != nil {
+			return err
 		}
 		if len(next) >= maxDeliveries {
 			return errors.New("LAN delivery receipt limit exceeded")
@@ -57,6 +57,23 @@ func (c *Client) retainDelivery(ctx context.Context, auth relay.Auth, claim *lan
 		return nil
 	})
 	return err
+}
+
+// trimDeliveries bounds the retained receipts. Only a stdout receipt can still
+// settle: acknowledged receipts are settled, and a refused or crashed attempt
+// never will. A full journal therefore sheds those before refusing new work.
+func trimDeliveries(list []delivery, nextID string) ([]delivery, error) {
+	next := make([]delivery, 0, len(list)+1)
+	trim := len(list) >= maxDeliveries
+	for _, d := range list {
+		if d.ID == nextID {
+			return nil, errors.New("LAN original delivery is already retained; its envelope cannot be printed again")
+		}
+		if !trim || d.State == "stdout" {
+			next = append(next, d)
+		}
+	}
+	return next, nil
 }
 
 // A claim response alone never implies stdout. Only the authenticated local
