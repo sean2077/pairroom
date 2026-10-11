@@ -31,33 +31,44 @@ func TestNativeSkillCostAndCompleteOutput(t *testing.T) {
 		"resolve-before-collect":           "resolve its result before another collector",
 		"rehang-until-unbind-or-human":     "rehang after expiry unless unbound or the human stops it",
 		"quiet-not-stop":                   "a quiet Room is not a stop request",
-		"poll-only-no-idle-collector":      "In a poll-only harness, do not keep a background wait or poll just to stay reachable",
-		"poll-only-end-turn-path":          "Bounded Stop park may deliver queued input; Service wake needs a live local observer",
+		"poll-only-no-idle-collector":      "Poll-only: no background wait or poll just to stay reachable",
+		"poll-only-end-turn-path":          "bounded Stop park may receive queued input, Service wake needs a live local observer",
 		"invisible-stdout-suppresses-wake": "unseen stdout can consume input and suppress Service wake",
-		"active-task-foreground":           "During active work, an imminent reply warrants one foreground wait/exchange inside the tool limit",
-		"end-after-empty":                  "after an empty timeout, end the turn",
+		"active-task-foreground":           "An imminent reply during active work warrants one foreground wait/exchange inside the tool limit",
+		"end-after-empty":                  "end the turn after an empty timeout",
 		"cli-not-harness-budget":           "one-hour default is a transport budget, not a harness lifetime guarantee",
-		"bounded-park":                     "Bounded Stop park may deliver queued input",
-		"wake-rate-fail-closed":            "Wake is rate-limited/fail-closed",
-		"unattempted-recheck-only":         "only unattempted cooldown work is rechecked",
-		"no-reserved-retry":                "reserved effects are never auto-retried",
-		"no-invisible-receiver":            "Without a collector, hook or observer, input stays at the host",
-		"failed-wake-queued":               "Failed wake leaves input queued for collection or a human nudge",
-		"no-agent-vendor-wake":             "never execute printed vendor wake commands",
+		"bounded-park":                     "bounded Stop park may receive queued input",
+		"wake-rate-fail-closed":            "wake is rate-limited/fail-closed",
+		"unattempted-recheck-only":         "with only unattempted cooldown work rechecked",
+		"no-reserved-retry":                "reserved effects never auto-retried",
+		"no-invisible-receiver":            "Without a collector, hook or observer, or after a failed wake, input stays queued for collection or a human nudge",
+		"failed-wake-queued":               "Without a collector, hook or observer, or after a failed wake, input stays queued for collection or a human nudge",
+		"no-agent-vendor-wake":             "Never execute printed vendor wake commands",
 	})
 	// Restoring the file-workflow review guidance that the rewrite dropped
 	// (findings need location/evidence/impact; pin base/head SHAs and the dirty
 	// hash; retest fixes at the new revision and report unrun tests) costs about
 	// 220 bytes, so the compact operating rules were held to 5250 rather than
-	// deleting another safety clause. Joining a Room the human names (a complete
-	// command run unchanged with its selectors, exact Room ID, slot inference, no
-	// guess or implicit create/replace, a Room ID is not an invitation, and an
-	// explicit join intent outranking generic preflight create guidance) adds
-	// about 360 bytes. Compressing every non-clause sentence across the file
-	// returned about 160 of them; the cap carries the remaining 171 so no
-	// reachability, LAN, unknown or review clause had to go. Reaching 5250 again
-	// needs a rule merged or dropped, not more wording.
-	if len(skillContent) > 5430 {
-		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5430", len(skillContent))
+	// deleting another safety clause.
+	//
+	// Joining a Room the human names adds the rules a session needs for a Room ID
+	// the human supplied: run a given command unchanged with its selectors, fall
+	// back to pairroom relay bind --room, let the CLI pick the slot, never guess,
+	// create or replace implicitly, a Room ID is not an invitation, and an
+	// explicit join intent outranks generic preflight create guidance. Naming
+	// every relay subcommand with its `pairroom relay` prefix, and the
+	// description's join trigger, are part of the same work.
+	//
+	// Every non-clause sentence in the file was compressed and the duplicated
+	// rules were merged (evidence ID reuse; queued input without a collector or
+	// after a failed wake; bounded Stop park). That returned 234 of the 427 bytes
+	// those additions cost. The remaining 165 are boundary sentences: this file
+	// is now mostly asserted clause text, so closing the gap needs a boundary
+	// merged or dropped (section labels, the Gemini no-Service-wake reminder that
+	// Grok already carries, or the numeric-slot label the --slot rules imply)
+	// rather than more wording. Do not raise this cap further without that
+	// decision.
+	if len(skillContent) > 5420 {
+		t.Fatalf("skill grew to %d bytes; compact operating rules should fit in 5420", len(skillContent))
 	}
 }
