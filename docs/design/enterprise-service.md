@@ -87,8 +87,8 @@ Suggested data domains are identity/membership, sessions/device grants, logical 
 An enterprise command transaction must:
 
 1. Acquire the appropriate ownership, authorization and Room consistency guards in documented order.
-2. Check live user/device/membership/scope and the command's expected binding/peer generation.
-3. Recover an authorized existing idempotent result, otherwise validate current state and prepare events.
+2. Check live user/device/membership/scope before disclosing any stored result.
+3. Recover an authorized existing idempotent result first; for a new operation, then validate current state and the expected binding/peer generation and prepare events.
 4. Append contiguous Room sequence entries and update required control/projection/receipt records atomically.
 5. Commit before publishing a notification, returning a successful write or delivering an envelope; apply or reload the in-memory projection only after the outcome is known.
 
