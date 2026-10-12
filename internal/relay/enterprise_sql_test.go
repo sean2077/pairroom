@@ -499,6 +499,109 @@ func TestEnterpriseDeliveringHistoryReplayAndCloseNoReap(t *testing.T) {
 	}
 }
 
+// conflictHookPort decorates the real port: once armed, the first revision
+// conflict returned by a real commit triggers the test hook — the
+// deterministic mid-command revocation point (test-only, no production
+// surface).
+type conflictHookPort struct {
+	inner relay.EnterprisePort
+	armed atomic.Bool
+	hook  func()
+}
+
+func (p *conflictHookPort) CommitHumanSend(ctx context.Context, cmd relay.EnterpriseSendCommand) (relay.EnterpriseSendResult, error) {
+	result, err := p.inner.CommitHumanSend(ctx, cmd)
+	if err != nil && p.armed.Load() {
+		var commandErr *relay.EnterpriseCommandError
+		if errors.As(err, &commandErr) && commandErr.Class == relay.EnterpriseClassRevisionConflict {
+			p.armed.Store(false)
+			p.hook()
+		}
+	}
+	return result, err
+}
+
+func (p *conflictHookPort) ResolveHumanSend(ctx context.Context, auth relay.EnterpriseAuth, roomID, clientID string, intent relay.EnterpriseSendIntent) (relay.EnterpriseSendResult, error) {
+	return p.inner.ResolveHumanSend(ctx, auth, roomID, clientID, intent)
+}
+
+func (p *conflictHookPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseAuth, roomID string) (relay.EnterpriseRoomSnapshot, error) {
+	return p.inner.ReadonlySnapshot(ctx, auth, roomID)
+}
+
+// A per-request authorization refusal during the conflict rebuild must not
+// poison the shared Room: the revoked user is refused, the engine stays
+// healthy, nothing extra is written or disclosed, and another live member
+// rebuilds through its own auth and commits on the same engine.
+func TestEnterpriseRebuildAuthorizationRefusalDoesNotPoisonRoom(t *testing.T) {
+	dsn := sqltest.RequireDSN(t)
+	schema, _ := sqltest.CreateSchema(t, dsn)
+	admin := sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+	dbStore := openSQLStore(t, dsn, schema)
+	ctx := context.Background()
+
+	port := &conflictHookPort{inner: sqlstore.NewRoomPort(dbStore)}
+	port.hook = func() {
+		if _, err := admin.Exec(ctx, `UPDATE users SET disabled = true WHERE user_id = 'u-owner2'`); err != nil {
+			t.Error(err)
+		}
+	}
+	port.armed.Store(true)
+	engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	if _, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: "p1", Text: "first", To: model.ActorSlot2}); err != nil {
+		t.Fatal(err)
+	}
+	// Advance the store behind the engine so the next command meets a real
+	// stale CAS, whose rebuild will run under the revoked user.
+	direct := sqlstore.HumanSendCommand{
+		Auth:             sqlstore.AuthContext{Deployment: "dep-test", UserID: "u-owner"},
+		RoomID:           "room-1",
+		ClientID:         "direct-2",
+		Intent:           sqlstore.HumanSendIntent{To: "slot2", Text: "direct body"},
+		ExpectedRevision: 1,
+		Fact:             craftHumanSendCandidate("u-owner", "direct-2", "slot2", "direct body"),
+	}
+	if result, err := dbStore.CommitHumanSend(ctx, direct); err != nil || result.Seq != 2 {
+		t.Fatalf("direct kernel commit: %+v %v", result, err)
+	}
+
+	countRows := func() (int64, int64, int64) {
+		var events, operations, audits int64
+		if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM room_events), (SELECT count(*) FROM operations), (SELECT count(*) FROM audit)`).Scan(&events, &operations, &audits); err != nil {
+			t.Fatal(err)
+		}
+		return events, operations, audits
+	}
+	before := func() [3]int64 { e, o, a := countRows(); return [3]int64{e, o, a} }()
+
+	_, err = engine.ExecuteHumanSend(ctx, executeAuth("u-owner2"), relay.SendRequest{ID: "p2", Text: "revoked mid command", To: model.ActorSlot2})
+	var commandErr *relay.EnterpriseCommandError
+	if !errors.As(err, &commandErr) || commandErr.Class != relay.EnterpriseClassAuthorization {
+		t.Fatalf("revoked user's rebuild refusal: %v", err)
+	}
+	if engine.Fatal() != nil {
+		t.Fatalf("a per-request authorization refusal poisoned the shared Room: %v", engine.Fatal())
+	}
+	if after := func() [3]int64 { e, o, a := countRows(); return [3]int64{e, o, a} }(); after != before {
+		t.Fatalf("refusal wrote state: %v -> %v", before, after)
+	}
+
+	// A still-live member continues on the same engine: its own auth rebuilds
+	// and its command commits on the fresh revision.
+	message, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: "p3", Text: "still alive", To: model.ActorSlot2})
+	if err != nil {
+		t.Fatalf("a live member could not continue after a peer's revocation: %v", err)
+	}
+	if message.ID == "" || engine.Snapshot().Sequence != 3 {
+		t.Fatalf("continuation: message=%+v sequence=%d", message, engine.Snapshot().Sequence)
+	}
+}
+
 // Two real concurrent commands from two users share one engine gate: apply
 // and notification order follow the commit order.
 func TestEnterpriseDoubleConcurrencyOrderedByGate(t *testing.T) {

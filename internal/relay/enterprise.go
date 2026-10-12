@@ -42,6 +42,7 @@ const (
 
 	EnterpriseClassRevisionConflict = "revision_conflict"
 	EnterpriseClassPayloadConflict  = "payload_conflict"
+	EnterpriseClassAuthorization    = "authorization"
 )
 
 // ErrEnterpriseReadOnly rejects every legacy mutator on an enterprise engine
@@ -524,6 +525,15 @@ func (e *Engine) buildEnterpriseHumanSendLocked(auth EnterpriseAuth, req SendReq
 func (e *Engine) rebuildEnterpriseLocked(ctx context.Context, auth EnterpriseAuth) error {
 	snapshot, err := e.enterprisePort.ReadonlySnapshot(ctx, auth, e.cfg.RoomID)
 	if err != nil {
+		var commandErr *EnterpriseCommandError
+		if errors.As(err, &commandErr) && commandErr.Outcome == EnterpriseOutcomeRefused && commandErr.Class == EnterpriseClassAuthorization {
+			// A definite per-request authorization refusal (for example the
+			// command's own user was revoked between attempts) must not poison
+			// the shared Room: other live members keep their existing ACL.
+			// Room-level faults — state_invalid, lease_lost, incomplete or
+			// unknown results and every other error — stay fail-closed below.
+			return err
+		}
 		e.mu.Lock()
 		e.fatal = err
 		e.signal()
@@ -586,7 +596,10 @@ func (e *Engine) CloseContext(ctx context.Context) error {
 	defer func() { <-e.gate }()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := ctx.Err(); err != nil {
+	// Re-check the effective operation context: it is the earlier of the
+	// caller's deadline and the close budget, so an expiry racing the token
+	// (including the internal budget's) never claims the close.
+	if err := opCtx.Err(); err != nil {
 		return err
 	}
 	if e.closed {

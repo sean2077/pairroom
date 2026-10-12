@@ -403,21 +403,21 @@ func TestEnterpriseConflictRebuildsOnce(t *testing.T) {
 	}
 }
 
-// A read-only rebuild that advances the projection wakes WaitChanges waiters
-// and stays silent: no OnAppend/OnAttention on the rebuild path.
+// A read-only rebuild that advances the projection closes the previous change
+// channel — the deterministic signal proof — and wakes a real WaitChanges
+// waiter, staying silent: no OnAppend/OnAttention on the rebuild path. A
+// per-request authorization refusal after the rebuild must not poison the
+// Room.
 func TestEnterpriseRebuildSignalsWaitersSilently(t *testing.T) {
 	pushed := originalMessageFact(t, "relay-pushed2", "pushed2", "peer fact")
-	port := &fakePort{snapshot: emptySnapshot()}
+	port := &fakePort{snapshot: emptySnapshot()} // constructor: sequence 0
 	conflicts := 0
 	port.commitFn = func(cmd EnterpriseSendCommand) (EnterpriseSendResult, error) {
 		conflicts++
 		if conflicts == 1 {
 			return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: EnterpriseClassRevisionConflict, Err: errors.New("moved")}
 		}
-		return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: "authorization", Err: errors.New("denied after rebuild")}
-	}
-	port.snapFn = func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error) {
-		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{pushed}, Seq: 1, Revision: 1}, nil
+		return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: EnterpriseClassAuthorization, Err: errors.New("denied after rebuild")}
 	}
 	var appends, attentions int
 	engine, err := OpenEnterprise(context.Background(), Config{
@@ -430,25 +430,39 @@ func TestEnterpriseRebuildSignalsWaitersSilently(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	// Only the rebuild consumes the advanced snapshot.
+	port.snapFn = func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error) {
+		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{pushed}, Seq: 1, Revision: 1}, nil
+	}
 
-	woke := make(chan bool, 1)
-	go func() {
-		// Wait for a change after cursor 0; the rebuild advances to 1.
-		err := engine.WaitChanges(context.Background(), 0)
-		woke <- err == nil
-	}()
-	time.Sleep(30 * time.Millisecond) // let the waiter park
+	// Capture the live change channel under the lock: the rebuild must close
+	// exactly this one to signal.
+	engine.mu.Lock()
+	previousChannel := engine.changed
+	engine.mu.Unlock()
+
+	woke := make(chan error, 1)
+	go func() { woke <- engine.WaitChanges(context.Background(), 0) }()
 
 	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "w1", Text: "wake", To: model.ActorSlot2}); err == nil {
 		t.Fatal("retry after rebuild unexpectedly succeeded")
 	}
+	if engine.Fatal() != nil {
+		t.Fatalf("a per-request authorization refusal poisoned the room: %v", engine.Fatal())
+	}
 	select {
-	case ok := <-woke:
-		if !ok {
-			t.Fatal("waiter did not wake on the rebuild")
+	case <-previousChannel:
+		// The rebuild closed the previous channel: the signal is proven.
+	default:
+		t.Fatal("rebuild did not close the previous change channel")
+	}
+	select {
+	case werr := <-woke:
+		if werr != nil {
+			t.Fatalf("waiter woke with %v", werr)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("rebuild did not signal WaitChanges")
+		t.Fatal("waiter did not wake on the rebuild")
 	}
 	if appends != 0 || attentions != 0 {
 		t.Fatalf("rebuild notified: appends=%d attentions=%d", appends, attentions)
