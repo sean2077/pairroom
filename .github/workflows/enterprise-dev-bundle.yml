@@ -1,0 +1,44 @@
+name: Enterprise development verification bundle
+
+on:
+  push:
+    branches: ['feat/enterprise-service']
+    paths: ['.github/workflows/enterprise-dev-bundle.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: Verify and package public development inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_go_versions.py minimum go.mod
+          out="$RUNNER_TEMP/pairroom-dev-bundle"
+          mkdir -p "$out"
+          git archive --format=tar HEAD | gzip > "$out/source.tar.gz"
+          go version > "$out/toolchain.txt"
+          git rev-parse HEAD > "$out/revision.txt"
+          go mod download
+          go mod verify
+          tar -C "$(go env GOROOT)" -czf "$out/go.tar.gz" .
+          tar -C "$(go env GOMODCACHE)" -czf "$out/modules.tar.gz" .
+          (cd "$out" && sha256sum *.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pairroom-development-inputs
+          path: ${{ runner.temp }}/pairroom-dev-bundle/
+          if-no-files-found: error
+          retention-days: 3
