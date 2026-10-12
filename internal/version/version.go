@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	Current     = "5.15.0"
+	Current     = "5.16.0"
 	StoreSchema = 14
 	// LANStoreSchema preserves Native v8 Rooms with runtime-derived handles.
 	LANStoreSchema = 13

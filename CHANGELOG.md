@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.16.0] — 2026-10-12
+
 ### Added
 
 - Create Native Rooms with two empty slots in Management or through `relay bind --create`, without Runtime, pair-profile, Provider or model selections. The joining harness supplies its actual Runtime; omitted local slots are assigned atomically. LAN still uses one local owner and one admitted remote guest, with no guest Service requirement.
