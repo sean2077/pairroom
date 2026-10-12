@@ -20,7 +20,7 @@ jobs:
   verification-source:
     name: Reproducible verification inputs
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,15 +35,43 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/check_go_versions.py minimum go.mod
-          mkdir -p "${RUNNER_TEMP}/enterprise-verification-inputs"
-          git archive --format=tar HEAD | gzip > "${RUNNER_TEMP}/enterprise-verification-inputs/source.tar.gz"
-          go mod download
-          tar -czf "${RUNNER_TEMP}/enterprise-verification-inputs/toolchain.tar.gz" -C "$(go env GOROOT)" .
-          tar -czf "${RUNNER_TEMP}/enterprise-verification-inputs/modules.tar.gz" -C "$(go env GOMODCACHE)" cache/download
-          git rev-parse HEAD > "${RUNNER_TEMP}/enterprise-verification-inputs/revision.txt"
-          go version >> "${RUNNER_TEMP}/enterprise-verification-inputs/revision.txt"
-          cd "${RUNNER_TEMP}/enterprise-verification-inputs"
-          sha256sum source.tar.gz toolchain.tar.gz modules.tar.gz > SHA256SUMS
+          output="${RUNNER_TEMP}/enterprise-verification-inputs"
+          mkdir -p "$output" "${RUNNER_TEMP}/enterprise-dependencies"
+          git archive --format=tar HEAD | gzip > "$output/source.tar.gz"
+          git archive HEAD | tar -x -C "${RUNNER_TEMP}/enterprise-dependencies"
+          (
+            cd "${RUNNER_TEMP}/enterprise-dependencies"
+            mkdir -p internal/enterprise
+            printf 'package enterprise\nimport (\n _ "github.com/coreos/go-oidc/v3/oidc"\n _ "github.com/jackc/pgx/v5/pgxpool"\n _ "golang.org/x/oauth2"\n)\n' > internal/enterprise/verification_inputs.go
+            go get github.com/coreos/go-oidc/v3@v3.20.0 github.com/jackc/pgx/v5@v5.11.0 golang.org/x/oauth2@v0.36.0
+            go mod tidy
+            go mod download all
+            cp go.mod "$output/proposed.go.mod"
+            cp go.sum "$output/proposed.go.sum"
+            go list -m -json all > "$output/proposed.modules.json"
+          )
+          tar -czf "$output/modules.tar.gz" -C "$(go env GOMODCACHE)" cache/download
+          git rev-parse HEAD > "$output/revision.txt"
+          go version >> "$output/revision.txt"
+          GOBIN="$output/bin" make lint-install
+          cd "$output"
+          sha256sum source.tar.gz modules.tar.gz proposed.go.mod proposed.go.sum bin/golangci-lint > SHA256SUMS
+      - name: Collect isolated PostgreSQL test runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/enterprise-verification-inputs"
+          root="${RUNNER_TEMP}/postgres-runtime"
+          mkdir -p "$root/usr/lib" "$root/usr/share"
+          docker pull postgres:17-bookworm
+          id="$(docker create postgres:17-bookworm)"
+          trap 'docker rm "$id" >/dev/null' EXIT
+          docker cp "$id:/usr/lib/postgresql" "$root/usr/lib/"
+          docker cp "$id:/usr/share/postgresql" "$root/usr/share/"
+          docker cp "$id:/usr/lib/x86_64-linux-gnu" "$root/usr/lib/"
+          tar -czf "$output/postgres.tar.gz" -C "$root" .
+          cd "$output"
+          sha256sum postgres.tar.gz >> SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: enterprise-verification-inputs
