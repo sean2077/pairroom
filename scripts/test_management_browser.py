@@ -19,6 +19,27 @@ from playwright.async_api import async_playwright, expect
 from test_room_browser import ROOT, collaboration_fixture
 
 
+async def assert_checkbox_row(page, selector: str) -> None:
+    """A choice stays compact and beside its text, including wrapped labels."""
+    choice = page.locator(selector)
+    await expect(choice).to_be_visible()
+    geometry = await choice.evaluate("""input => {
+      const label = input.closest('label');
+      const text = label.querySelector('span');
+      const rect = node => {
+        const r = node.getBoundingClientRect();
+        return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};
+      };
+      return {input:rect(input),text:rect(text),label:rect(label)};
+    }""")
+    control, text, label = (geometry[key] for key in ('input', 'text', 'label'))
+    assert 12 <= control['width'] <= 20 and 12 <= control['height'] <= 20, f'{selector} expanded: {geometry}'
+    assert abs(control['width'] - control['height']) <= 1, f'{selector} is not square: {geometry}'
+    assert 0 <= text['left'] - control['right'] <= 16, f'{selector} is not beside its label: {geometry}'
+    assert control['top'] < text['bottom'] and text['top'] < control['bottom'], f'{selector} stacked above its label: {geometry}'
+    assert text['right'] <= label['right'] + 1, f'{selector} label overflow: {geometry}'
+
+
 def fixture_html() -> str:
     html = (ROOT / 'internal/service/assets/index.html').read_text(encoding='utf-8')
 
@@ -605,6 +626,9 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
         # validation, which belong to explicit Embedded creation.
         await page.locator('#room-host-mode').select_option('embedded')
         await expect(page.locator('#room-submit')).to_be_enabled()
+        for actor in ('slot1', 'slot2'):
+            for mode in ('new', 'existing'):
+                await assert_checkbox_row(page, f'input[name="{actor}-mode"][value="{mode}"]')
 
     async def close_dialog():
         await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
@@ -619,6 +643,10 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     assert not await page.locator('#room-collaboration-mode').is_visible()
     assert not await page.locator('input[name="slot1-mode"]').first.is_visible()
     await page.locator('#pair-profile-name').fill('Daily code pair')
+    await assert_checkbox_row(page, '#pair-profile-default')
+    profile_name = await page.locator('#pair-profile-name').bounding_box()
+    name_label = await page.locator('#pair-profile-name').evaluate('input=>input.closest("label").getBoundingClientRect().width')
+    assert profile_name and profile_name['width'] >= name_label - 1, 'profile name input lost its full-width field layout'
     await page.locator('#pair-profile-default').check()
     await page.locator('#slot1-runtime').select_option('codex')
     for actor, model, effort in [('slot1', 'planner-model', 'high'), ('slot2', 'executor-model', 'low')]:
@@ -704,6 +732,7 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     for width in [320, 390]:
         await page.set_viewport_size({'width': width, 'height': 844})
         assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth'), f'profile editor overflow at {width}'
+        await assert_checkbox_row(page, '#pair-profile-default')
     await expect(page.locator('#room-submit')).to_have_text('保存组合配置')
     await expect(page.locator('#room-dialog-title')).to_have_text('编辑组合配置')
     await page.screenshot(path=str(artifacts / 'pair-profile-editor-mobile-zh-CN.png'))
@@ -734,6 +763,7 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
     await context.close()
     return {'pair_profiles_crud_default_and_overrides': True, 'pair_profiles_without_project': True,
             'pair_profiles_preserve_unknown_effort_and_missing_provider': True, 'pair_profiles_responsive_bilingual': True,
+            'pair_profile_checkbox_and_name_geometry': True,
             'pair_profiles_strict_csp': not in_page_fixture, 'pair_profiles_page_errors': errors}
 
 
@@ -846,6 +876,9 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         assert '主导者' not in await page.locator('#slot1-responsibility-label').inner_text()
         await page.set_viewport_size({'width':390, 'height':844})
         assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth')
+        for actor in ('slot1', 'slot2'):
+            for mode in ('new', 'existing'):
+                await assert_checkbox_row(page, f'input[name="{actor}-mode"][value="{mode}"]')
         await page.screenshot(path=str(artifacts / 'creation-custom-mobile-zh-CN.png'))
         await page.set_viewport_size({'width':1440, 'height':1000})
         await page.evaluate("PairRoomI18n.setLang('en')")
@@ -905,6 +938,10 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         confirm_title = await page.locator('#confirm-title').text_content()
         assert 'Review workspace' in confirm_title
         confirm_ack = await page.locator('#confirm-ack-label').text_content()
+        await assert_checkbox_row(page, '#confirm-ack')
+        await page.set_viewport_size({'width': 390, 'height': 844})
+        await assert_checkbox_row(page, '#confirm-ack')
+        await page.set_viewport_size({'width': 1440, 'height': 1000})
         await page.locator('#confirm-ack').check()
         await page.evaluate("PairRoomI18n.setLang('zh-CN')")
         await page.wait_for_timeout(120)
@@ -929,6 +966,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
                 size = await page.locator('#add-project-button').bounding_box()
                 assert size and size['height'] <= 48 and size['x'] + size['width'] <= width, f'compact action clipped or expanded at {width}: {size}'
             await page.set_viewport_size({'width': 390, 'height': 844})
+            await assert_checkbox_row(page, '.room-select-control input >> nth=0')
             await page.wait_for_timeout(80)
             await page.screenshot(path=str(artifacts / f'management-mobile-{theme}-{language}.png'))
             await page.set_viewport_size({'width': 1440, 'height': 1000})

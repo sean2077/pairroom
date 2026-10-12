@@ -649,7 +649,7 @@ button:disabled { cursor: not-allowed; opacity: .47; }
 }
 .filter-chip.active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 
-input, select, textarea {
+input:where(:not([type="checkbox"]):not([type="radio"])), select, textarea {
   width: 100%;
   min-height: var(--control-h);
   border: 1px solid var(--line-strong);
@@ -664,6 +664,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 input:disabled, select:disabled { background: var(--bg-soft); color: var(--subtle); cursor: not-allowed; }
 input::placeholder, textarea::placeholder { color: var(--subtle); }
 select { appearance: auto; }
+/* Choice controls keep their native shape instead of inheriting text-field sizing. */
+input:is([type="checkbox"], [type="radio"]) {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+input:is([type="checkbox"], [type="radio"]):enabled { cursor: pointer; }
+.checkbox-label { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+.checkbox-label:has(input:disabled) { cursor: not-allowed; }
+.checkbox-label > span { min-width: 0; overflow-wrap: anywhere; }
 .field-label { display: block; margin-bottom: 6px; color: var(--text); font-size: 11px; font-weight: 700; }
 .field-help { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
 .form-grid { display: grid; gap: 14px; }
@@ -882,7 +896,7 @@ select { appearance: auto; }
 .choice-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; padding: 9px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
 .choice-card:hover { border-color: var(--line-strong); background: var(--bg-soft); }
 .choice-card:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
-.choice-card input { width: auto; min-height: auto; margin: 3px 0 0; box-shadow: none; }
+.choice-card input { margin: 3px 0 0; box-shadow: none; }
 .choice-card span { display: grid; }
 .choice-card strong { color: var(--text); font-size: 10px; }
 .choice-card small { color: var(--muted); font-size: 8px; }
@@ -1111,11 +1125,10 @@ body[data-density="compact"] .stat-card { min-height: 98px; }
 /* Agent pair profiles reuse the Room Agent fields; profile actions wrap instead
    of squeezing names or overflowing the Settings panel on narrow windows. */
 .pair-profile-controls { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-.pair-profile-controls > label, .pair-profile-metadata > label { display: grid; gap: 6px; }
+.pair-profile-controls > label:not(.checkbox-label), .pair-profile-metadata > label { display: grid; gap: 6px; }
 .pair-profile-controls summary { cursor: pointer; }
 .pair-profile-metadata { display: grid; gap: 12px; margin-top: 12px; }
 .pair-profile-metadata > .pair-profile-default { display: flex; align-items: center; gap: 8px; }
-.pair-profile-default input { flex: 0 0 auto; width: auto; }
 .pair-profile-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .pair-profile-controls [hidden], .pair-profile-metadata [hidden] { display: none !important; }
 .setting-row[data-pair-profile-id] { flex-wrap: wrap; gap: 12px; }

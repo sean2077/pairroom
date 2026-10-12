@@ -12,6 +12,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
+- Keep Management checkbox and radio controls compact and aligned with their labels, including LAN invitations, listener settings, Agent pair defaults, Room selection and confirmations, instead of inheriting full-width text-field sizing.
 - Reject a Native `report` carrying more than one expected peer generation without appending any fact, name the peer generation in the duplicate-`--id` conflict message, and document the explicit `send` `peer_changed` error separately from the terminal Stop `peer_changed` publication.
 
 ### Changed
