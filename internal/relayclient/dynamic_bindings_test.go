@@ -530,3 +530,24 @@ func TestDynamicLostSendReceiptRecoversOriginalGenerationAfterPause(t *testing.T
 		t.Fatal("receipt recovery changed the accepted message")
 	}
 }
+
+func TestDynamicSendIDConflictNamesPeerGeneration(t *testing.T) {
+	f := newDynamicCLIWire(t)
+	if _, err := f.run(t, model.RuntimeClaude, "source", "bind"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(t, model.RuntimeCodex, "peer", "bind"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(t, model.RuntimeClaude, "source", "send", "--id", "conflict", "--peer-generation", "1", "--text", "original body"); err != nil {
+		t.Fatal(err)
+	}
+	// Only the peer generation changes; the body stays identical.
+	_, err := f.run(t, model.RuntimeClaude, "source", "send", "--id", "conflict", "--peer-generation", "2", "--text", "original body")
+	if err == nil || !strings.Contains(err.Error(), "--id conflict") || !strings.Contains(err.Error(), "peer generation") || !strings.Contains(err.Error(), "nothing new was published") {
+		t.Fatalf("duplicate --id conflict did not name the peer generation: %v", err)
+	}
+	if messages := f.engine.Snapshot().Messages; len(messages) != 1 || messages[0].TargetGeneration != 1 {
+		t.Fatal("conflicting retry published a second message")
+	}
+}

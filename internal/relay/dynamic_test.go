@@ -531,3 +531,29 @@ func TestDynamicNativeIdentityDoesNotLeakPrivateMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestDynamicNativeReportAcceptsAtMostOneExpectedGeneration(t *testing.T) {
+	e, _ := dynamicEngine(t, "")
+	source := dynamicBind(t, e, "", dynamicRequest("report-arity-source", model.RuntimeClaude))
+	peer := dynamicBind(t, e, "", dynamicRequest("report-arity-peer", model.RuntimeCodex))
+	before := e.Sequence()
+	if _, err := e.Report(source, 1, "ambiguous context @agent2", peer.Generation, peer.Generation); err == nil {
+		t.Fatal("report accepted more than one expected peer generation")
+	}
+	if e.Sequence() != before || len(e.Snapshot().Messages) != 0 {
+		t.Fatal("rejected report appended a fact or forwarded a message")
+	}
+	// The supported arities stay wire-compatible and the sequence is not consumed.
+	accepted, err := e.Report(source, 1, "one context @agent2", peer.Generation)
+	if err != nil || accepted.Message == nil || accepted.ExpectedPeerGeneration != peer.Generation || accepted.Message.TargetGeneration != peer.Generation || accepted.Outcome != "" {
+		t.Fatalf("single-generation report = %+v, %v", accepted, err)
+	}
+	// An accepted report is recovered by its own receipt whatever arity the retry uses.
+	recovered, err := e.Report(source, 1, "retry text @agent2", peer.Generation, peer.Generation)
+	if err != nil || recovered.ReportSeq != 1 || recovered.Message == nil || recovered.Message.ID != accepted.Message.ID {
+		t.Fatalf("accepted receipt recovery = %+v, %v", recovered, err)
+	}
+	if e.Sequence() != before+1 {
+		t.Fatal("idempotent recovery appended another fact")
+	}
+}

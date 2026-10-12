@@ -781,6 +781,13 @@ func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration 
 		e.noteLANActivityLocked(a)
 		return clonePublication(existing), nil
 	}
+	// An already accepted report is recovered by its own receipt above, so this
+	// guard never blocks idempotent recovery. A new report must name at most one
+	// expected peer generation: any other arity would be silently treated as "no
+	// expectation" and terminate as peer_changed without reaching a peer.
+	if len(expectedPeerGeneration) > 1 {
+		return Publication{}, errors.New("report accepts at most one expected peer generation")
+	}
 	last := e.lastReport[bindingKey(a.BindID, a.Generation)]
 	if seq <= last {
 		return Publication{}, errors.New("report_seq regressed; reconcile the original publication")

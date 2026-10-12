@@ -448,7 +448,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor, "expected_peer_generation": expectedPeerGeneration}, &msg)
 		if relayErrorCode(err) == relay.SendPayloadConflictCode {
 			// Settled, not uncertain: this ID already names an accepted message.
-			return fmt.Errorf("--id %s was already used for a different message (body, target, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
+			return fmt.Errorf("--id %s was already used for a different message (body, target, peer generation, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
 		}
 		if relayErrorCode(err) == relay.PeerChangedCode {
 			return fmt.Errorf("peer changed; nothing was published for --id %s. This text was addressed to peer generation %d. Inspect relay peer, then explicitly send the intended text with --peer-generation N and a new --id", o.id, expectedPeerGeneration)

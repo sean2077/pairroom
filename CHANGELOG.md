@@ -10,6 +10,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 - Give new Native Rooms protocol v9 and stable `@agent1` / `@agent2` handles, including equal-Runtime pairs and explicit participant replacement. Bindings own actual Runtime per generation; message history retains immutable source Runtime and generation. Participant cards display empty or actual binding state and offer a separate, explicit replacement command.
 - Fence Agent publication by the originating peer generation. A changed peer never receives an old Stop/WAL reply: `peer_changed` stays terminal local evidence, and automatic publication pauses in the old native session. After inspection, a new foreground `send` / `exchange --peer-generation N --id NEW` can explicitly address the new peer; foreground wait remains available and same-session replacement cannot reset automatic context.
 
+### Fixed
+
+- Reject a Native `report` carrying more than one expected peer generation without appending any fact, name the peer generation in the duplicate-`--id` conflict message, and document the explicit `send` `peer_changed` error separately from the terminal Stop `peer_changed` publication.
+
 ### Changed
 
 - Preserve existing typed Native Rooms on v8 with their runtime-derived handles and Embedded on v7. `pairroom protocol` defaults to v9; `--legacy-native` prints the old Native contract. Native creation no longer reads saved Agent pairs or Provider catalogs, and `--peer-runtime` is removed. Embedded selection and configuration behavior remains unchanged.
