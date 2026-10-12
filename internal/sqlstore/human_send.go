@@ -35,6 +35,14 @@ const (
 	// validID): a bounded token free of separators, control characters and
 	// surrounding whitespace.
 	humanSendMaxTokenBytes = 256
+	// humanSendEncodingBudget bounds the complete stored encoding of a
+	// human_send fact: 2 MiB covers the worst-case JSON escaping of a maximal
+	// 256 KiB text (six bytes per escaped byte) plus fixed metadata. The
+	// schema CHECK admits this bound; the append_fact entry keeps its original
+	// 262144-byte code gate untouched. A candidate exceeding the budget is
+	// refused with invalid_fact and zero writes (unreachable through the
+	// validated text limit; the check is the outer defense).
+	humanSendEncodingBudget = 2 << 20
 )
 
 // HumanSendIntent is the typed stable intent of one human send. The
@@ -107,6 +115,7 @@ func (s *Store) CommitHumanSend(ctx context.Context, cmd HumanSendCommand) (Resu
 		audit:            AuditRecord{Kind: auditKindAppendFact, Outcome: auditOutcomeAccepted},
 		hash:             humanSendHash(key, cmd.Intent),
 		expectedRevision: cmd.ExpectedRevision,
+		encodingBudget:   humanSendEncodingBudget,
 	}
 	return s.commitWithRestarts(ctx, plan, cmd.Fact)
 }

@@ -111,8 +111,9 @@ func TestReadonlySnapshotStateValidation(t *testing.T) {
 	expectKernel(t, err, OutcomeRefused, ClassStateInvalid)
 }
 
-// The snapshot takes the shared Room lock in the documented order: it waits on
-// an in-flight writer and returns an exactly consistent view afterwards.
+// The snapshot takes the shared Room lock in the documented order and, when a
+// real writer commits an in-flight fact behind an external barrier, observes
+// the complete new state — a stale or mixed view fails these assertions.
 func TestReadonlySnapshotWaitsOnConcurrentWriter(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -124,25 +125,60 @@ func TestReadonlySnapshotWaitsOnConcurrentWriter(t *testing.T) {
 	if _, err := tx2.Exec(ctx, `SELECT host_mode, current_seq, revision FROM `+f.store.table("rooms")+` WHERE room_id = 'room-1' FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan RoomSnapshot, 1)
-	var rerr error
+
+	// The writer queues behind the barrier first (it acquires the work
+	// connection), so the snapshot queues behind the writer.
+	cmd := humanSendCommand("u-owner", "conc-1", "slot2", "concurrent body")
+	commitDone := make(chan Result, 1)
+	var cerr error
 	go func() {
-		snap, err := f.store.ReadonlySnapshot(ctx, AuthContext{Deployment: "dep-test", UserID: "u-owner"}, "room-1")
-		rerr = err
-		done <- snap
+		res, err := f.store.CommitHumanSend(ctx, cmd)
+		cerr = err
+		commitDone <- res
 	}()
 	waitForLockWait(t, f.admin, f.store.work.PgConn().PID())
+
+	snapDone := make(chan RoomSnapshot, 1)
+	var serr error
+	go func() {
+		snap, err := f.store.ReadonlySnapshot(ctx, AuthContext{Deployment: "dep-test", UserID: "u-owner"}, "room-1")
+		serr = err
+		snapDone <- snap
+	}()
+
 	if err := tx2.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	snap := <-done
-	if rerr != nil {
-		t.Fatal(rerr)
+	res := <-commitDone
+	if cerr != nil || res.Outcome != OutcomeCommitted || res.Seq != 1 {
+		t.Fatalf("in-flight writer: %+v %v", res, cerr)
 	}
-	if uint64(len(snap.Events)) != snap.Seq || snap.HostMode != "native" {
-		t.Fatalf("inconsistent snapshot: seq=%d events=%d", snap.Seq, len(snap.Events))
+	snap := <-snapDone
+	if serr != nil {
+		t.Fatal(serr)
 	}
-	if snap.Seq > 0 && snap.Events[snap.Seq-1].Seq != snap.Seq {
-		t.Fatalf("snapshot tail disagrees: %+v", snap.Events[snap.Seq-1])
+	if snap.Seq != 1 || snap.Revision != 1 || len(snap.Events) != 1 || snap.Events[0].ID != cmd.Fact.ID {
+		t.Fatalf("snapshot must observe the complete new state: %+v", snap)
+	}
+	if events, operations, audits, seq, revision := f.roomCounts(t); events != 1 || operations != 1 || audits != 1 || seq != 1 || revision != 1 {
+		t.Fatalf("unexpected state after the chain: %d/%d/%d/%d/%d", events, operations, audits, seq, revision)
+	}
+}
+
+// A corrupt-but-bigint-valid sequence counter is refused as state_invalid —
+// never used as an allocation hint, never a panic or OOM.
+func TestReadonlySnapshotHugeCorruptSequenceDoesNotPanic(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.store.CommitHumanSend(ctx, humanSendCommand("u-owner", "huge-1", "slot2", "body")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.admin.Exec(ctx, `UPDATE rooms SET current_seq = 9223372036854775807 WHERE room_id = 'room-1'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.store.ReadonlySnapshot(ctx, AuthContext{Deployment: "dep-test", UserID: "u-owner"}, "room-1")
+	expectKernel(t, err, OutcomeRefused, ClassStateInvalid)
+	if _, err := f.admin.Exec(ctx, `UPDATE rooms SET current_seq = 1 WHERE room_id = 'room-1'`); err != nil {
+		t.Fatal(err)
 	}
 }

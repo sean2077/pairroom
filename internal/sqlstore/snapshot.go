@@ -25,9 +25,16 @@ type RoomSnapshot struct {
 // ReadonlySnapshot serves the authenticated read side. It runs under the same
 // ownership fence and live user/membership authorization as the commit path,
 // takes only shared locks in the documented global order, writes nothing and
-// never reaps. Refusals (authorization, room_not_found, state_invalid,
-// lease_lost) disclose zero content; an incomplete read is an unknown-class
-// error, never a partial snapshot.
+// never reaps.
+//
+// When the work connection is unusable — for example after a lost commit
+// response — one bounded read-only replacement connection performs the same
+// verification under the same fence and authorization; it never changes the
+// epoch, opens ownership recovery, or retries any effect, and if it cannot be
+// established the read stays unknown with zero disclosure. Refusals
+// (authorization, room_not_found, state_invalid, lease_lost) disclose zero
+// content; an incomplete read is an unknown-class error, never a partial
+// snapshot.
 func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID string) (RoomSnapshot, error) {
 	if auth.Deployment == "" || !validToken(auth.UserID) || !validToken(roomID) {
 		return RoomSnapshot{}, refusedError(ClassInvalidRequest, nil)
@@ -49,9 +56,31 @@ func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID s
 	if s.poisoned != nil {
 		return RoomSnapshot{}, refusedError(ClassLeaseLost, s.poisoned)
 	}
-	tx, err := s.work.BeginTx(opCtx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	snapshot, err := s.snapshotOnce(opCtx, auth, roomID, s.work)
+	var kerr *KernelError
+	if !errors.As(err, &kerr) || kerr.Outcome != OutcomeUnknown {
+		return snapshot, err
+	}
+	// The read could not complete on the work connection. One bounded
+	// replacement connection is used for this read-only verification.
+	replacement, cerr := s.openVerificationConn(opCtx)
+	if cerr != nil {
+		return snapshot, err
+	}
+	defer func() {
+		rctx, cancel := cleanupCtx()
+		defer cancel()
+		_ = replacement.Close(rctx)
+	}()
+	return s.snapshotOnce(opCtx, auth, roomID, replacement)
+}
+
+// snapshotOnce performs one read-only snapshot attempt on the given
+// connection.
+func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID string, conn *pgx.Conn) (RoomSnapshot, error) {
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	defer func() {
 		rctx, cancel := cleanupCtx()
@@ -63,30 +92,30 @@ func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID s
 	var ownerEpoch int64
 	var ownerPID int32
 	var ownerStart time.Time
-	if err := tx.QueryRow(opCtx, `SELECT epoch, lease_pid, lease_backend_start FROM `+s.table("ownership")+` WHERE id FOR SHARE`).Scan(&ownerEpoch, &ownerPID, &ownerStart); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT epoch, lease_pid, lease_backend_start FROM `+s.table("ownership")+` WHERE id FOR SHARE`).Scan(&ownerEpoch, &ownerPID, &ownerStart); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			s.poisoned = errLeaseLost
 			return RoomSnapshot{}, refusedError(ClassLeaseLost, errLeaseLost)
 		}
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	var locked dependencyState
-	if err := s.readDependencies(opCtx, tx, roomID, auth.UserID, &locked, lockShare); err != nil {
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+	if err := s.readDependencies(ctx, tx, roomID, auth.UserID, &locked, lockShare); err != nil {
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	var hostMode string
-	err = tx.QueryRow(opCtx, `SELECT host_mode, current_seq, revision FROM `+s.table("rooms")+` WHERE room_id = $1 FOR SHARE`, roomID).Scan(&hostMode, &locked.currentSeq, &locked.revision)
+	err = tx.QueryRow(ctx, `SELECT host_mode, current_seq, revision FROM `+s.table("rooms")+` WHERE room_id = $1 FOR SHARE`, roomID).Scan(&hostMode, &locked.currentSeq, &locked.revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		locked.roomMissing = true
 	} else if err != nil {
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
-	if err := s.fenceHoldsLocked(opCtx, tx, ownerEpoch, ownerPID, ownerStart); err != nil {
+	if err := s.fenceHoldsLocked(ctx, tx, ownerEpoch, ownerPID, ownerStart); err != nil {
 		if errors.Is(err, errLeaseLost) {
 			s.poisoned = err
 			return RoomSnapshot{}, refusedError(ClassLeaseLost, err)
 		}
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 
 	switch {
@@ -97,12 +126,15 @@ func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID s
 		return RoomSnapshot{}, refusedError(ClassAuthorization, nil)
 	}
 
-	rows, err := tx.Query(opCtx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
+	rows, err := tx.Query(ctx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
 	if err != nil {
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	defer rows.Close()
-	events := make([]model.Event, 0, locked.currentSeq)
+	// The event slice grows with the rows actually read: the room row's
+	// sequence counter is validated, never trusted as an allocation hint, so a
+	// corrupt-but-bigint-valid counter cannot panic or exhaust memory.
+	var events []model.Event
 	var expected uint64 = 1
 	for rows.Next() {
 		var seq int64
@@ -110,7 +142,7 @@ func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID s
 		var factVersion int
 		var encoding []byte
 		if err := rows.Scan(&seq, &eventID, &factVersion, &kind, &actor, &encoding); err != nil {
-			return RoomSnapshot{}, incompleteError(opCtx, err)
+			return RoomSnapshot{}, incompleteError(ctx, err)
 		}
 		if uint64(seq) != expected {
 			return RoomSnapshot{}, refusedError(ClassStateInvalid, fmt.Errorf("event sequence %d does not immediately follow %d", seq, expected-1))
@@ -123,7 +155,7 @@ func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID s
 		expected++
 	}
 	if err := rows.Err(); err != nil {
-		return RoomSnapshot{}, incompleteError(opCtx, err)
+		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	if expected-1 != locked.currentSeq {
 		return RoomSnapshot{}, refusedError(ClassStateInvalid, fmt.Errorf("event log ends at %d but the room row records sequence %d", expected-1, locked.currentSeq))

@@ -47,7 +47,7 @@ CREATE TABLE room_events (
   seq            bigint NOT NULL CHECK (seq > 0),
   event_id       text NOT NULL CHECK (event_id <> ''),
   fact_version   integer NOT NULL,
-  event_encoding bytea NOT NULL CHECK (octet_length(event_encoding) > 0 AND octet_length(event_encoding) <= 262144),
+  event_encoding bytea NOT NULL CHECK (octet_length(event_encoding) > 0 AND octet_length(event_encoding) <= 2097152),
   kind           text NOT NULL CHECK (kind <> ''),
   actor          text NOT NULL CHECK (actor <> ''),
   created_at     timestamptz NOT NULL,      -- derived index projection (microsecond precision); authoritative ns value lives in event_encoding

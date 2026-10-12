@@ -2,6 +2,8 @@ package sqlstore
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +147,52 @@ func TestHumanSendAuthorization(t *testing.T) {
 	res, err = f.store.ResolveHumanSend(ctx, cmd.Auth, cmd.RoomID, cmd.ClientID, cmd.Intent)
 	if kerr := kernelErr(t, res, err); kerr.Class != ClassAuthorization {
 		t.Fatalf("removed member resolve: %+v", res)
+	}
+}
+
+// The per-operation encoding budget: a maximal legal text (and its worst-case
+// escaping) commits within the human_send budget even though the encoding
+// exceeds the append_fact gate; the append_fact gate itself is unchanged.
+func TestHumanSendEncodingBudget(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	full := strings.Repeat("x", humanSendTextBytes)
+	res, err := f.store.CommitHumanSend(ctx, humanSendCommand("u-owner", "budget-full", "slot2", full))
+	if err != nil || res.Outcome != OutcomeCommitted {
+		t.Fatalf("maximal text: %+v %v", res, err)
+	}
+	var encoded int
+	if err := f.admin.QueryRow(ctx, `SELECT octet_length(event_encoding) FROM room_events WHERE room_id = 'room-1' AND seq = 1`).Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	if encoded <= maxEncodingBytes || encoded > humanSendEncodingBudget {
+		t.Fatalf("full-text encoding %d not inside (%d, %d]", encoded, maxEncodingBytes, humanSendEncodingBudget)
+	}
+
+	escaped := strings.Repeat("\x01", 240<<10)
+	second := humanSendCommand("u-owner", "budget-escaped", "slot2", escaped)
+	second.ExpectedRevision = 1
+	res, err = f.store.CommitHumanSend(ctx, second)
+	if err != nil || res.Outcome != OutcomeCommitted {
+		t.Fatalf("escaped text: %+v %v", res, err)
+	}
+
+	// The append_fact gate is not relaxed: an oversized encoding is refused
+	// with zero writes.
+	oversized := f.command("oversize")
+	payload, err := json.Marshal(map[string]any{"text": strings.Repeat("x", maxEncodingBytes)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized.Mutation.Fact.Data = payload
+	oversized.ExpectedRevision = 2
+	res, err = f.store.Commit(ctx, oversized)
+	if kerr := kernelErr(t, res, err); kerr.Class != ClassInvalidFact {
+		t.Fatalf("oversized append: %+v", res)
+	}
+	if events, _, _, seq, _ := f.roomCounts(t); events != 2 || seq != 2 {
+		t.Fatalf("unexpected state: events=%d seq=%d", events, seq)
 	}
 }
 

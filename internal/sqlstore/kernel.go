@@ -200,13 +200,17 @@ func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *de
 
 // opPlan is the operation-specific half of the shared transaction state
 // machine: the append_fact and human_send entries each supply one, and the
-// machine below is the only transition implementation.
+// machine below is the only transition implementation. The encoding budget is
+// per operation: append_fact keeps its original 262144-byte gate unchanged,
+// while human_send carries an explicitly bounded larger budget for its
+// worst-case-escaped text.
 type opPlan struct {
 	key              OpKey
 	userID           string
 	audit            AuditRecord
 	hash             [32]byte
 	expectedRevision uint64
+	encodingBudget   int
 }
 
 // Commit runs the transaction state machine for one append_fact command and
@@ -224,6 +228,7 @@ func (s *Store) Commit(ctx context.Context, cmd Command) (Result, error) {
 		audit:            cmd.Mutation.Audit,
 		hash:             canonicalHash(cmd.Key, cmd.Mutation),
 		expectedRevision: cmd.ExpectedRevision,
+		encodingBudget:   maxEncodingBytes,
 	}
 	return s.commitWithRestarts(ctx, plan, cmd.Mutation.Fact)
 }
@@ -382,7 +387,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	stored := fact
 	stored.Seq = locked.currentSeq + 1
 	encoding, err := json.Marshal(stored)
-	if err != nil || len(encoding) > maxEncodingBytes {
+	if err != nil || len(encoding) > plan.encodingBudget {
 		return refused3(ClassInvalidFact, err)
 	}
 	now := time.Now().UTC()
