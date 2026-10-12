@@ -107,6 +107,13 @@ func (e *EnterpriseCommandError) Error() string {
 
 func (e *EnterpriseCommandError) Unwrap() error { return e.Err }
 
+// enterpriseDeployment is fixed at construction; the acting user is per
+// command. openAuth is used for the initial snapshot only.
+type enterpriseState struct {
+	deployment string
+	openAuth   EnterpriseAuth
+}
+
 // EnterprisePort is implemented by the SQL command port (the sqlstore
 // adapter); this package never imports the SQL side.
 type EnterprisePort interface {
@@ -130,9 +137,24 @@ func nilEnterprisePort(port EnterprisePort) bool {
 }
 
 // emptyEngine builds the empty engine shell both Open and OpenEnterprise
-// replay into.
+// replay into, over an isolated configuration copy: the shared Runtimes map
+// (and any other map the configuration carries) is cloned so a failed replay
+// can never pollute the caller's or an existing engine's state.
 func emptyEngine(cfg Config) *Engine {
+	cfg = cloneConfig(cfg)
 	return &Engine{cfg: cfg, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, changed: make(chan struct{}), wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
+}
+
+// cloneConfig isolates the configuration's shared maps.
+func cloneConfig(cfg Config) Config {
+	if cfg.Runtimes != nil {
+		runtimes := make(map[model.ActorID]model.RuntimeKind, len(cfg.Runtimes))
+		for slot, kind := range cfg.Runtimes {
+			runtimes[slot] = kind
+		}
+		cfg.Runtimes = runtimes
+	}
+	return cfg
 }
 
 // requireLocalMutation rejects a legacy mutator at its entry on an
@@ -178,7 +200,7 @@ func OpenEnterprise(ctx context.Context, cfg Config, port EnterprisePort, auth E
 	e := emptyEngine(cfg)
 	e.enterprise = true
 	e.enterprisePort = port
-	e.enterpriseAuth = auth
+	e.enterpriseState = enterpriseState{deployment: auth.Deployment, openAuth: auth}
 	e.gate = make(chan struct{}, 1)
 	if err := e.replaySnapshotLocked(snapshot); err != nil {
 		return nil, err
@@ -208,8 +230,10 @@ func validateEnterpriseSnapshot(roomID string, snapshot EnterpriseRoomSnapshot) 
 }
 
 // replaySnapshotLocked replays a snapshot into this engine through the same
-// apply implementation — no callbacks, no reap, no writes — and adopts the
-// durable-derived projection only after the whole projection validated.
+// apply implementation — no callbacks, no reap, no writes — over an isolated
+// configuration copy, and adopts the durable-derived projection (including
+// the replayed configuration) only after the whole projection validated; a
+// failure leaves the existing projection untouched.
 func (e *Engine) replaySnapshotLocked(snapshot EnterpriseRoomSnapshot) error {
 	fresh := emptyEngine(e.cfg)
 	fresh.replaying = true
@@ -228,13 +252,18 @@ func (e *Engine) replaySnapshotLocked(snapshot EnterpriseRoomSnapshot) error {
 }
 
 // adoptDurableLocked replaces every fact-derived field with the validated
-// replayed state; process-local observations (waiters, nudges, turn ends,
-// counters, the change channel and the gate) are preserved.
+// replayed state — the complete fact-derived projection, including the
+// delivery projection, the LAN attempt counters rebuilt from replayed facts
+// and the replayed configuration. Process-local observations (waiters,
+// nudges, turn ends, the change channel and the gate) are preserved.
 func (e *Engine) adoptDurableLocked(fresh *Engine) {
+	e.cfg.Runtimes = fresh.cfg.Runtimes
 	e.lanWakeResults = fresh.lanWakeResults
 	e.lanInvites = fresh.lanInvites
 	e.lanRequests = fresh.lanRequests
 	e.lanAdmitted = fresh.lanAdmitted
+	e.lanAttempts = fresh.lanAttempts
+	e.lanKeyAttempts = fresh.lanKeyAttempts
 	e.lanMember = fresh.lanMember
 	e.lanTransfers = fresh.lanTransfers
 	e.lastUserMessage = fresh.lastUserMessage
@@ -258,6 +287,7 @@ func (e *Engine) adoptDurableLocked(fresh *Engine) {
 	e.wakeEnabled = fresh.wakeEnabled
 	e.wakeReservations = fresh.wakeReservations
 	e.wakeReserved = fresh.wakeReserved
+	e.delivery = fresh.delivery
 }
 
 // beginEnterpriseCommand takes the earlier of the caller's deadline and the
@@ -309,16 +339,23 @@ func decodeMessageFactPayload(event model.Event) (Message, error) {
 	return fact.Message, nil
 }
 
-// ExecuteHumanSend runs one text-only human send on an enterprise engine: the
-// candidate is built by the shared builder, committed through the port under
-// the command gate, and only a confirmed commit applies and notifies — once.
-// A replayed result returns the original stored message without touching the
-// projection cursor; a lost outcome fails the engine closed and stays there;
-// read-only verification cannot clear it (see ErrEnterpriseRecoveryUnavailable
-// semantics below).
-func (e *Engine) ExecuteHumanSend(ctx context.Context, req SendRequest) (Message, error) {
+// ExecuteHumanSend runs one text-only human send for one authenticated user:
+// the candidate is built by the shared builder, committed through the port
+// under the command gate with the per-command identity, and only a confirmed
+// commit applies and notifies — once. The deployment and Room are fixed at
+// construction; the user is per command, and several users share this engine
+// and its gate. A replayed result returns the original stored message without
+// touching the projection cursor; a lost outcome fails the engine closed and
+// stays there — read-only verification cannot clear it, and restoring write
+// capability is a separately reviewed step this slice does not implement. A
+// second revision conflict is terminal for the engine: it fails closed and
+// signals, and subsequent commands are refused with zero port calls.
+func (e *Engine) ExecuteHumanSend(ctx context.Context, auth EnterpriseAuth, req SendRequest) (Message, error) {
 	if !e.enterprise {
 		return Message{}, errors.New("relay: ExecuteHumanSend requires an enterprise engine")
+	}
+	if auth.UserID == "" || auth.Deployment != e.enterpriseState.deployment {
+		return Message{}, errors.New("relay: the enterprise command identity must be a user of this engine's deployment")
 	}
 	if !req.To.ValidParticipant() {
 		return Message{}, errors.New("select a native target slot")
@@ -335,28 +372,34 @@ func (e *Engine) ExecuteHumanSend(ctx context.Context, req SendRequest) (Message
 		return Message{}, err
 	}
 
-	commit, err := e.commitEnterpriseSendLocked(opCtx, req)
+	commit, err := e.commitEnterpriseSendLocked(opCtx, auth, req)
 	if err != nil {
 		var commandErr *EnterpriseCommandError
 		if errors.As(err, &commandErr) && commandErr.Class == EnterpriseClassRevisionConflict {
-			// One pure re-plan after a read-only rebuild: the first attempt had
-			// no effect, so replaying the decision against the rebuilt
-			// projection is safe. A second conflict fails closed.
-			if rerr := e.rebuildEnterpriseLocked(opCtx); rerr != nil {
+			// One pure re-plan after a read-only rebuild under the same
+			// per-command identity: the first attempt had no effect, so
+			// replaying the decision against the rebuilt projection is safe.
+			if rerr := e.rebuildEnterpriseLocked(opCtx, auth); rerr != nil {
 				return Message{}, rerr
 			}
-			commit, err = e.commitEnterpriseSendLocked(opCtx, req)
+			commit, err = e.commitEnterpriseSendLocked(opCtx, auth, req)
 		}
 	}
 	if err != nil {
 		var commandErr *EnterpriseCommandError
+		if errors.As(err, &commandErr) && commandErr.Class == EnterpriseClassRevisionConflict {
+			// The second conflict is terminal: fail the engine closed and
+			// signal; every subsequent command is refused with zero port calls.
+			e.mu.Lock()
+			e.fatal = err
+			e.signal()
+			e.mu.Unlock()
+			return Message{}, err
+		}
 		if errors.As(err, &commandErr) && commandErr.Class == EnterpriseClassPayloadConflict {
 			return Message{}, ErrSendPayloadConflict
 		}
 		if errors.As(err, &commandErr) && commandErr.Outcome == EnterpriseOutcomeUnknown {
-			// A lost outcome fails the engine closed. Read-only verification
-			// and rebuild never restore write capability or clear this state;
-			// an independent, separately reviewed recovery step is required.
 			e.mu.Lock()
 			e.fatal = err
 			e.signal()
@@ -427,17 +470,18 @@ func (e *Engine) ExecuteHumanSend(ctx context.Context, req SendRequest) (Message
 	}
 }
 
-// commitEnterpriseSendLocked builds the candidate and one commit attempt.
-func (e *Engine) commitEnterpriseSendLocked(ctx context.Context, req SendRequest) (EnterpriseSendResult, error) {
+// commitEnterpriseSendLocked builds the candidate for the per-command
+// identity and performs one commit attempt.
+func (e *Engine) commitEnterpriseSendLocked(ctx context.Context, auth EnterpriseAuth, req SendRequest) (EnterpriseSendResult, error) {
 	e.mu.Lock()
-	_, fact, err := e.buildEnterpriseHumanSendLocked(req)
+	_, fact, err := e.buildEnterpriseHumanSendLocked(auth, req)
 	expectedRevision, expectedSeq := e.enterpriseRevision, e.enterpriseSeq
 	e.mu.Unlock()
 	if err != nil {
 		return EnterpriseSendResult{}, err
 	}
 	return e.enterprisePort.CommitHumanSend(ctx, EnterpriseSendCommand{
-		Auth:             e.enterpriseAuth,
+		Auth:             auth,
 		RoomID:           e.cfg.RoomID,
 		ClientID:         req.ID,
 		Intent:           EnterpriseSendIntent{To: string(req.To), Text: req.Text},
@@ -448,8 +492,9 @@ func (e *Engine) commitEnterpriseSendLocked(ctx context.Context, req SendRequest
 }
 
 // buildEnterpriseHumanSendLocked composes the shared, pure candidate builder
-// pieces in the same order the Local path uses them.
-func (e *Engine) buildEnterpriseHumanSendLocked(req SendRequest) (Message, model.Event, error) {
+// pieces in the same order the Local path uses them, with the principal-scoped
+// client key of the per-command identity.
+func (e *Engine) buildEnterpriseHumanSendLocked(auth EnterpriseAuth, req SendRequest) (Message, model.Event, error) {
 	if err := validateSendRequest(req); err != nil {
 		return Message{}, model.Event{}, err
 	}
@@ -463,19 +508,21 @@ func (e *Engine) buildEnterpriseHumanSendLocked(req SendRequest) (Message, model
 	if _, err := e.envelope(m); err != nil {
 		return Message{}, model.Event{}, err
 	}
-	fact, err := model.NewEvent(e.cfg.RoomID, EventMessage, model.ActorUser, messageFact{Message: m, ClientKey: enterpriseClientKey(e.enterpriseAuth.UserID, req.ID)})
+	fact, err := model.NewEvent(e.cfg.RoomID, EventMessage, model.ActorUser, messageFact{Message: m, ClientKey: enterpriseClientKey(auth.UserID, req.ID)})
 	if err != nil {
 		return Message{}, model.Event{}, err
 	}
 	return m, fact, nil
 }
 
-// rebuildEnterpriseLocked performs the read-only rebuild: an authenticated
-// snapshot is re-validated, replayed through the same apply, and adopted only
-// after the whole projection built; no callbacks, no reap, no writes, and the
-// fatal/closed/draining state and the gate are preserved.
-func (e *Engine) rebuildEnterpriseLocked(ctx context.Context) error {
-	snapshot, err := e.enterprisePort.ReadonlySnapshot(ctx, e.enterpriseAuth, e.cfg.RoomID)
+// rebuildEnterpriseLocked performs the read-only rebuild under the current
+// command identity: an authenticated snapshot is re-validated, replayed
+// through the same apply, and adopted only after the whole projection built;
+// no callbacks, no reap, no writes, and the fatal/closed/draining state and
+// the gate are preserved. A rebuild that advances the projection signals
+// WaitChanges waiters (never OnAppend/OnAttention).
+func (e *Engine) rebuildEnterpriseLocked(ctx context.Context, auth EnterpriseAuth) error {
+	snapshot, err := e.enterprisePort.ReadonlySnapshot(ctx, auth, e.cfg.RoomID)
 	if err != nil {
 		e.mu.Lock()
 		e.fatal = err
@@ -497,19 +544,27 @@ func (e *Engine) rebuildEnterpriseLocked(ctx context.Context) error {
 		e.signal()
 		return e.fatal
 	}
+	previous := e.sequence
 	if err := e.replaySnapshotLocked(snapshot); err != nil {
 		e.fatal = err
 		e.signal()
 		return err
 	}
 	e.enterpriseSeq, e.enterpriseRevision = snapshot.Seq, snapshot.Revision
+	if e.sequence != previous {
+		// The projection advanced without an append: wake cursor waiters,
+		// and stay silent otherwise.
+		e.signal()
+	}
 	return nil
 }
 
-// CloseContext closes an enterprise engine with a cancellable wait for the
-// command gate; a cancelled wait reports the error and does not claim the
-// engine closed. The shared SQL store is never closed here — it belongs to
-// the deployment owner. On a Local engine it falls back to Close.
+// CloseContext closes an enterprise engine with a cancellable, self-bounded
+// wait for the command gate: the wait takes the earlier of the caller's
+// deadline and the close budget, the context is re-checked after the token is
+// acquired, and a timed-out or cancelled wait reports the error without
+// claiming the engine closed. The shared SQL store is never closed here — it
+// belongs to the deployment owner. On a Local engine it falls back to Close.
 func (e *Engine) CloseContext(ctx context.Context) error {
 	if !e.enterprise {
 		return e.Close()
@@ -517,14 +572,23 @@ func (e *Engine) CloseContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	opCtx, cancel := context.WithTimeout(ctx, enterpriseCloseBudget)
+	defer cancel()
 	select {
 	case e.gate <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
+		if err := opCtx.Err(); err != nil {
+			<-e.gate
+			return err
+		}
+	case <-opCtx.Done():
+		return opCtx.Err()
 	}
 	defer func() { <-e.gate }()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if e.closed {
 		return nil
 	}

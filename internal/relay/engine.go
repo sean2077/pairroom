@@ -103,10 +103,12 @@ type Engine struct {
 	delivery *deliveryProjection
 	// enterprise wiring; zero on Local engines. The gate serializes whole
 	// enterprise commands (plan -> SQL -> apply/rebuild) and every legacy
-	// mutator is rejected at its entry when enterprise is set.
+	// mutator is rejected at its entry when enterprise is set. The deployment
+	// is fixed at construction; each command carries its own authenticated
+	// user, so several users share one engine and one gate.
 	enterprise         bool
 	enterprisePort     EnterprisePort
-	enterpriseAuth     EnterpriseAuth
+	enterpriseState    enterpriseState
 	enterpriseSeq      uint64
 	enterpriseRevision uint64
 	gate               chan struct{}
@@ -1396,12 +1398,10 @@ func (e *Engine) Busy() bool {
 }
 func (e *Engine) Close() error {
 	if e.enterprise {
-		// Enterprise shutdown is the cancellable CloseContext under a bounded
-		// wrapper; a timed-out wait reports the error and does not claim the
-		// engine closed. The shared SQL store is never closed here.
-		ctx, cancel := context.WithTimeout(context.Background(), enterpriseCloseBudget)
-		defer cancel()
-		return e.CloseContext(ctx)
+		// Enterprise shutdown is the cancellable, self-bounded CloseContext; a
+		// timed-out wait reports the error and does not claim the engine
+		// closed. The shared SQL store is never closed here.
+		return e.CloseContext(context.Background())
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -10,13 +10,18 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 )
 
+func whiteBoxAuth(userID string) EnterpriseAuth {
+	return EnterpriseAuth{Deployment: "dep-test", UserID: userID}
+}
+
 // fakePort is a scripted enterprise port for the white-box engine tests.
 type fakePort struct {
 	mu        sync.Mutex
 	snapshot  EnterpriseRoomSnapshot
 	commits   int
+	received  []EnterpriseSendCommand
 	commitFn  func(cmd EnterpriseSendCommand) (EnterpriseSendResult, error)
-	snapFn    func() (EnterpriseRoomSnapshot, error)
+	snapFn    func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error)
 	committed chan EnterpriseSendCommand
 }
 
@@ -29,6 +34,7 @@ func committedEcho(cmd EnterpriseSendCommand) EnterpriseSendResult {
 func (f *fakePort) CommitHumanSend(ctx context.Context, cmd EnterpriseSendCommand) (EnterpriseSendResult, error) {
 	f.mu.Lock()
 	f.commits++
+	f.received = append(f.received, cmd)
 	f.mu.Unlock()
 	if f.committed != nil {
 		f.committed <- cmd
@@ -45,7 +51,7 @@ func (f *fakePort) ResolveHumanSend(ctx context.Context, auth EnterpriseAuth, ro
 
 func (f *fakePort) ReadonlySnapshot(ctx context.Context, auth EnterpriseAuth, roomID string) (EnterpriseRoomSnapshot, error) {
 	if f.snapFn != nil {
-		return f.snapFn()
+		return f.snapFn(auth)
 	}
 	return f.snapshot, nil
 }
@@ -54,6 +60,16 @@ func (f *fakePort) commitCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.commits
+}
+
+func (f *fakePort) receivedAuths() []EnterpriseAuth {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	auths := make([]EnterpriseAuth, 0, len(f.received))
+	for _, cmd := range f.received {
+		auths = append(auths, cmd.Auth)
+	}
+	return auths
 }
 
 func emptySnapshot() EnterpriseRoomSnapshot {
@@ -65,7 +81,7 @@ func enterpriseTestEngine(t *testing.T, port EnterprisePort) *Engine {
 	engine, err := OpenEnterprise(context.Background(), Config{
 		RoomID:   "room-1",
 		Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex},
-	}, port, EnterpriseAuth{Deployment: "dep-test", UserID: "u-owner"})
+	}, port, whiteBoxAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,10 +118,9 @@ func TestEnterpriseRejectsLegacyMutators(t *testing.T) {
 		err  error
 	}
 	var calls []call
-	if _, err := e.Send(auth, SendRequest{}); true {
-		calls = append(calls, call{"Send", err})
-	}
-	_, err := e.SendUser(SendRequest{})
+	_, err := e.Send(auth, SendRequest{})
+	calls = append(calls, call{"Send", err})
+	_, err = e.SendUser(SendRequest{})
 	calls = append(calls, call{"SendUser", err})
 	_, err = e.Report(auth, 1, "x")
 	calls = append(calls, call{"Report", err})
@@ -155,7 +170,7 @@ func TestEnterpriseRejectsLegacyMutators(t *testing.T) {
 	calls = append(calls, call{"ReclaimAttachments", err})
 	for _, c := range calls {
 		if !errors.Is(c.err, ErrEnterpriseReadOnly) {
-			t.Fatalf("%s: err = %v, want ErrEnterpriseReadOnly", c.name, c.err)
+			t.Fatalf("%s: err = %v, want ErrEnterpriseReadOnly", c.name, err)
 		}
 	}
 	if port.commitCalls() != 0 {
@@ -169,6 +184,37 @@ func TestEnterpriseRejectsLegacyMutators(t *testing.T) {
 	}
 }
 
+// One engine serves several authenticated users: the per-command identity
+// reaches the port unchanged, the same client ID under two users stays
+// independent, and a foreign deployment is refused before any port call.
+func TestEnterprisePerCommandIdentity(t *testing.T) {
+	port := &fakePort{snapshot: emptySnapshot()}
+	e := enterpriseTestEngine(t, port)
+	ctx := context.Background()
+
+	first, err := e.ExecuteHumanSend(ctx, whiteBoxAuth("u-owner"), SendRequest{ID: "same", Text: "one", To: model.ActorSlot2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.ExecuteHumanSend(ctx, whiteBoxAuth("u-owner2"), SendRequest{ID: "same", Text: "two", To: model.ActorSlot2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("two users shared one message identity")
+	}
+	auths := port.receivedAuths()
+	if len(auths) != 2 || auths[0].UserID != "u-owner" || auths[1].UserID != "u-owner2" {
+		t.Fatalf("per-command identities at the port: %+v", auths)
+	}
+	if _, err := e.ExecuteHumanSend(ctx, EnterpriseAuth{Deployment: "other", UserID: "u-owner"}, SendRequest{ID: "x", Text: "x", To: model.ActorSlot2}); err == nil {
+		t.Fatal("foreign deployment accepted")
+	}
+	if port.commitCalls() != 2 {
+		t.Fatalf("foreign deployment reached the port: %d commits", port.commitCalls())
+	}
+}
+
 // A confirmed commit applies and notifies exactly once, and the gate is held
 // for the whole plan -> SQL -> apply sequence (probed from inside apply).
 func TestEnterpriseExecuteCommittedOnceWithGateProbe(t *testing.T) {
@@ -178,9 +224,8 @@ func TestEnterpriseExecuteCommittedOnceWithGateProbe(t *testing.T) {
 	engine, err := OpenEnterprise(context.Background(), Config{
 		RoomID:      "room-1",
 		Runtimes:    map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex},
-		OnAppend:    func(model.Event) { appends++ },
 		OnAttention: func(Attention) { attentions++ },
-	}, port, EnterpriseAuth{Deployment: "dep-test", UserID: "u-owner"})
+	}, port, whiteBoxAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +241,7 @@ func TestEnterpriseExecuteCommittedOnceWithGateProbe(t *testing.T) {
 		}
 	}
 
-	message, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "c1", Text: "hello", To: model.ActorSlot2})
+	message, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "c1", Text: "hello", To: model.ActorSlot2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,13 +276,13 @@ func TestEnterpriseExecuteReplayedCanonicalAndCursor(t *testing.T) {
 		Runtimes:    map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex},
 		OnAppend:    func(model.Event) { appends++ },
 		OnAttention: func(Attention) { attentions++ },
-	}, port, EnterpriseAuth{Deployment: "dep-test", UserID: "u-owner"})
+	}, port, whiteBoxAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 
-	message, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "orig", Text: "original body", To: model.ActorSlot2})
+	message, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "orig", Text: "original body", To: model.ActorSlot2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,13 +311,13 @@ func TestEnterpriseUnknownFailsClosedAndStaysClosed(t *testing.T) {
 		Runtimes:    map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex},
 		OnAppend:    func(model.Event) { appends++ },
 		OnAttention: func(Attention) { attentions++ },
-	}, port, EnterpriseAuth{Deployment: "dep-test", UserID: "u-owner"})
+	}, port, whiteBoxAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 
-	if _, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "u1", Text: "lost", To: model.ActorSlot2}); err == nil {
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "u1", Text: "lost", To: model.ActorSlot2}); err == nil {
 		t.Fatal("lost outcome reported success")
 	}
 	if engine.Fatal() == nil {
@@ -281,13 +326,10 @@ func TestEnterpriseUnknownFailsClosedAndStaysClosed(t *testing.T) {
 	if appends != 0 || attentions != 0 {
 		t.Fatal("lost outcome applied or notified")
 	}
-	// A read-only verification at the port level succeeds and discloses the
-	// truth, but the engine still refuses writes afterwards: read-only
-	// verification cannot clear the fail-closed state.
-	if _, err := port.ReadonlySnapshot(context.Background(), EnterpriseAuth{Deployment: "dep-test", UserID: "u-owner"}, "room-1"); err != nil {
+	if _, err := port.ReadonlySnapshot(context.Background(), whiteBoxAuth("u-owner"), "room-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "u2", Text: "later", To: model.ActorSlot2}); err == nil {
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "u2", Text: "later", To: model.ActorSlot2}); err == nil {
 		t.Fatal("the engine accepted a write after a lost outcome")
 	}
 	if err := engine.SetWakeEnabled(true); !errors.Is(err, ErrEnterpriseReadOnly) {
@@ -295,22 +337,14 @@ func TestEnterpriseUnknownFailsClosedAndStaysClosed(t *testing.T) {
 	}
 }
 
-// One revision conflict rebuilds from a read-only snapshot and replans once; a
-// second conflict is reported without further attempts and without poisoning
-// the engine (mirroring the kernel's classified restart-exceeded semantics).
+// One revision conflict rebuilds from a read-only snapshot under the command
+// identity and replans once; a second conflict fails the engine closed and
+// signals, and every later command is refused with zero port calls.
 func TestEnterpriseConflictRebuildsOnce(t *testing.T) {
 	pushed := originalMessageFact(t, "relay-pushed", "pushed", "peer fact")
 	port := &fakePort{snapshot: emptySnapshot()}
-	first := true
-	port.snapFn = func() (EnterpriseRoomSnapshot, error) {
-		if first {
-			first = false
-			return emptySnapshot(), nil
-		}
-		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{pushed}, Seq: 1, Revision: 1}, nil
-	}
 	var committedFact model.Event
-	var conflicts int
+	conflicts := 0
 	port.commitFn = func(cmd EnterpriseSendCommand) (EnterpriseSendResult, error) {
 		conflicts++
 		if conflicts == 1 {
@@ -321,9 +355,17 @@ func TestEnterpriseConflictRebuildsOnce(t *testing.T) {
 		committedFact = fact
 		return EnterpriseSendResult{Outcome: EnterpriseOutcomeCommitted, Fact: fact, Seq: fact.Seq, Revision: cmd.ExpectedRevision + 1}, nil
 	}
+	// The constructor consumes the initial (empty) snapshot; only the rebuild
+	// calls snapFn, and it must use the per-command identity.
 	engine := enterpriseTestEngine(t, port)
+	port.snapFn = func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error) {
+		if auth.UserID != "u-owner2" {
+			t.Errorf("rebuild used the wrong command identity: %+v", auth)
+		}
+		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{pushed}, Seq: 1, Revision: 1}, nil
+	}
 
-	message, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "r1", Text: "replan", To: model.ActorSlot2})
+	message, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner2"), SendRequest{ID: "r1", Text: "replan", To: model.ActorSlot2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,21 +380,124 @@ func TestEnterpriseConflictRebuildsOnce(t *testing.T) {
 	}
 
 	// Second-conflict path: the snapshot reflects the engine's own committed
-	// fact; the conflict is reported, and the engine stays usable (not fatal).
-	port.snapFn = func() (EnterpriseRoomSnapshot, error) {
+	// fact; the conflict is terminal — fatal + signal, later commands refused
+	// with zero additional port calls.
+	port.snapFn = func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error) {
 		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{pushed, committedFact}, Seq: 2, Revision: 2}, nil
 	}
 	port.commitFn = func(cmd EnterpriseSendCommand) (EnterpriseSendResult, error) {
 		return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: EnterpriseClassRevisionConflict, Err: errors.New("moved again")}
 	}
-	if _, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "r2", Text: "conflict", To: model.ActorSlot2}); err == nil {
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner2"), SendRequest{ID: "r2", Text: "conflict", To: model.ActorSlot2}); err == nil {
 		t.Fatal("second conflict reported success")
 	}
-	if engine.Fatal() != nil {
-		t.Fatalf("second conflict poisoned the engine: %v", engine.Fatal())
+	if engine.Fatal() == nil {
+		t.Fatal("second conflict did not fail the engine closed")
 	}
-	if engine.Snapshot().Sequence != 2 {
-		t.Fatalf("sequence after second conflict = %d, want the rebuilt 2", engine.Snapshot().Sequence)
+	attempts := port.commitCalls()
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner2"), SendRequest{ID: "r3", Text: "after", To: model.ActorSlot2}); err == nil {
+		t.Fatal("the engine accepted a command after the terminal conflict")
+	}
+	if port.commitCalls() != attempts {
+		t.Fatalf("a refused command reached the port: %d -> %d", attempts, port.commitCalls())
+	}
+}
+
+// A read-only rebuild that advances the projection wakes WaitChanges waiters
+// and stays silent: no OnAppend/OnAttention on the rebuild path.
+func TestEnterpriseRebuildSignalsWaitersSilently(t *testing.T) {
+	pushed := originalMessageFact(t, "relay-pushed2", "pushed2", "peer fact")
+	port := &fakePort{snapshot: emptySnapshot()}
+	conflicts := 0
+	port.commitFn = func(cmd EnterpriseSendCommand) (EnterpriseSendResult, error) {
+		conflicts++
+		if conflicts == 1 {
+			return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: EnterpriseClassRevisionConflict, Err: errors.New("moved")}
+		}
+		return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: "authorization", Err: errors.New("denied after rebuild")}
+	}
+	port.snapFn = func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error) {
+		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{pushed}, Seq: 1, Revision: 1}, nil
+	}
+	var appends, attentions int
+	engine, err := OpenEnterprise(context.Background(), Config{
+		RoomID:      "room-1",
+		Runtimes:    map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex},
+		OnAppend:    func(model.Event) { appends++ },
+		OnAttention: func(Attention) { attentions++ },
+	}, port, whiteBoxAuth("u-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	woke := make(chan bool, 1)
+	go func() {
+		// Wait for a change after cursor 0; the rebuild advances to 1.
+		err := engine.WaitChanges(context.Background(), 0)
+		woke <- err == nil
+	}()
+	time.Sleep(30 * time.Millisecond) // let the waiter park
+
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "w1", Text: "wake", To: model.ActorSlot2}); err == nil {
+		t.Fatal("retry after rebuild unexpectedly succeeded")
+	}
+	select {
+	case ok := <-woke:
+		if !ok {
+			t.Fatal("waiter did not wake on the rebuild")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rebuild did not signal WaitChanges")
+	}
+	if appends != 0 || attentions != 0 {
+		t.Fatalf("rebuild notified: appends=%d attentions=%d", appends, attentions)
+	}
+	if engine.Snapshot().Sequence != 1 {
+		t.Fatalf("sequence after rebuild = %d, want 1", engine.Snapshot().Sequence)
+	}
+}
+
+// A failed rebuild leaves the existing projection untouched, and the
+// configuration is isolated per engine.
+func TestEnterpriseRebuildFailureIsolatesProjection(t *testing.T) {
+	original := originalMessageFact(t, "relay-keep", "keep", "kept body")
+	port := &fakePort{snapshot: EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{original}, Seq: 1, Revision: 1}}
+	bad := model.Event{Seq: 1, ID: "evt-bad", RoomID: "room-1", Kind: EventBinding, Actor: model.ActorSlot1, CreatedAt: time.Now().UTC(), Data: []byte(`{malformed`)}
+	port.commitFn = func(cmd EnterpriseSendCommand) (EnterpriseSendResult, error) {
+		return EnterpriseSendResult{}, &EnterpriseCommandError{Outcome: EnterpriseOutcomeRefused, Class: EnterpriseClassRevisionConflict, Err: errors.New("moved")}
+	}
+	// The constructor consumes the good snapshot; only the rebuild call sees
+	// the malformed one.
+	engine := enterpriseTestEngine(t, port)
+	port.snapFn = func(auth EnterpriseAuth) (EnterpriseRoomSnapshot, error) {
+		return EnterpriseRoomSnapshot{RoomID: "room-1", HostMode: "native", Events: []model.Event{bad}, Seq: 1, Revision: 1}, nil
+	}
+	if len(engine.Snapshot().Messages) != 1 || engine.Snapshot().Messages[0].ID != "relay-keep" {
+		t.Fatalf("setup projection: %+v", engine.Snapshot().Messages)
+	}
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "f1", Text: "x", To: model.ActorSlot2}); err == nil {
+		t.Fatal("malformed rebuild snapshot accepted")
+	}
+	if engine.Fatal() == nil {
+		t.Fatal("failed rebuild did not fail closed")
+	}
+	if len(engine.Snapshot().Messages) != 1 || engine.Snapshot().Messages[0].ID != "relay-keep" {
+		t.Fatalf("failed rebuild mutated the projection: %+v", engine.Snapshot().Messages)
+	}
+
+	// Configuration isolation: mutating the caller's Runtimes map after
+	// construction must not change the engine's map.
+	caller := map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex}
+	port2 := &fakePort{snapshot: emptySnapshot()}
+	engine2, err := OpenEnterprise(context.Background(), Config{RoomID: "room-1", Runtimes: caller}, port2, whiteBoxAuth("u-owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine2.Close() })
+	caller[model.ActorSlot2] = model.RuntimeClaude
+	if engine2.cfg.Runtimes[model.ActorSlot2] != model.RuntimeCodex {
+		t.Fatal("the engine's Runtimes map was polluted by the caller")
 	}
 }
 
@@ -401,14 +546,14 @@ func TestEnterpriseGateQueuesCancelsAndBudgetBound(t *testing.T) {
 	// A queued command obeys its own earlier deadline and never reaches SQL.
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "g1", Text: "first", To: model.ActorSlot2})
+		_, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "g1", Text: "first", To: model.ActorSlot2})
 		firstDone <- err
 	}()
 	<-port.committed // the first command reached SQL; the gate is held
 
 	queuedCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := engine.ExecuteHumanSend(queuedCtx, SendRequest{ID: "g2", Text: "queued", To: model.ActorSlot2}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := engine.ExecuteHumanSend(queuedCtx, whiteBoxAuth("u-owner"), SendRequest{ID: "g2", Text: "queued", To: model.ActorSlot2}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("queued command error = %v, want DeadlineExceeded", err)
 	}
 	if port.commitCalls() != 1 {
@@ -422,7 +567,9 @@ func TestEnterpriseGateQueuesCancelsAndBudgetBound(t *testing.T) {
 }
 
 // CloseContext is cancellable and honest: a timed-out wait does not claim the
-// engine closed; a successful close performs no reap and no port call.
+// engine closed, the context is re-checked after the token is acquired (a
+// cancellation racing the token never starts the close), and a successful
+// close performs no reap and no port call.
 func TestEnterpriseCloseContextBounded(t *testing.T) {
 	port := &fakePort{snapshot: emptySnapshot(), committed: make(chan EnterpriseSendCommand, 2)}
 	hold := make(chan struct{})
@@ -432,7 +579,7 @@ func TestEnterpriseCloseContextBounded(t *testing.T) {
 	}
 	engine := enterpriseTestEngine(t, port)
 	go func() {
-		_, _ = engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "cl1", Text: "hold", To: model.ActorSlot2})
+		_, _ = engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "cl1", Text: "hold", To: model.ActorSlot2})
 	}()
 	<-port.committed
 
@@ -448,8 +595,21 @@ func TestEnterpriseCloseContextBounded(t *testing.T) {
 		t.Fatal("a timed-out close claimed the engine closed")
 	}
 
+	// Cancellation racing the token: with the gate free and the context
+	// already cancelled, the post-token re-check must refuse the close.
+	raceCtx, raceCancel := context.WithCancel(context.Background())
+	raceCancel()
+	if err := engine.CloseContext(raceCtx); err == nil {
+		t.Fatal("a cancelled close claimed success")
+	}
+	engine.mu.Lock()
+	closed = engine.closed
+	engine.mu.Unlock()
+	if closed {
+		t.Fatal("a cancelled close claimed the engine closed")
+	}
+
 	close(hold)
-	time.Sleep(50 * time.Millisecond) // let the in-flight command finish and release the gate
 	before := port.commitCalls()
 	if err := engine.CloseContext(context.Background()); err != nil {
 		t.Fatal(err)
@@ -457,7 +617,7 @@ func TestEnterpriseCloseContextBounded(t *testing.T) {
 	if port.commitCalls() != before {
 		t.Fatal("close called the port")
 	}
-	if _, err := engine.ExecuteHumanSend(context.Background(), SendRequest{ID: "cl2", Text: "after", To: model.ActorSlot2}); err == nil {
+	if _, err := engine.ExecuteHumanSend(context.Background(), whiteBoxAuth("u-owner"), SendRequest{ID: "cl2", Text: "after", To: model.ActorSlot2}); err == nil {
 		t.Fatal("closed engine accepted a command")
 	}
 }
@@ -466,7 +626,7 @@ func TestEnterpriseCloseContextBounded(t *testing.T) {
 // projection.
 func TestOpenEnterpriseValidation(t *testing.T) {
 	cfg := Config{RoomID: "room-1", Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex}}
-	auth := EnterpriseAuth{Deployment: "dep-test", UserID: "u-owner"}
+	auth := whiteBoxAuth("u-owner")
 	if _, err := OpenEnterprise(context.Background(), cfg, nil, auth); err == nil {
 		t.Fatal("nil port accepted")
 	}
