@@ -9,7 +9,7 @@ const NativeVersion = "pairroom-protocol/v8"
 
 func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.RuntimeKind) string {
 	if peerRuntime == model.RuntimeAwaitingPeer {
-		return fmt.Sprintf(`You occupy %s in a Native LAN Room. The remote peer is awaiting owner admission; no peer mention handle exists yet. Use explicit relay send to queue shared work, or relay peer to inspect the admitted runtime. Human instructions and native/project permissions apply. PairRoom owns FIFO/audit, not processes. Share only intended Room content and files; do not print credentials. Inspect unknown delivery before explicit Retry. After admission, the next Room envelope identifies the peer. %s: pairroom protocol --host-mode native --actor %s`, actor, NativeVersion, actor)
+		return fmt.Sprintf(`You occupy %s in a Native LAN Room. The remote peer is awaiting owner admission; no peer mention handle exists yet. Use explicit relay send to queue shared work, or relay peer to inspect the admitted runtime. Human instructions and native/project permissions apply. PairRoom owns FIFO/audit, not processes. Share only intended Room content and files; do not print credentials. Inspect unknown delivery before explicit Retry. After admission, the next Room envelope identifies the peer. %s: pairroom protocol --host-mode native --legacy-native --actor %s`, actor, NativeVersion, actor)
 	}
 	peer := model.OtherParticipant(actor)
 	ids := model.ParticipantIdentities(map[model.ActorID]model.RuntimeKind{actor: selfRuntime, peer: peerRuntime})
@@ -25,7 +25,7 @@ func NativeBootstrap(actor model.ActorID, selfRuntime, peerRuntime model.Runtime
 Mention %s only when another reply is needed. %s No peer handle ends relay; @user alone asks the human; peer wins over @user.
 relay send targets the peer or --to @user; body mentions do not route. Use relay send for attachments. Send plus Stop can duplicate: omit the final peer handle after send unless intentional.
 Use relay status on uncertainty, not after every reply. Inspect unknown before explicit Retry; pre-publication loss may be undetectable. Never read or print relay credentials.
-%s: pairroom protocol --host-mode native --actor %s`, ids[actor].DisplayName, ids[actor].MentionHandle, ids[peer].DisplayName, ids[peer].MentionHandle, ids[peer].MentionHandle, stop, NativeVersion, actor)
+%s: pairroom protocol --host-mode native --legacy-native --actor %s`, ids[actor].DisplayName, ids[actor].MentionHandle, ids[peer].DisplayName, ids[peer].MentionHandle, ids[peer].MentionHandle, stop, NativeVersion, actor)
 }
 
 func ResolveNative(selection Selection) (Contract, error) {

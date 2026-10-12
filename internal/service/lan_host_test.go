@@ -43,7 +43,7 @@ func newLANHostFixture(t *testing.T) *lanHostFixture {
 		t.Error("LAN Native provisioning spawned a vendor adapter")
 		return Binding{}, nil, errors.New("unexpected adapter")
 	})
-	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "LAN test", HostMode: model.HostNative, Sharing: "lan", OwnerSlot: model.ActorSlot1, Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef()}}}, noSpawn)
+	room, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "LAN test", HostMode: model.HostNative, Sharing: "lan", OwnerSlot: model.ActorSlot1}, noSpawn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,11 +79,11 @@ func newLANHostFixture(t *testing.T) *lanHostFixture {
 		t.Fatal(err)
 	}
 	session := "private-native-session-" + relay.Digest(registry.Root())[:16]
-	b, err := n.engine.Bind(model.ActorSlot1, relay.BindRequest{BindID: "host-binding", CredentialHash: relay.Digest("host-secret"), SessionID: session})
+	b, err := n.engine.Bind(model.ActorSlot1, relay.BindRequest{Runtime: model.RuntimeClaude, BindID: "host-binding", CredentialHash: relay.Digest("host-secret"), SessionID: session})
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner := relay.Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, SessionID: session, Secret: "host-secret"}
+	owner := relay.Auth{Runtime: model.RuntimeClaude, Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, SessionID: session, Secret: "host-secret"}
 	if _, err = n.engine.ConfirmSession(owner, owner.SessionID, "/private/native/transcript"); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestLANHostRequiresExactAdmissionAndScopedMembership(t *testing.T) {
 	badRoom := *admitted.Room
 	badRoom.Generation++
 	client.Transport = lanScopedTransport{base: client.Transport.(lanScopedTransport).base, room: &badRoom}
-	if err = lanshare.Call(context.Background(), client, f.invite, "send", relay.SendRequest{ID: "stale", Text: "no"}, nil); err == nil {
+	if err = lanshare.Call(context.Background(), client, f.invite, "send", relay.SendRequest{ExpectedPeerGeneration: 1, ID: "stale", Text: "no"}, nil); err == nil {
 		t.Fatal("stale generation gained current member authority")
 	}
 	client.Transport = lanScopedTransport{base: client.Transport.(lanScopedTransport).base, room: admitted.Room}
@@ -296,7 +296,7 @@ func TestLANSharedFilesRequireExplicitHistoryAndKeepBytes(t *testing.T) {
 		t.Fatal("unpublished object was downloadable")
 	}
 	var message relay.Message
-	if err = lanshare.Call(context.Background(), client, f.invite, "send", relay.SendRequest{ID: "evidence", Text: "repro", AttachmentIDs: []string{object.ID}}, &message); err != nil {
+	if err = lanshare.Call(context.Background(), client, f.invite, "send", relay.SendRequest{ExpectedPeerGeneration: 1, ID: "evidence", Text: "repro", AttachmentIDs: []string{object.ID}}, &message); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(map[string]string{"id": object.ID})
@@ -370,7 +370,7 @@ func testLANDownloadRevocation(t *testing.T, blockFlush bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.native.engine.Send(f.owner, relay.SendRequest{ID: "large", Text: "evidence", AttachmentIDs: []string{object.ID}}); err != nil {
+	if _, err = f.native.engine.Send(f.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "large", Text: "evidence", AttachmentIDs: []string{object.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	w := &lanBlockedWriter{header: make(http.Header), started: make(chan struct{}), release: make(chan struct{}), blockFlush: blockFlush}
@@ -641,7 +641,7 @@ func TestLANMemberOperationsPreservePublicationAndHumanReceipts(t *testing.T) {
 	if err := lanshare.Call(ctx, client, f.invite, "head", lanshare.HeadRequest{TimeoutSeconds: 31}, nil); err == nil {
 		t.Fatal("unbounded member wait admitted")
 	}
-	m, err := f.native.engine.Send(f.owner, relay.SendRequest{ID: "head", Text: "reproduce the bug"})
+	m, err := f.native.engine.Send(f.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "head", Text: "reproduce the bug"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +657,7 @@ func TestLANMemberOperationsPreservePublicationAndHumanReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var publication relay.Publication
-	if err = lanshare.Call(ctx, client, f.invite, "report", map[string]any{"report_seq": 1, "text": "@claude full reproduction result"}, &publication); err != nil || publication.Message == nil {
+	if err = lanshare.Call(ctx, client, f.invite, "report", map[string]any{"report_seq": 1, "expected_peer_generation": 1, "text": "@agent1 full reproduction result"}, &publication); err != nil || publication.Message == nil {
 		t.Fatalf("publication: %+v %v", publication, err)
 	}
 	var receipt struct {
@@ -688,7 +688,7 @@ func TestLANMemberOperationsPreservePublicationAndHumanReceipts(t *testing.T) {
 	if err = lanshare.Call(ctx, client, f.invite, "leave", map[string]any{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err = lanshare.Call(ctx, client, f.invite, "send", relay.SendRequest{ID: "after-leave", Text: "forbidden"}, nil); err == nil {
+	if err = lanshare.Call(ctx, client, f.invite, "send", relay.SendRequest{ExpectedPeerGeneration: 1, ID: "after-leave", Text: "forbidden"}, nil); err == nil {
 		t.Fatal("left membership retained effects")
 	}
 }

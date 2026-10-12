@@ -40,7 +40,7 @@ func TestLANHostNativeActivityIsSeparateFromObservation(t *testing.T) {
 		t.Fatalf("native confirmation did not advance activity without exporting session data: %+v", binding)
 	}
 	call("head", map[string]any{"park": true, "timeout_seconds": 1}, nil)
-	first, err := f.native.engine.Send(f.owner, relay.SendRequest{ID: "first-native-nudge", Text: "first"})
+	first, err := f.native.engine.Send(f.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "first-native-nudge", Text: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestLANHostNativeActivityIsSeparateFromObservation(t *testing.T) {
 	if err := f.native.engine.Cancel(first.ID); err != nil {
 		t.Fatal(err)
 	}
-	next, err := f.native.engine.Send(f.owner, relay.SendRequest{ID: "next-native-nudge", Text: "next"})
+	next, err := f.native.engine.Send(f.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "next-native-nudge", Text: "next"})
 	if err != nil {
 		t.Fatal(err)
 	}

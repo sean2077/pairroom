@@ -69,7 +69,7 @@ func TestRoomCreationRejectsRetiredRolePolicyBeforeProvisioning(t *testing.T) {
 		t.Fatal(err)
 	}
 	agents["slot1"].(map[string]any)["ordinary_reviewer_policy"] = "explicit"
-	body, err := json.Marshal(map[string]any{"name": "invalid", "agents": agents, "bindings": specs(BindingNew, BindingNew, "removed-policy")})
+	body, err := json.Marshal(map[string]any{"name": "invalid", "host_mode": "embedded", "agents": agents, "bindings": specs(BindingNew, BindingNew, "removed-policy")})
 	if err != nil {
 		t.Fatal(err)
 	}

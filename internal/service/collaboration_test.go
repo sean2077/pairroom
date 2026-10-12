@@ -53,7 +53,7 @@ func TestCollaborationIsCreatedOnceAndRecoveredFromRoomFacts(t *testing.T) {
 					_ = json.Unmarshal(event.Data, &provisioned)
 				}
 			}
-			if meta.Collaboration == nil || *meta.Collaboration != want || provisioned.Schema != 6 || provisioned.Collaboration == nil || *provisioned.Collaboration != want {
+			if meta.Collaboration == nil || *meta.Collaboration != want || provisioned.Schema != 7 || provisioned.Collaboration == nil || *provisioned.Collaboration != want {
 				t.Fatal("Room and service authorities disagree")
 			}
 			reopened, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
@@ -156,7 +156,7 @@ func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	if *after.Collaboration != *created.Collaboration || after.Name != created.Name {
 		t.Fatal("rejected mutation changed state")
 	}
-	// New Rooms use schema 13; retired formats are rejected before replay.
+	// New Rooms use schema 14; retired formats are rejected before replay.
 	data, err := os.ReadFile(filepath.Join(created.DataDir, "metadata.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestManagementRejectsChangingCollaborationAfterCreation(t *testing.T) {
 	var meta struct {
 		Schema int `json:"schema_version"`
 	}
-	if json.Unmarshal(data, &meta) != nil || meta.Schema != 13 {
+	if json.Unmarshal(data, &meta) != nil || meta.Schema != 14 {
 		t.Fatalf("new-mode metadata=%s", data)
 	}
 }

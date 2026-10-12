@@ -98,16 +98,37 @@ var harnessGone = func(pid int) bool {
 // validatePublicationReceipt checks identity and idempotency without reflecting the body.
 func validatePublicationReceipt(c *Client, o options, msg relay.Message, text string) error {
 	to := peerSlot(c.State.Slot)
+	expected := uint64(0)
+	if c.State.DynamicBindings {
+		expected = c.State.AutomaticPeerGeneration
+		if o.peerGeneration != 0 {
+			expected = o.peerGeneration
+		}
+	}
 	if o.to == "@user" {
 		to = model.ActorUser
+		expected = 0
 	}
 	if !safePart(msg.ID) || len(msg.ID) > 128 || msg.From != c.State.Slot || msg.To != to || msg.State == "" {
-		return fmt.Errorf("publication receipt invalid; inspect relay status; recover only with the SAME --id %s", o.id)
+		return fmt.Errorf("publication receipt invalid; inspect relay status; recover only with the SAME %s and original payload", publicationRetryFlags(o.id, expected))
 	}
 	if msg.Text != text {
 		return fmt.Errorf("--id %s already refers to a different body; no new message was published; inspect relay status", o.id)
 	}
+	if c.State.DynamicBindings {
+		if msg.FromRuntime != c.State.Runtime || msg.FromGeneration != c.State.Generation || msg.To.ValidParticipant() && msg.TargetGeneration != expected {
+			return fmt.Errorf("publication receipt generation mismatch; query the SAME %s and original payload before any further publication", publicationRetryFlags(o.id, expected))
+		}
+	}
 	return nil
+}
+
+func publicationRetryFlags(id string, generation uint64) string {
+	flags := "--id " + id
+	if generation != 0 {
+		flags += fmt.Sprintf(" --peer-generation %d", generation)
+	}
+	return flags
 }
 
 // finishExchange is the receive half of an explicit send followed by wait.

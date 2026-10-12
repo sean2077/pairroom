@@ -19,11 +19,15 @@ _Avoid (en)_: claude/codex slot IDs
 _Avoid (zh-CN)_: Claude/Codex 槽位 ID
 
 **Binding**:
-The association between a Room participant and its exact identity: an admitted LAN member's remote key, or a native Runtime/session identity for a locally bound participant. Embedded materializes new sessions on accepted execution; Native associates the existing session at bind.
+The association between a Room participant and its exact identity: an admitted LAN member's remote key, or a native Runtime/session identity for a locally bound participant. Embedded materializes new sessions on accepted execution; Native associates the existing session at bind. New Native Rooms persist the actual Runtime in each Binding generation; replacing the participant starts a new generation.
 _Equivalent (zh-CN)_: 会话绑定
 
+**Binding generation**:
+The monotonically increasing identity version of a Native slot. Credentials, publications and inbox deliveries refer to a particular generation, so replacing a participant cannot authorize an earlier participant's effects.
+_Equivalent (zh-CN)_: 绑定代次
+
 **Runtime**:
-The Claude Code, Codex, Grok Build, or Gemini CLI harness selected for a participant.
+The Claude Code, Codex, Grok Build, or Gemini CLI harness used by a participant. Embedded selects it at creation; new Native Rooms detect it from the actual session when the participant joins.
 _Equivalent (zh-CN)_: 原生运行时
 
 **Room Runtime**:
@@ -49,7 +53,7 @@ Agent 2's default implementation, verification, and technical-feedback responsib
 _Equivalent (zh-CN)_: 执行者
 
 **Mention handle**:
-The public runtime-derived `@` identifier, with stable `0/1` suffixes when both slots use the same Runtime.
+The public `@` identifier used to address a participant. Native v9 uses stable `@agent1` and `@agent2` slot handles. Existing Native v8 and Embedded use runtime-derived handles, with stable `0/1` suffixes when both slots use the same Runtime.
 _Equivalent (zh-CN)_: 点名句柄
 _Avoid (en)_: slot alias
 _Avoid (zh-CN)_: 槽位别名
@@ -67,7 +71,7 @@ An Embedded participant's effective native-tool policy selection, separate from 
 _Equivalent (zh-CN)_: 权限配置
 
 **Agent pair profile**:
-A named reusable template for both slots' Runtime and configuration selections, optionally the Service default for new Rooms. Creation copies it; later edits do not reconfigure existing Rooms or Native processes.
+A named reusable template for both slots' Runtime and configuration selections, optionally the Service default for new Embedded Rooms. Embedded creation copies it; new Native Rooms do not consume it. Later edits do not reconfigure existing Rooms or Native processes.
 _Equivalent (zh-CN)_: Agent 组合配置
 
 **Provider**:
@@ -117,8 +121,12 @@ A native Room created with `sharing: "lan"` and one local `owner_slot`, hosted o
 _Equivalent (zh-CN)_: 局域网共享
 
 **Awaiting peer**:
-The reserved other slot of a LAN Room before admission (`awaiting_peer`): no Runtime, session or mention handle is guessed for it, and it is never a reusable pair-template selection.
+The reserved other slot of a LAN Room before admission (`awaiting_peer`): no Runtime or session is guessed for it, and it is never a reusable pair-template selection. Native v9 still exposes its stable slot handle.
 _Equivalent (zh-CN)_: 等待对方加入
+
+**Awaiting binding**:
+A vacant local slot in a new Native Room (`awaiting_binding`), with a stable slot handle and no selected Runtime, session or harness capability.
+_Equivalent (zh-CN)_: 等待绑定
 
 **Remote key**:
 The admitted guest's public-key fingerprint on a LAN member binding (`remote_key`), authenticated by its per-Room client certificate. It identifies that membership key, not a global machine identity or a vendor session.

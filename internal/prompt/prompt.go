@@ -37,7 +37,14 @@ func Envelope(input model.AgentInput) string {
 	if from == "" {
 		from = "@user"
 	}
-	fmt.Fprintf(&b, "from: %s\n", from)
+	fmt.Fprintf(&b, "from: %s", from)
+	if input.FromRuntime.Valid() && input.FromGeneration > 0 {
+		fmt.Fprintf(&b, " (%s, generation %d)", input.FromRuntime.Canonical(), input.FromGeneration)
+	}
+	fmt.Fprintln(&b)
+	if input.PeerGeneration > 0 && input.PeerHandle != "" {
+		fmt.Fprintf(&b, "peer: %s, generation %d\n", input.PeerHandle, input.PeerGeneration)
+	}
 	if len(input.Attachments) > 0 {
 		fmt.Fprintln(&b, "attachments:")
 		for _, a := range input.Attachments {

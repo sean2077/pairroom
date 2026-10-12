@@ -16,7 +16,7 @@ func TestProtocolDefaultDisclosesTheAssumedHostMode(t *testing.T) {
 	if err := writeProtocol([]string{"--actor", "slot1"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	for _, fragment := range []string{protocol.NativeVersion, "--host-mode was not given", "--host-mode embedded"} {
+	for _, fragment := range []string{protocol.NativeDynamicVersion, "--host-mode was not given", "--host-mode embedded", "--legacy-native"} {
 		if !strings.Contains(stdout.String(), fragment) {
 			t.Fatalf("assumed host mode was not disclosed (%q):\n%s", fragment, stdout.String())
 		}

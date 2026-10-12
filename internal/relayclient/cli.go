@@ -45,8 +45,8 @@ type options struct {
 	repoExplicit                                   bool
 	timeout                                        int
 	inlineMax                                      int
+	peerGeneration                                 uint64
 	attachments, files                             stringsFlag
-	preparedAgents                                 map[model.ActorID]model.AgentSelection
 }
 type stringsFlag []string
 
@@ -113,7 +113,8 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.to, "to", "", "explicit send target: @user, or empty for peer")
 	flags.BoolVar(&o.create, "create", false, "bind only: register the project when missing, create a native Room, then bind this session")
 	flags.StringVar(&o.name, "name", "", "optional Room display name for bind --create")
-	flags.StringVar(&o.peer, "peer-runtime", "", "peer slot runtime claude|codex|grok|gemini for local bind --create")
+	flags.StringVar(&o.peer, "peer-runtime", "", "retired: Native runtimes are identified when agents join")
+	flags.Uint64Var(&o.peerGeneration, "peer-generation", 0, "explicit target generation from relay peer or the inbound context for send/exchange")
 	flags.StringVar(&o.share, "share", "", "bind --create: lan creates a Native Room awaiting a remote peer")
 	flags.BoolVar(&o.replace, "replace", false, "explicitly replace a binding; LAN join requires a fresh invitation after the previous membership is retired")
 	flags.BoolVar(&o.purge, "purge-hooks", false, "remove this runtime's relay hooks when no other local binding uses them")
@@ -169,8 +170,11 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if provided["share"] && (action != "bind" || !o.create || o.share != "lan") {
 		return errors.New("--share accepts lan only with bind --create")
 	}
-	if o.share == "lan" && o.peer != "" {
-		return errors.New("LAN peer runtime is established at admission; omit --peer-runtime")
+	if provided["peer-runtime"] {
+		return errors.New("native Room runtimes are identified when agents join; omit --peer-runtime")
+	}
+	if provided["peer-generation"] && (action != "send" && action != "exchange" || o.peerGeneration == 0) {
+		return errors.New("--peer-generation requires a positive generation and applies only to send/exchange")
 	}
 	if provided["file"] && action != "send" && action != "exchange" {
 		return errors.New("--file applies only to send/exchange")
@@ -356,7 +360,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		} else {
 			err = c.Reconcile(ctx, action == "reconcile" && o.resend)
 		}
-		if err != nil && !errors.Is(err, relay.ErrUnknown) {
+		if err != nil && !errors.Is(err, relay.ErrUnknown) && !errors.Is(err, relay.ErrPeerChanged) && !errors.Is(err, errResponseContextMissing) && !errors.Is(err, errResponseScopeChanged) {
 			release()
 			return err
 		}
@@ -403,6 +407,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			}
 			to = model.ActorUser
 		}
+		expectedPeerGeneration, err := c.publicationPeerGeneration(o.peerGeneration)
+		if to == model.ActorUser {
+			if o.peerGeneration != 0 {
+				return errors.New("--peer-generation cannot target @user")
+			}
+			expectedPeerGeneration, err = 0, nil
+		}
+		if err != nil {
+			return err
+		}
 		attachments := []string{}
 		for _, path := range o.attachments {
 			id, err := c.upload(ctx, path)
@@ -431,13 +445,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			anchor = &value
 		}
 		var msg relay.Message
-		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor}, &msg)
+		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor, "expected_peer_generation": expectedPeerGeneration}, &msg)
 		if relayErrorCode(err) == relay.SendPayloadConflictCode {
 			// Settled, not uncertain: this ID already names an accepted message.
 			return fmt.Errorf("--id %s was already used for a different message (body, target, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
 		}
+		if relayErrorCode(err) == relay.PeerChangedCode {
+			return fmt.Errorf("peer changed; nothing was published for --id %s. This text was addressed to peer generation %d. Inspect relay peer, then explicitly send the intended text with --peer-generation N and a new --id", o.id, expectedPeerGeneration)
+		}
 		if err != nil {
-			return fmt.Errorf("%w; publication uncertain: retry with the SAME --id %s, not a new ID", err, o.id)
+			return fmt.Errorf("%w; publication uncertain: retry with the SAME %s and original payload, not a new ID or peer generation", err, publicationRetryFlags(o.id, expectedPeerGeneration))
 		}
 		if err := validatePublicationReceipt(c, o, msg, text); err != nil {
 			return err
@@ -447,7 +464,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		receipt := publicationReceipt{Published: msg.ID, ClientID: o.id, State: msg.State, To: msg.To}
 		if err := writeJSON(out, receipt); err != nil {
-			return fmt.Errorf("publication %s confirmed but receipt output failed: %w; recover only with the SAME --id %s", msg.ID, err, o.id)
+			return fmt.Errorf("publication %s confirmed but receipt output failed: %w; recover only with the SAME %s and original payload", msg.ID, err, publicationRetryFlags(o.id, expectedPeerGeneration))
 		}
 		writeQueuedDeliveryHint(diagnostic, c, msg)
 		return nil
@@ -491,18 +508,37 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if installed(root, c.State.Runtime) != nil {
 			hook = "missing_or_disabled"
 		}
-		local := map[string]any{"cli_version": version.Current, "protocol": protocol.NativeVersion, "protocol_match": report["protocol"] == protocol.NativeVersion, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt, "skill": skillStatus(c.State.Runtime)}
+		versionProtocol := protocol.NativeVersion
+		if c.State.DynamicBindings {
+			versionProtocol = protocol.NativeDynamicVersion
+		}
+		local := map[string]any{"cli_version": version.Current, "protocol": versionProtocol, "protocol_match": report["protocol"] == versionProtocol, "service_version_match": report["service_version"] == version.Current, "workspace_match": root == c.State.Workspace, "hook_installation": hook, "hook_approval": "unknown", "last_hook_at": c.State.LastHookAt, "skill": skillStatus(c.State.Runtime)}
 		if hint := hookNotRunHint(c.State); hint != "" {
 			local["hook_hint"] = hint
 		}
 		report["local"] = local
 		return writeJSON(out, report)
 	case "peer":
-		var peer relay.Binding
-		if err := c.call(ctx, "peer", nil, &peer); err != nil {
+		if !c.State.DynamicBindings {
+			var peer relay.Binding
+			if err := c.call(ctx, "peer", nil, &peer); err != nil {
+				return err
+			}
+			return writeJSON(out, peer)
+		}
+		var summary relay.Summary
+		if err := c.call(ctx, "summary", nil, &summary); err != nil {
 			return err
 		}
-		return writeJSON(out, peer)
+		generation := summary.TargetGenerations[peerSlot(c.State.Slot)]
+		if err := c.recordPeerContext(ctx, generation, false); err != nil {
+			return err
+		}
+		result := map[string]any{"binding": summary.Bindings[peerSlot(c.State.Slot)], "peer_generation": generation, "automatic_peer_generation": c.State.AutomaticPeerGeneration, "automatic_paused": c.State.AutomaticPaused}
+		if c.State.AutomaticPaused {
+			result["notice"] = automaticPauseNotice(generation)
+		}
+		return writeJSON(out, result)
 	case "park":
 		var result map[string]any
 		if err := c.call(ctx, "park", map[string]bool{"enabled": o.enabled}, &result); err != nil {
@@ -529,6 +565,14 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			return e
 		}
 		local := map[string]any{"last_confirmed_seq": c.State.LastConfirmedSeq, "last_seq": c.State.LastSeq, "publication_unknown": errors.Is(err, relay.ErrUnknown), "binding_workspace": c.State.Workspace}
+		if c.State.DynamicBindings {
+			local["automatic_peer_generation"] = c.State.AutomaticPeerGeneration
+			local["automatic_paused"] = c.State.AutomaticPaused
+			local["automatic_scope_changed"] = c.State.AutomaticScopeChanged
+			if c.State.AutomaticPaused {
+				local["notice"] = automaticPauseNotice(c.State.PeerGeneration)
+			}
+		}
 		if c.State.LastHookAt != "" {
 			local["last_hook_at"] = c.State.LastHookAt
 		} else {
@@ -537,6 +581,12 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if c.State.Pending != nil {
 			local["pending_seq"] = c.State.Pending.Seq
 			local["publication_unknown"] = c.State.Pending.Unknown
+			if c.State.Pending.ExpectedPeerGeneration != 0 {
+				local["pending_peer_generation"] = c.State.Pending.ExpectedPeerGeneration
+			}
+			if c.State.Pending.Outcome != "" {
+				local["pending_outcome"] = c.State.Pending.Outcome
+			}
 		}
 		if len(c.State.Held) > 0 {
 			local["held_publications"] = len(c.State.Held)
@@ -569,6 +619,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		if current.State.BindID != c.State.BindID {
 			return errors.New("binding changed; inspect before unbinding")
 		}
+		if err := retainResponseContext(ctx, &current.State, current.State.AutomaticPeerGeneration); err != nil {
+			return err
+		}
 		if err := c.call(ctx, "unbind", nil, nil); err != nil {
 			return err
 		}
@@ -576,6 +629,8 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			if err := archiveLANWorkspaceState(root, dir, current.State); err != nil {
 				return err
 			}
+		} else if err := archiveLocalBinding(root, dir, current.State); err != nil {
+			return err
 		}
 		for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
 			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -633,6 +688,9 @@ func unbindLocalOnlyWithMetadata(ctx context.Context, root, dir string, o option
 	if !validStateFormat(state) || !state.Slot.ValidParticipant() {
 		return errors.New("invalid local relay state identity")
 	}
+	if err := retainResponseContext(ctx, &state, state.AutomaticPeerGeneration); err != nil {
+		return err
+	}
 	if expected != nil {
 		if !matchesDirectMetadata(state, *expected) {
 			return errors.New("direct LAN workspace identity changed; inspect before local detach")
@@ -663,6 +721,8 @@ func unbindLocalOnlyWithMetadata(ctx context.Context, root, dir string, o option
 		if err := archiveLANWorkspaceStateWith(root, dir, state, recovery); err != nil {
 			return err
 		}
+	} else if err := archiveLocalBinding(root, dir, state); err != nil {
+		return err
 	}
 	cleanupAtomicTemps(dir)
 	for _, name := range []string{"state.json", "credentials", "bootstrap", bindAttemptFile, claudewake.FileName} {
@@ -807,15 +867,6 @@ func localBindCommand(endpoint, room string, slot model.ActorID) string {
 	return relay.LocalBindCommand(endpoint, room, slot)
 }
 
-func createRetryCommand(root, endpoint string, o options) string {
-	command := "pairroom relay bind --create"
-	if name := strings.TrimSpace(o.name); name != "" {
-		command += " --name " + quoteShellPath(name)
-	}
-	command += " --peer-runtime <claude|codex|grok|gemini>"
-	return command + " --service-file " + quoteShellPath(endpoint) + " --repo " + quoteShellPath(root)
-}
-
 // serviceSnapshot is the read-only Management projection used for Room and
 // slot resolution. Resolution only selects convenience; binding still presents
 // credentials and the hook path still requires the official session identity.
@@ -830,11 +881,12 @@ type serviceProject struct {
 }
 
 type serviceRoom struct {
-	ID        string                                 `json:"id"`
-	ProjectID string                                 `json:"project_id"`
-	HostMode  model.HostMode                         `json:"host_mode"`
-	Lifecycle string                                 `json:"lifecycle"`
-	Agents    map[model.ActorID]model.AgentSelection `json:"agents"`
+	ID              string                                 `json:"id"`
+	ProjectID       string                                 `json:"project_id"`
+	HostMode        model.HostMode                         `json:"host_mode"`
+	Lifecycle       string                                 `json:"lifecycle"`
+	DynamicBindings bool                                   `json:"dynamic_bindings,omitempty"`
+	Agents          map[model.ActorID]model.AgentSelection `json:"agents"`
 }
 
 // roomLifecycleActive mirrors the Service's active Room lifecycle. The relay
@@ -916,6 +968,11 @@ func resolveNativeRoom(snapshot serviceSnapshot, root string) (string, error) {
 // resolveSlotForRoom infers the caller's slot only when exactly one slot of
 // the Room runs the caller's runtime; every other case fails with candidates.
 func resolveSlotForRoom(room serviceRoom, rt model.RuntimeKind) (model.ActorID, error) {
+	if room.DynamicBindings {
+		// Selecting a vacancy from this snapshot would race another caller.
+		// The bind endpoint chooses and commits the seat atomically.
+		return "", nil
+	}
 	if rt == "" {
 		return "", errors.New("bind requires --slot 1|2 (Agent 1/2) outside a recognized native session")
 	}
@@ -1010,13 +1067,10 @@ func resolveSlotDefaults(root string, o *options) error {
 
 // createNativeRoom registers the workspace Project when missing and creates a
 // native-hosted Room through the same validated Management path the browser
-// uses. It never bypasses creation-time validation or writes Room state
-// directly. Preflight pins Service defaults in creator-first order; explicit
-// runtime overrides inherit the native configuration through empty fields.
+// uses. New Native Rooms intentionally omit all runtime and pair selections.
 func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string, o options, slot model.ActorID) (string, error) {
-	agents, err := createAgents(o, slot)
-	if err != nil {
-		return "", err
+	if o.peer != "" {
+		return "", errors.New("native Room runtimes are identified when agents join; omit --peer-runtime")
 	}
 	var snapshot serviceSnapshot
 	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/service", nil, &snapshot); err != nil {
@@ -1044,9 +1098,6 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 	if name := strings.TrimSpace(o.name); name != "" {
 		request["name"] = name
 	}
-	if agents != nil {
-		request["agents"] = agents
-	}
 	var room struct{ ID string }
 	if err := management(ctx, endpoint, http.MethodPost, "/api/v1/projects/"+project+"/rooms", request, &room); err != nil {
 		return "", fmt.Errorf("Room creation was not confirmed: %w; inspect Management for an already-created Room before repeating --create", err)
@@ -1057,39 +1108,6 @@ func createNativeRoom(ctx context.Context, endpoint relay.Endpoint, root string,
 	return room.ID, nil
 }
 
-func createAgents(o options, slot model.ActorID) (map[model.ActorID]model.AgentSelection, error) {
-	if o.preparedAgents != nil {
-		return o.preparedAgents, nil
-	}
-	own, peer := model.RuntimeKind(o.kind), model.RuntimeKind(o.peer)
-	if own == "" && peer == "" {
-		return nil, nil
-	}
-	if own == "" {
-		own = callerRuntime(o)
-		if own == "" {
-			own = defaultRuntimeFor(slot)
-		}
-	}
-	if peer == "" {
-		peer = defaultRuntimeFor(peerSlot(slot))
-		if peer == own {
-			// Moving a Codex creator to Agent 1 must not accidentally create a
-			// Codex/Codex pair. Duplicate runtimes remain an explicit choice.
-			peer = defaultRuntimeFor(slot)
-		}
-	}
-	for _, kind := range []model.RuntimeKind{own, peer} {
-		if !kind.Valid() {
-			return nil, errors.New("native Rooms support --runtime/--peer-runtime claude, codex, grok or gemini")
-		}
-	}
-	return map[model.ActorID]model.AgentSelection{
-		slot:           {Runtime: own},
-		peerSlot(slot): {Runtime: peer},
-	}, nil
-}
-
 func peerSlot(slot model.ActorID) model.ActorID {
 	if slot == model.ActorSlot1 {
 		return model.ActorSlot2
@@ -1097,12 +1115,6 @@ func peerSlot(slot model.ActorID) model.ActorID {
 	return model.ActorSlot1
 }
 
-func defaultRuntimeFor(slot model.ActorID) model.RuntimeKind {
-	if slot == model.ActorSlot2 {
-		return model.RuntimeCodex
-	}
-	return model.RuntimeClaude
-}
 func (c *Client) upload(ctx context.Context, path string) (string, error) {
 	return c.uploadFile(ctx, path, "image")
 }

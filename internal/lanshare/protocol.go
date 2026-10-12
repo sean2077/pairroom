@@ -131,13 +131,16 @@ type JoinStatusRequest struct {
 	RequestID string `json:"request_id"`
 }
 type RoomInfo struct {
-	RoomID        string                              `json:"room_id"`
-	Name          string                              `json:"name"`
-	Slot          model.ActorID                       `json:"slot"`
-	Generation    uint64                              `json:"generation"`
-	BindID        string                              `json:"bind_id"`
-	Runtimes      map[model.ActorID]model.RuntimeKind `json:"runtimes"`
-	Collaboration *model.Collaboration                `json:"collaboration"`
+	DynamicBindings bool                                `json:"dynamic_bindings,omitempty"`
+	PeerGeneration  uint64                              `json:"peer_generation,omitempty"`
+	Bootstrap       string                              `json:"bootstrap,omitempty"`
+	RoomID          string                              `json:"room_id"`
+	Name            string                              `json:"name"`
+	Slot            model.ActorID                       `json:"slot"`
+	Generation      uint64                              `json:"generation"`
+	BindID          string                              `json:"bind_id"`
+	Runtimes        map[model.ActorID]model.RuntimeKind `json:"runtimes"`
+	Collaboration   *model.Collaboration                `json:"collaboration"`
 }
 type JoinResponse struct {
 	Status  string    `json:"status"`
@@ -190,9 +193,10 @@ type ClaimRequest struct {
 	Park       bool   `json:"park,omitempty"`
 }
 type Claim struct {
-	ID      string        `json:"id"`
-	Receipt string        `json:"receipt"`
-	Message relay.Message `json:"message"`
+	PeerGeneration uint64        `json:"peer_generation,omitempty"`
+	ID             string        `json:"id"`
+	Receipt        string        `json:"receipt"`
+	Message        relay.Message `json:"message"`
 }
 type ClaimResponse struct {
 	Claim *Claim `json:"claim"`

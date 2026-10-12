@@ -110,21 +110,13 @@ func TestGrokBindAcceptsSharedClaudePairRoomHook(t *testing.T) {
 	}
 }
 
-func TestGrokCreatorInfersOwnRuntimeWithPeerSelection(t *testing.T) {
+func TestGrokCreatorInfersOwnRuntimeWithoutPeerSelection(t *testing.T) {
 	isolateCaller(t)
 	t.Setenv("GROK_SESSION_ID", "own")
-	o := options{peer: "codex"}
+	o := options{}
 	slot, err := inferCreateSlot(o)
 	if err != nil || slot != model.ActorSlot1 {
 		t.Fatalf("slot=%s err=%v", slot, err)
-	}
-	selections, err := createAgents(o, slot)
-	if err != nil || selections[slot].Runtime != model.RuntimeGrok || selections[peerSlot(slot)].Runtime != model.RuntimeCodex {
-		t.Fatalf("explicit peer lost calling Grok: %+v %v", selections, err)
-	}
-	selections, err = createAgents(options{}, "")
-	if err != nil || selections != nil {
-		t.Fatal("zero overrides silently changed Service defaults")
 	}
 	root := t.TempDir()
 	callerState(t, root, "grok-room", "own", model.ActorSlot2, model.RuntimeGrok)

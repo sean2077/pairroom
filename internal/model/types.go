@@ -406,19 +406,24 @@ type AgentQuote struct {
 }
 
 type AgentInput struct {
-	MessageID   string            `json:"message_id"`
-	ThreadID    string            `json:"thread_id"`
-	From        ActorID           `json:"from"`
-	To          ActorID           `json:"to"`
-	FromHandle  string            `json:"from_handle"`
-	SelfHandle  string            `json:"self_handle"`
-	PeerHandle  string            `json:"peer_handle"`
-	Text        string            `json:"text"`
-	ReplyTo     string            `json:"reply_to,omitempty"`
-	Quote       *AgentQuote       `json:"quote,omitempty"`
-	Access      NativeAccess      `json:"access,omitempty"`
-	Attachments []AgentAttachment `json:"attachments,omitempty"`
-	Intent      MessageIntent     `json:"intent,omitempty"`
+	// Native generation context is emitted only by dynamic Native Rooms.
+	// The caller retains the peer generation with the response it produces.
+	FromRuntime    RuntimeKind       `json:"from_runtime,omitempty"`
+	FromGeneration uint64            `json:"from_generation,omitempty"`
+	PeerGeneration uint64            `json:"peer_generation,omitempty"`
+	MessageID      string            `json:"message_id"`
+	ThreadID       string            `json:"thread_id"`
+	From           ActorID           `json:"from"`
+	To             ActorID           `json:"to"`
+	FromHandle     string            `json:"from_handle"`
+	SelfHandle     string            `json:"self_handle"`
+	PeerHandle     string            `json:"peer_handle"`
+	Text           string            `json:"text"`
+	ReplyTo        string            `json:"reply_to,omitempty"`
+	Quote          *AgentQuote       `json:"quote,omitempty"`
+	Access         NativeAccess      `json:"access,omitempty"`
+	Attachments    []AgentAttachment `json:"attachments,omitempty"`
+	Intent         MessageIntent     `json:"intent,omitempty"`
 }
 
 type SystemNotice struct {

@@ -20,9 +20,7 @@ func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 	f := nativeHTTP(t)
 	a := associateCLI(t, f, model.ActorSlot1)
 	b := associateCLI(t, f, model.ActorSlot2)
-	pair := defaultAgentSelections()
-	pair[model.ActorSlot2] = pair[model.ActorSlot1]
-	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "duplicate target", HostMode: model.HostNative, Agents: pair}, SyntheticProvisioner{})
+	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "duplicate target", HostMode: model.HostNative}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,10 +33,10 @@ func TestNativeRejectedCLIBindKeepsOriginalRelayUsable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.project.Root, ".pairroom", "rooms", other.ID, "slots", "slot2", "state.json")); !os.IsNotExist(err) {
 		t.Fatal("rejected bind created discoverable state")
 	}
-	if _, err := f.hook(t, a, "@codex original publication survives", false); err != nil {
+	if _, err := f.hook(t, a, "@agent2 original publication survives", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.native.engine.Send(b, relay.SendRequest{ID: "original-receive", Text: "original collection survives"}); err != nil {
+	if _, err := f.native.engine.Send(b, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "original-receive", Text: "original collection survives"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.native.engine.Park(a.Slot, true); err != nil {
@@ -63,7 +61,7 @@ func TestNativeStopBacklogPublishesInOrderAfterServiceReturns(t *testing.T) {
 	if err := os.Remove(f.endpoint); err != nil {
 		t.Fatal(err)
 	}
-	stopped := []string{"@codex first while stopped", "private unaddressed reply", "@codex third while stopped"}
+	stopped := []string{"@agent2 first while stopped", "private unaddressed reply", "@agent2 third while stopped"}
 	for _, text := range stopped {
 		if _, err := f.hook(t, a, text, false); err == nil || !strings.Contains(err.Error(), "is PairRoom running") {
 			t.Fatalf("stopped Service not reported: %v", err)
@@ -111,7 +109,7 @@ func TestNativeReplaceRefusesUnpublishedStopBacklog(t *testing.T) {
 	if err := os.Remove(f.endpoint); err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{"@codex saved head", "@codex saved held"} {
+	for _, text := range []string{"@agent2 saved head", "@agent2 saved held"} {
 		if _, err := f.hook(t, a, text, false); err == nil {
 			t.Fatal("stopped Service not reported")
 		}
@@ -213,7 +211,7 @@ func TestNativeHookIdentityMismatchIsVisibleWithoutEffects(t *testing.T) {
 	f := nativeHTTP(t)
 	a := associateCLI(t, f, model.ActorSlot1)
 	before := f.native.engine.Snapshot()
-	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"hook", "--runtime", "claude"}, map[string]any{"hook_event_name": "Stop", "session_id": "different-hook-session", "cwd": f.project.Root, "last_assistant_message": "@codex must never publish", "stop_hook_active": false})
+	out, err := f.runAs(t, model.RuntimeClaude, a.SessionID, []string{"hook", "--runtime", "claude"}, map[string]any{"hook_event_name": "Stop", "session_id": "different-hook-session", "cwd": f.project.Root, "last_assistant_message": "@agent2 must never publish", "stop_hook_active": false})
 	if err == nil || !strings.Contains(err.Error(), "different session identity") || len(out) != 0 {
 		t.Fatalf("identity mismatch was silently ignored: %s %v", out, err)
 	}

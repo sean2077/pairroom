@@ -14,7 +14,7 @@ import (
 func TestResumedBindNamesQueuedInputAndStatusShowsPresence(t *testing.T) {
 	f := nativeHTTP(t)
 	a := f.bind(t, model.ActorSlot1)
-	kind := f.room.Agents[a.Slot].Runtime
+	kind := f.runtimes[a.Slot]
 	bindArgs := []string{"bind", "--room", f.room.ID, "--slot", string(a.Slot), "--service-file", f.endpoint}
 	var first struct {
 		Queued int `json:"inbox_queued"`

@@ -19,7 +19,7 @@ func TestNativeSessionOwnershipSpansPendingDirectAndHostedBindings(t *testing.T)
 	if err := f.registry.identities.Reserve(ctx, remote); err != nil {
 		t.Fatal(err)
 	}
-	request := relay.BindRequest{BindID: "host-operation", SessionID: remote.SessionID, CredentialHash: relay.Digest("host-secret")}
+	request := relay.BindRequest{Runtime: model.RuntimeCodex, BindID: "host-operation", SessionID: remote.SessionID, CredentialHash: relay.Digest("host-secret")}
 	if _, err := f.native.engine.Bind(model.ActorSlot2, request); !errors.Is(err, ErrBindingOwned) {
 		t.Fatalf("host took a pending direct native session: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestNativeSessionOwnershipSpansPendingDirectAndHostedBindings(t *testing.T)
 	if err := f.registry.identities.Check(ctx, claim); err != nil {
 		t.Fatal("failed replacement released original hosted identity")
 	}
-	if err := f.native.engine.UnbindAs(relay.Auth{Slot: bound.Slot, BindID: bound.BindID, Generation: bound.Generation, SessionID: bound.SessionID, Secret: "host-secret"}); err != nil {
+	if err := f.native.engine.UnbindAs(relay.Auth{Runtime: model.RuntimeCodex, Slot: bound.Slot, BindID: bound.BindID, Generation: bound.Generation, SessionID: bound.SessionID, Secret: "host-secret"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.registry.identities.Reserve(ctx, other); err != nil {
@@ -65,7 +65,7 @@ func TestNativeConcurrentHostAndDirectReservationHasExactlyOneOwner(t *testing.T
 	go func() {
 		defer wg.Done()
 		<-start
-		_, hostErr = f.native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "host-operation", SessionID: remote.SessionID, CredentialHash: relay.Digest("secret")})
+		_, hostErr = f.native.engine.Bind(model.ActorSlot2, relay.BindRequest{Runtime: model.RuntimeCodex, BindID: "host-operation", SessionID: remote.SessionID, CredentialHash: relay.Digest("secret")})
 	}()
 	go func() {
 		defer wg.Done()
@@ -88,7 +88,7 @@ func TestNativeConcurrentHostAndDirectReservationHasExactlyOneOwner(t *testing.T
 func TestNativeRestartReconcilesOnlyDurablySupersededBindingClaims(t *testing.T) {
 	f := nativeHTTP(t)
 	ctx := context.Background()
-	request := relay.BindRequest{BindID: "original-binding", SessionID: "original-session", CredentialHash: relay.Digest("secret")}
+	request := relay.BindRequest{Runtime: model.RuntimeCodex, BindID: "original-binding", SessionID: "original-session", CredentialHash: relay.Digest("secret")}
 	if _, err := f.native.engine.Bind(model.ActorSlot2, request); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestNativeArchiveAndInterruptedDeletionKeepExactSessionOwnership(t *testing
 			t.Run(name, func(t *testing.T) {
 				f := nativeHTTP(t)
 				ctx := context.Background()
-				if _, err := f.native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "archived-operation", SessionID: "archived-session", CredentialHash: relay.Digest("secret")}); err != nil {
+				if _, err := f.native.engine.Bind(model.ActorSlot2, relay.BindRequest{Runtime: model.RuntimeCodex, BindID: "archived-operation", SessionID: "archived-session", CredentialHash: relay.Digest("secret")}); err != nil {
 					t.Fatal(err)
 				}
 				claim := f.registry.nativeClaims[nativeClaimKey(f.room.ID, model.ActorSlot2)]

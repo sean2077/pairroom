@@ -56,7 +56,7 @@ func TestNativeRelayActiveAdmissionNeverReadsHistoricalLog(t *testing.T) {
 func TestNativeBriefStatusThroughCLIAndRealService(t *testing.T) {
 	f := nativeHTTP(t)
 	a := associateCLI(t, f, model.ActorSlot1)
-	if _, err := f.native.engine.Send(a, relay.SendRequest{ID: "proposal", Text: strings.Repeat("PRIVATE_PROPOSAL", 200)}); err != nil {
+	if _, err := f.native.engine.Send(a, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "proposal", Text: strings.Repeat("PRIVATE_PROPOSAL", 200)}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := f.run(t, []string{"status", "--brief", "--room", f.room.ID, "--slot", "1"}, nil)

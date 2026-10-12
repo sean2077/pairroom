@@ -52,9 +52,10 @@ type Prepared struct {
 	Digest  string  `json:"digest"`
 }
 type StructuredClaim struct {
-	ID      string  `json:"id"`
-	Receipt string  `json:"receipt"`
-	Message Message `json:"message"`
+	PeerGeneration uint64  `json:"peer_generation,omitempty"`
+	ID             string  `json:"id"`
+	Receipt        string  `json:"receipt"`
+	Message        Message `json:"message"`
 }
 
 func (e *Engine) initLAN() {
@@ -127,7 +128,7 @@ func (e *Engine) applyLAN(ev model.Event) error {
 		e.lanInvites[v.ID] = v
 	case EventLANJoin:
 		var j LANJoinRequest
-		if json.Unmarshal(ev.Data, &j) != nil || !validID(j.RequestID) || !validID(j.InviteID) || !validHash(j.Key) || !j.Runtime.Valid() || len(j.Label) > 128 || !utf8.ValidString(j.Label) || strings.ContainsFunc(j.Label, unicode.IsControl) || j.CreatedAt.IsZero() {
+		if json.Unmarshal(ev.Data, &j) != nil || !validID(j.RequestID) || !validID(j.InviteID) || !validHash(j.Key) || !j.Runtime.Valid() || e.cfg.DynamicBindings && j.Runtime != j.Runtime.Canonical() || len(j.Label) > 128 || !utf8.ValidString(j.Label) || strings.ContainsFunc(j.Label, unicode.IsControl) || j.CreatedAt.IsZero() {
 			return errors.New("invalid LAN join request fact")
 		}
 		v, ok := e.lanInvites[j.InviteID]
@@ -246,6 +247,9 @@ func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error
 		return LANJoinRequest{}, "", err
 	}
 	e.pruneLANRequestsLocked()
+	if e.cfg.DynamicBindings {
+		j.Runtime = j.Runtime.Canonical()
+	}
 	if !validID(j.RequestID) || !validHash(j.Key) || !j.Runtime.Valid() || len(j.Label) > 128 || !utf8.ValidString(j.Label) || strings.ContainsFunc(j.Label, unicode.IsControl) {
 		return LANJoinRequest{}, "", errors.New("invalid join request")
 	}
@@ -354,6 +358,9 @@ func (e *Engine) AcceptLANJoin(requestID, key string, owner ...Auth) (Binding, e
 		return Binding{}, err
 	}
 	b := Binding{Slot: e.cfg.SharedSlot, Runtime: j.Runtime, RemoteKey: key, BindID: id, Generation: old.Generation + 1, Active: true, ParkEnabled: true, LastActivity: e.cfg.Now()}
+	if err := e.validateDynamicBinding(bindingFact{Binding: b}, old); err != nil {
+		return Binding{}, err
+	}
 	m := LANMember{RequestID: requestID, InviteID: j.InviteID, Binding: b}
 	appendFact := func() error { return e.append(EventLANMember, model.ActorSystem, m) }
 	if e.cfg.CommitBinding != nil {
@@ -410,7 +417,7 @@ func (e *Engine) LANAuth(key string) (Auth, error) {
 	if !b.Active || key == "" || !same(b.RemoteKey, key) {
 		return Auth{}, ErrAuth
 	}
-	return Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, MemberKey: key}, nil
+	return Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, MemberKey: key, Runtime: b.Runtime}, nil
 }
 func (e *Engine) Runtimes() map[model.ActorID]model.RuntimeKind {
 	e.mu.Lock()
@@ -526,7 +533,7 @@ func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, p
 		return nil, err
 	}
 	e.noteLANActivityLocked(a)
-	return &StructuredClaim{ID: m.ID, Receipt: receipt, Message: cloneMessage(m)}, nil
+	return &StructuredClaim{ID: m.ID, Receipt: receipt, Message: cloneMessage(m), PeerGeneration: e.peerGenerationLocked(a.Slot)}, nil
 }
 
 // SendLANUser scopes idempotency and provenance to the admitted remote owner.

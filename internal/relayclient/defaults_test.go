@@ -17,12 +17,16 @@ import (
 
 func writeSlotState(t *testing.T, root, room, slot string, pid int, name string) {
 	t.Helper()
+	kind := model.RuntimeClaude
+	if slot == "codex" {
+		kind = model.RuntimeCodex
+	}
 	slot = normalizeSlot(slot)
 	dir := filepath.Join(root, ".pairroom", "rooms", room, "slots", slot)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := State{Schema: 2, Room: room, Slot: model.ActorID(slot), BindID: "bind-" + room + slot, Generation: 1, SessionID: "session-" + room + slot, HarnessPID: pid, HarnessName: name}
+	s := State{Schema: 2, Room: room, Slot: model.ActorID(slot), Runtime: kind, Workspace: root, BindID: "bind-" + room + slot, Generation: 1, SessionID: "session-" + room + slot, HarnessPID: pid, HarnessName: name}
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)

@@ -2,7 +2,7 @@
 
 CLI Reference describes command responsibilities and how to discover flags. It does not copy the full `--help` output of every subcommand. Exact defaults, allowed values, and platform differences always come from the current binary.
 
-The standalone `serve` command is Embedded-only; Native is the recommended default through `pairroom service` and `pairroom relay bind --create`. New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing current-schema Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints native v8 mechanics by default, or embedded v7 with `--host-mode embedded`; the removed `--role` flag no longer selects a collaboration mode.
+The standalone `serve` command is Embedded-only; Native is the recommended default through `pairroom service` and `pairroom relay bind --create`. New standalone Rooms support `pairroom serve --collaboration default` (the default) or `--collaboration custom --collaboration-instructions "..."`. An existing current-schema Room restores its saved instructions; conflicting explicit flags fail. `pairroom protocol` prints Native v9 by default, legacy Native v8 with `--legacy-native`, or Embedded v7 with `--host-mode embedded`; the removed `--role` flag no longer selects a collaboration mode.
 
 ## Top-level commands
 
@@ -18,7 +18,7 @@ The standalone `serve` command is Embedded-only; Native is the recommended defau
 | `pairroom restore` | Restore and verify a room-data backup |
 | `pairroom diagnostics` | Generate a redacted diagnostics bundle |
 | `pairroom relay` | Install approved project hooks, bind user-owned sessions, and publish/collect native relay messages |
-| `pairroom protocol` | Print Native v8 (default) or `--host-mode embedded` v7 collaboration contracts |
+| `pairroom protocol` | Print Native v9 (default), `--legacy-native` v8, or `--host-mode embedded` v7 contracts |
 | `pairroom version` | Print the build version |
 
 Start every command with:
@@ -76,7 +76,6 @@ Backup and Restore target one Room, not a multi-Room Service root. Backup and di
 The following names are extracted from `cmd/pairroom/*.go` and `internal/relayclient/cli.go`. Use them to find omissions; they do not mean every flag applies to every command.
 
 <!-- generated:flags -->
-
 - `--actor`
 - `--attach`
 - `--auto-start`
@@ -119,6 +118,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--input`
 - `--join`
 - `--json`
+- `--legacy-native`
 - `--limit`
 - `--listen`
 - `--live`
@@ -156,7 +156,6 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--timeout`
 - `--to`
 - `--token`
-
 <!-- /generated:flags -->
 
 `pairroom daemon install` parses `--binary`, `--work-dir`, `--log-max-size`, `--log-max-backups`, and `--` itself, so they are not in this inventory; see `pairroom daemon --help`.
@@ -196,18 +195,18 @@ pairroom relay bind                              # peer: zero-flag inside a reco
 
 Run each bind as a tool call inside its intended native session. Claude Code supplies `CLAUDE_CODE_SESSION_ID`, Codex supplies `CODEX_SESSION_ID`, and Grok supplies `GROK_SESSION_ID`. Gemini uses official metadata retained by its approved BeforeTool hook; `GEMINI_SESSION_ID` is not its identity source. Missing or conflicting identity fails before association. Grok `!` shell mode and detached terminals cannot establish a binding. See [Gemini Native](#gemini-cli-native) and [Grok Native](#grok-build-native) for their tool-call boundaries.
 
-Durable slots are `slot1` / `slot2` (Agent 1 / Agent 2); `--slot 1|2` and `agent1|agent2` are accepted CLI forms, while legacy `claude`/`codex` inputs are normalized before persistence. Slots never denote the selected Runtime. Bind associates immediately and returns no long-lived secret. Required hooks must be installed; native approval stays outside PairRoom. An unapproved response hook can leave a binding unable to publish, and Gemini's BeforeTool approval is additionally needed to capture bind-time identity. Native Room configuration remains display-only.
+Durable slots are `slot1` / `slot2` (Agent 1 / Agent 2); `--slot 1|2` and `agent1|agent2` are accepted CLI forms, while legacy `claude`/`codex` inputs are normalized before persistence. Slots never denote the selected Runtime. Bind associates immediately and returns no long-lived secret. Required hooks must be installed; native approval stays outside PairRoom. An unapproved response hook can leave a binding unable to publish, and Gemini's BeforeTool approval is additionally needed to capture bind-time identity. New Native Rooms discover Runtime at bind and ignore pair/Provider/model settings; legacy Native configuration remains display-only.
 
-A completed binding already occupies its slot. Re-running bind inside the same session resumes idempotently without rotating the generation, and reports `inbox_queued` with a `relay wait` command when input is already waiting for it (one bounded read; omitted when none or unavailable); a different session is rejected as occupied. For a local Room, use `bind --replace` explicitly to revoke the existing generation and rebind from the current session; this cannot stop any native work. Direct LAN session changes use `join '<fresh-invitation>' --replace` after the host confirms the old membership ended, retaining old receipts without replay and requiring fresh exact-receipt approval. When the replaced generation had inbox work, the bind result adds `replaced`: the old `generation` and four lists, each with up to eight `ids` and an exact `count` — `cancelled` (queued input this bind cancelled), `unknown` (claimed, unacknowledged input this bind made unknown), `already_unknown`, and the newest `handed_off`. Handed-off input was written to the previous collector's stdout and may have run; it was not invalidated, and its count covers the newest 5,000 retained messages, exact only when `scan_complete` is true. Inspect any of them with `relay history --id`; nothing is requeued, and the report carries no message text or receipt.
+A completed binding already occupies its slot. Re-running bind inside the same session resumes idempotently without rotating the generation, and reports `inbox_queued` with a `relay wait` command when input is already waiting for it (one bounded read; omitted when none or unavailable); a different session is rejected as occupied. For a local Room, use `bind --replace --slot 1|2` explicitly to revoke the existing generation and rebind from the current session; this cannot stop any native work. Direct LAN session changes use `join '<fresh-invitation>' --replace` after the host confirms the old membership ended, retaining old receipts without replay and requiring fresh exact-receipt approval. When the replaced generation had inbox work, the bind result adds `replaced`: the old `generation` and four lists, each with up to eight `ids` and an exact `count` — `cancelled` (queued input this bind cancelled), `unknown` (claimed, unacknowledged input this bind made unknown), `already_unknown`, and the newest `handed_off`. Handed-off input was written to the previous collector's stdout and may have run; it was not invalidated, and its count covers the newest 5,000 retained messages, exact only when `scan_complete` is true. Inspect any of them with `relay history --id`; nothing is requeued, and the report carries no message text or receipt.
 
 Per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally omit them: exact native Runtime/session identity selects the confirmed current-generation binding, including sessions sharing one Desktop process. Repeating `bind` resumes the saved target. A supplied selector must agree with that identity; changing cwd does not retarget it. `--service-file <root>/relay-endpoint.json` selects a custom **local hosting Service** for first bind, after which the saved endpoint is reused. Direct LAN bindings retain their own host and reject that flag. Incomplete attempts and retired state are not active defaults. A plain terminal can inspect an explicitly selected binding but cannot establish an association. [Session workspace discovery](NATIVE_SESSION_WORKSPACE.md) owns the resolution order and recovery rules.
 
 | Subcommand | Meaning |
 |---|---|
-| `bind` (zero-flag) | Resume this native session's existing local or direct LAN association first. For a new local binding, resolve the workspace's sole active Native Room and matching Runtime slot; archived Rooms are not candidates and ambiguity returns candidates |
-| `bind --replace` | Local Rooms only; direct LAN session replacement uses an explicit fresh `join --replace` after retirement and requires new owner approval. Explicitly revoke an occupied generation and rebind the current session; cannot stop old native work. Refused while the slot has unpublished Stop replies: publish them with `reconcile` or drop each with `reconcile --discard` first |
-| `bind --create [--name NAME] [--runtime KIND] [--peer-runtime KIND]` | Local creation, without `--room`; `KIND` is `claude` (`cc`), `codex`, `grok`, or `gemini`. Validate caller, selected slot and installed hooks before registering a missing Project or creating the Room. The creator occupies Agent 1 unless `--slot 2` is explicit. Omitted runtime overrides copy the Service's saved pair, pinned for that creation. If that pair does not contain the caller, no Room is created and a one-time `--peer-runtime KIND` recovery command is printed. Explicit runtime choices inherit the original harness's configuration; no Provider/model/effort state is harvested. Returns `peer_join` and `peer_join_local` |
-| `bind --create --share lan [--name NAME]` | Create a Native Room explicitly for a LAN peer after the local host has enabled LAN sharing. The creator's actual Runtime is the only selection; the peer stays `awaiting_peer` until exact-key admission. Omit `--peer-runtime`. Returns a public `invite` and `peer_join`, never private credentials. |
+| `bind` (zero-flag) | Resume this session's existing local/LAN association first. Otherwise resolve an unambiguous active Native Room; the Service atomically selects an empty locally owned dynamic slot. Legacy Rooms keep Runtime matching, archived Rooms are excluded, and multiple Room candidates require an explicit choice |
+| `bind --replace --slot SLOT` | Deliberately replace a local participant; `SLOT` must explicitly be `1` or `2`. Commits a fresh generation and actual caller Runtime, revokes old credentials, retains old journals/history and reports affected work; cannot stop the old harness. Settle or explicitly discard unpublished Stop replies first. Same-session replacement does not reset its automatic peer context. LAN replacement uses fresh `join --replace` after confirmed retirement and exact-receipt approval |
+| `bind --create [--name NAME]` | Create a local Native Room without a Runtime or pair profile; validate official caller metadata and required hooks before durable creation. The creator binds Agent 1 unless `--slot 2` is explicit. The second slot stays empty until another session joins. No saved pair or Provider/model lookup is performed. Returns `peer_join` and `peer_join_local`; recover a partial success using that exact Room, never repeat `--create` |
+| `bind --create --share lan [--name NAME]` | Create a Native Room for a LAN guest after the owner enables sharing. Creation is untyped; the caller then binds the owner slot while the guest stays `awaiting_peer` until exact-key admission. Returns public `invite` and `peer_join`, never private credentials |
 | `join '<public-invitation>' [--repo LOCAL_PATH]` | Request LAN membership directly from this native session using CLI/hooks; no local Service, daemon or `--service-file`. The invitation supplies the pinned host target. Returns a public pending receipt; repeat the same command after host acceptance or an uncertain response. A private per-user client record retains the Room key and original request. `bind` resumes an accepted join without changing its host. |
 | `join '<fresh-invitation>' --replace [--repo ORIGINAL_PATH]` | Explicitly replace a retired association for the same host/Room and original workspace after the host confirms the previous membership is revoked, left or expired. Starts a fresh request and requires new exact-receipt approval; preserves old client receipts and workspace publication/attempt state under the previous bind ID without replay. Does not replace a still-active or uncertain membership. Plain join still renews an expired never-admitted request in its original session/key. |
 | `invite` / `accept '<exact-join-receipt>'` / `revoke` | Bound local owner operations for a shared Native Room: issue a short-lived request-only invitation, admit the exact request/key receipt supplied through the trusted colleague channel, or revoke the member. An ordinary LAN member cannot call owner operations. |
@@ -225,7 +224,7 @@ Per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally 
 | `review --id ID [--review-repo PATH]` | Compare a published review version with the selected local checkout. A different checkout reports `different_workspace`; `unverified` and `different_workspace` are not a pass, and unchanged observation is not approval. |
 | `status --brief` / `reconcile --brief` | Bounded authenticated transport summary, generated without copying message bodies, native session/transcript references or the full audit log; includes inbox counts and at most eight unknown-delivery recovery IDs. `status --brief` adds body-free collection hints only for inboxes queued at that snapshot, including manual Codex `wake_command` and `wake_notice` only when that target's authenticated vendor session is known |
 | `status` | Bounded body-free delivery summary by default; `--brief=false` returns a full local snapshot or bounded direct LAN history window. The brief `presence` lines summarize transport observations, not model activity. First reconciles pending/held Stop publications under their original identities. |
-| `peer` | Read the peer's binding and Runtime metadata. Local transport may include its native session identity; direct LAN transport removes native session/transcript metadata. Does not publish or collect. |
+| `peer` | Inspect peer metadata without publishing or collecting. Dynamic output includes `{binding,peer_generation,automatic_peer_generation,automatic_paused,notice?}`; legacy output remains a Binding. Local transport may include native session identity, while LAN removes session/transcript metadata. Observation cannot silently reset old automatic publication context |
 | `park --enabled=false` | Disable hook parking without removing the binding; foreground wait remains available |
 | `nudge` | Print collection guidance only; no promise of native input injection |
 | `reconcile` | Reconcile pending publication, then any Stop replies held behind it in sequence order, and return a bounded summary by default; clear accepted, supplement definite absence with same sequence, otherwise retain unknown and send nothing behind it |
@@ -233,6 +232,10 @@ Per-slot commands accept `--repo <project> --room <id> --slot <slot>`. Normally 
 | `unbind [--purge-hooks]` | End the local binding or direct LAN membership, then remove its active workspace files; LAN history and recovery archives are retained. `--purge-hooks` also removes only PairRoom-owned hooks when no other binding in this workspace uses that Runtime. Native processes keep running |
 | `unbind --local-only [--room LOCAL_ROOM_ID]` | Offline exit: detach an exact accepted binding or pending LAN attempt without contacting its host; use the ID printed by join if needed. Local routing/observation stops and its native-session reservation is released. A pending or accepted remote admission may remain until the host revokes it; no automatic reconnect or new join follows. Local Rooms retain their existing explicit replacement path. This cannot recall delivered content or stop native work. |
 | `hook --runtime <kind>` | Official hook JSON on stdin; publishes Stop first, then bounded park; not a user-authored identity shortcut |
+
+New Native v9 uses stable `@agent1` / `@agent2`; legacy Native v8 retains its original runtime-derived handles. `--peer-runtime` is removed. `--runtime` remains useful for hook installation, preflight and caller assertions; it never chooses the peer or a creation-time Native selection.
+
+After a peer replacement, automatic publication retains the original peer generation and pauses. `peer_changed` Stop bodies stay in the local journal with their original target. `reconcile --resend` cannot retarget them; inspect and explicitly discard when appropriate. Use `send` or `exchange --peer-generation N --id NEW` for a deliberate foreground publication to the generation returned by `peer` or a received claim. This one publication does not restart automatic replies; `wait` remains usable. A new true native session can establish fresh automatic context, while same-session replacement cannot. See [participant replacement](NATIVE_RELAY.md#replace-a-participant-deliberately).
 
 LAN setup, human author provenance, verified local evidence paths, and recovery are described in [Native collaboration on a LAN](LAN_NATIVE.md). Only the Room's host needs a Service. Guest CLI/hooks connect directly through the immutable target retained by each binding, without a Service endpoint file. Distinct native sessions may host local Rooms and join several remote hosts concurrently; there is no global server switch. A running local Service is an optional dashboard/observer over the same per-user client store. Without a live collector, hook or observer, input remains queued at the host.
 
@@ -248,7 +251,7 @@ For direct LAN `status --brief=false`, the window contains at most 300 complete 
 
 For local Service transport, every relay subcommand except `preflight` prints one stderr line suggesting `pairroom relay preflight` when a Service response named a release other than the CLI's (build metadata such as `+8.a5cb253` is ignored). It reads the release from responses the command already receives, so it never changes stdout or adds a Stop-hook request. When a failure looks like version skew (a rejected route or request shape, an authentication rejection, or no matching binding), the line says the mismatch may explain it; if such a failure happened before any Service contact, a foreground command, never the hook, makes one short read-only Service request to learn the release. An unknown or matching release prints nothing. Direct LAN transport does not supply this header or run that local fallback probe; compare the host release/protocol in `relay doctor`. Direct preflight checks contact/admission without a version comparison.
 
-Park lasts at most 30 seconds (fixed; `--timeout` does not change it, and it shortens to fit the 45-second hook timeout) and applies only while a peer reply is expected (see [Protocol](PROTOCOL.md#native-host-protocol-v8)); otherwise the hook returns at once and already queued input is still collected. Claude/Codex/Gemini allow eight message-bearing blocks; Grok allows seven readiness/recovery hints, reserving its final publication gate. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send/exchange plus a peer-directed final reply deliberately creates two publications; omit that handle after explicit publication unless the second full reply is intended.
+Park lasts at most 30 seconds (fixed; `--timeout` does not change it, and it shortens to fit the 45-second hook timeout) and applies only while a peer reply is expected (see [Protocol](PROTOCOL.md#native-host-protocol-v9)); otherwise the hook returns at once and already queued input is still collected. Claude/Codex/Gemini allow eight message-bearing blocks; Grok allows seven readiness/recovery hints, reserving its final publication gate. Outside this window, use foreground wait or a native human nudge. Unknown delivery must be inspected before the Room's explicit Retry. Same-turn send/exchange plus a peer-directed final reply deliberately creates two publications; omit that handle after explicit publication unless the second full reply is intended.
 
 `send` now prints only `published`, `client_id`, `state` and `to`, not the outgoing body. A reused ID with different text fails rather than reporting the old publication as a new send. Its queued-delivery hint needs no extra request; `status --brief` wake advice uses a separate short peer-metadata deadline.
 
@@ -399,16 +402,15 @@ are preserved. Review `/hooks` and press `r` to reload after installation; proje
 
 ```bash
 # In Grok, after reviewing the installed hook:
-pairroom relay bind --create --name "Joint review" --peer-runtime codex
+pairroom relay bind --create --name "Joint review"
 # In the intended peer session, use the printed join command (or unambiguous bind):
 pairroom relay bind
 ```
 
-Choose `--peer-runtime claude|codex|grok|gemini` when creating a specific pair. The
-calling Grok runtime is inferred; no vendor-named third slot is created. Without
-pair overrides the Service's saved default pair still applies and must contain
-the intended runtimes. Two Grok sessions use two distinct slots; the printed
-join command disambiguates the peer. Bind reads `GROK_SESSION_ID` from the
+The calling Grok Runtime is discovered from official session metadata; creation
+requires no Runtime or peer override and does not load the Service's saved pair.
+Two Grok sessions use distinct stable slots, `@agent1` / `@agent2` in a new
+Native Room; the printed join command identifies the intended Room and slot. Bind reads `GROK_SESSION_ID` from the
 harness environment and immediately enables relay: there is no nonce and no
 need to finish a first Stop before send/wait/exchange. Later `bind` resumes the
 same binding. Missing identity fails before creation; a lost response uses the

@@ -91,7 +91,7 @@ Back up before incompatible upgrades, permanent deletion, data-root moves, manua
 |---|---|
 | Room archive | `events.jsonl`, `metadata.json`, attachment manifests and their named content |
 | Stopped Service root | All Rooms, Registry, Agent pair profiles, navigation preferences, and private `lan/host.json` host identity/settings; also retain any previously registered Room directories outside the root |
-| Per-user client and ownership stores | `pairroom/lan-clients` and `pairroom/native-identities` under the OS user configuration directory, outside every Service root |
+| Per-user client, ownership and response-context stores | `pairroom/lan-clients`, `pairroom/native-identities` and `pairroom/relay-response-contexts` under the OS user configuration directory, outside every Service root |
 | Workspace and native session state | Matching `.pairroom` binding/publication state, credentials and capability sidecars; the Git workspace and vendor session stores remain separate |
 | Matching software | PairRoom binary/configuration and the recorded native CLI versions |
 

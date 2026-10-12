@@ -99,7 +99,7 @@ func unbindLANLocalOnly(ctx context.Context, root string, o options, out io.Writ
 			}
 		}
 	}
-	if err := client.Detach(ctx, relay.Auth{Slot: meta.Slot, BindID: meta.BindID, Generation: meta.Generation, SessionID: caller.session, Secret: attempt.Credentials.Secret}); err != nil {
+	if err := client.Detach(ctx, relay.Auth{Slot: meta.Slot, BindID: meta.BindID, Generation: meta.Generation, SessionID: caller.session, Runtime: meta.Runtime, Secret: attempt.Credentials.Secret}); err != nil {
 		return err
 	}
 	result := map[string]any{"unbound": "local-only", "room": meta.ID, "notice": "Direct LAN admission detached locally without contacting the host. The original request and key are retained; ask the host owner to revoke any pending or accepted membership. This native session is free for another Room and will not reconnect automatically."}

@@ -47,7 +47,7 @@ def fixture_html() -> str:
       window.__pairProfiles = {schema:2, default_profile_id:'', profiles:[]};
       window.__pairProfileCounter = 0;
       window.__serviceReads = 0; window.__readDelay = 0; window.__catalogDelay = 0;
-      window.__catalogReads = 0; window.__catalogWrites = 0; window.__writes = [];
+      window.__catalogReads = 0; window.__catalogWrites = 0; window.__pairProfileReads = 0; window.__writes = [];
       window.fetch = async (path,options={}) => {
         let body = {};
         if (path === '/api/v1/session') body = {csrf_token:'fixture'};
@@ -55,6 +55,7 @@ def fixture_html() -> str:
           __serviceReads++; body=structuredClone(__snapshot);
           await new Promise(resolve=>setTimeout(resolve,__readDelay));
         } else if (path.startsWith('/api/v1/agent-pair-profiles')) {
+          if (!options.method || options.method==='GET') __pairProfileReads++;
           const base='/api/v1/agent-pair-profiles';
           const input=options.body ? JSON.parse(options.body) : {};
           const id=decodeURIComponent(path.slice(base.length+1));
@@ -306,14 +307,16 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     await page.evaluate("""() => {
       const original=window.fetch;
       window.__nameWrites=[]; window.__renameFail=false; window.__expired=false;
-      const names=room => Object.fromEntries(['slot1','slot2'].map((actor,index)=>[actor,`${room.name} · @${index ? 'codex' : 'claude'} · ${room.id.slice(-12)}`]));
+      const names=room => Object.fromEntries(['slot1','slot2'].map((actor,index)=>[actor,`${room.name} · @${room.dynamic_bindings ? 'agent'+(index+1) : index ? 'codex' : 'claude'} · ${room.id.slice(-12)}`]));
       __snapshot.rooms.forEach(room=>room.runtime_names=names(room));
       window.fetch=async(path,options={})=>{
         const reply=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
         if(__expired&&path==='/api/v1/service') return reply({error:'Expired'},401);
         if(options.method==='POST'&&path==='/api/v1/projects/p1/rooms'){
           const sent=JSON.parse(options.body); __nameWrites.push({path,...sent});
-          const room={...structuredClone(__snapshot.rooms[0]),id:'room-111111111111cccccccccccc',name:sent.name||'Room-cccccccccccc',bindings:sent.bindings,agents:sent.agents};
+          const empty={slot1:{runtime:'awaiting_binding',awaiting_binding:true},slot2:{runtime:'awaiting_binding',awaiting_binding:true}};
+          const room={...structuredClone(__snapshot.rooms[0]),id:'room-111111111111cccccccccccc',name:sent.name||'Room-cccccccccccc',host_mode:sent.host_mode,dynamic_bindings:sent.host_mode==='native',
+            bindings:sent.bindings||{slot1:{agent:'slot1',mode:'new',pending:true},slot2:{agent:'slot2',mode:'new',pending:true}},agents:sent.agents||empty};
           room.runtime_names=names(room); __snapshot.rooms.push(room);return reply(room,201);
         }
         if(options.method==='PATCH'&&path.startsWith('/api/v1/rooms/')){
@@ -353,7 +356,7 @@ async def verify_names(browser, artifacts: Path, in_page_fixture: bool = False) 
     renamed_row = page.locator('.room-row[data-room-id="room-111111111111cccccccccccc"]')
     assert await renamed_row.locator('.binding-runtime-name').count() == 0, 'redundant runtime-name line survived'
     slot_titles = await renamed_row.locator('.room-meta-group[data-slot]').evaluate_all('nodes=>nodes.map(n=>n.title)')
-    assert [title.splitlines()[0] for title in slot_titles] == ['地图渲染优化 · @claude · cccccccccccc', '地图渲染优化 · @codex · cccccccccccc'], 'native session name lost from the row tooltip'
+    assert [title.splitlines()[0] for title in slot_titles] == ['地图渲染优化 · @agent1 · cccccccccccc', '地图渲染优化 · @agent2 · cccccccccccc'], 'native session name lost from the row tooltip'
     # The open tab's identity survives a display-name change. No new native ID.
     await auto.click()
     tab = page.locator('.room-tab[data-room-id="room-111111111111cccccccccccc"] .room-tab-target')
@@ -495,6 +498,84 @@ async def verify_activation(browser) -> dict:
 
 
 
+async def verify_native_creation(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
+    """Native creation never depends on Embedded catalog/profile availability."""
+    context = await browser.new_context(viewport={'width':1440,'height':1000}, locale='en-US', reduced_motion='reduce')
+    page = await context.new_page()
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    if in_page_fixture:
+        await page.evaluate("location.hash='#/projects/p1'")
+        await page.set_content(fixture_html())
+    else:
+        await load_csp_fixture(page)
+    await expect(page.locator('#project-room-search')).to_be_visible()
+    await page.evaluate("""() => {
+      const original=window.fetch;
+      window.__configurationReads=[]; window.__configurationReplies=0;
+      window.__holdConfiguration=true; window.__releaseConfiguration=[];
+      window.fetch=async(path,options={})=>{
+        if(path.startsWith('/api/v1/agent-catalog') || path.startsWith('/api/v1/agent-pair-profiles')) {
+          __configurationReads.push(path);
+          if(__holdConfiguration) await new Promise(resolve=>__releaseConfiguration.push(resolve));
+          __configurationReplies++;
+          return Response.json({error:'Fixture Embedded configuration unavailable'},{status:503});
+        }
+        return original(path,options);
+      };
+    }""")
+    await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
+    await expect(page.locator('#room-submit')).to_be_enabled()
+    await expect(page.locator('#room-native-slots')).to_contain_text('@agent1')
+    await expect(page.locator('#room-native-slots')).to_contain_text('@agent2')
+    await expect(page.locator('#room-pair-profile-controls')).to_be_hidden()
+    await expect(page.locator('#room-agent-selection-heading')).to_be_hidden()
+    await expect(page.locator('#room-agent-selection-grid')).to_be_hidden()
+    for slot in ('slot1','slot2'):
+        await expect(page.locator(f'#{slot}-runtime')).to_be_disabled()
+        await expect(page.locator(f'#room-native-{slot}-state')).to_have_text('Waiting for a native session to join')
+    assert await page.evaluate('__configurationReads') == [], 'Native opened an Embedded catalog or pair profile'
+    for language,width in [('en',1440),('zh-CN',390)]:
+        await page.evaluate('language=>PairRoomI18n.setLang(language)',language)
+        await page.set_viewport_size({'width':width,'height':1000})
+        assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth'), f'Native creation overflow at {width}'
+        await page.screenshot(path=str(artifacts/f'management-native-empty-{language}.png'))
+    await page.evaluate("PairRoomI18n.setLang('en')")
+    await page.set_viewport_size({'width':1440,'height':1000})
+    await page.locator('#room-name').fill('Native without Runtime selections')
+    await page.locator('#room-submit').click()
+    await expect(page.locator('#room-dialog')).to_be_hidden()
+    payload = await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body)")
+    assert payload == {'name':'Native without Runtime selections','collaboration':{'mode':'default'},'host_mode':'native'}, payload
+    assert await page.evaluate('__configurationReads') == []
+
+    # A delayed failing Embedded read belongs to its mode, not to the Native
+    # form the human selected while it was pending.
+    await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
+    await page.locator('#room-host-mode').select_option('embedded')
+    await expect(page.locator('#room-submit')).to_be_disabled()
+    await expect(page.locator('#room-agent-selection-grid')).to_be_visible()
+    await wait_fixture_state(page,'__releaseConfiguration.length===2')
+    await page.locator('#room-host-mode').select_option('native')
+    await expect(page.locator('#room-submit')).to_be_enabled()
+    await page.evaluate('__holdConfiguration=false; __releaseConfiguration.splice(0).forEach(release=>release())')
+    await wait_fixture_state(page,'__configurationReplies===2')
+    await expect(page.locator('#room-form-error')).to_be_hidden()
+    await expect(page.locator('#room-submit')).to_be_enabled()
+    await page.locator('#room-name').fill('Native after Embedded failure')
+    await page.locator('#room-submit').click()
+    await expect(page.locator('#room-dialog')).to_be_hidden()
+    payload = await page.evaluate("JSON.parse(__writes.filter(w=>w.path.endsWith('/rooms')).at(-1).body)")
+    assert set(payload) == {'name','collaboration','host_mode'} and payload['host_mode']=='native'
+    assert not errors, errors
+    if not in_page_fixture:
+        assert not await page.evaluate('__cspErrors'), 'Native creation violated the production CSP'
+    await context.close()
+    return {'native_creation_no_runtime_or_profile':True,'native_creation_without_catalog':True,
+            'native_creation_after_embedded_failure':True,'native_creation_responsive_bilingual':True}
+
+
 async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
     context = await browser.new_context(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
     page = await context.new_page()
@@ -523,6 +604,7 @@ async def verify_pair_profiles(browser, artifacts: Path, in_page_fixture: bool =
         # These cases verify applied Provider overrides and their fail-closed
         # validation, which belong to explicit Embedded creation.
         await page.locator('#room-host-mode').select_option('embedded')
+        await expect(page.locator('#room-submit')).to_be_enabled()
 
     async def close_dialog():
         await page.locator('#room-dialog [data-close-dialog="room-dialog"]').first.click()
@@ -745,6 +827,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         await page.wait_for_function("!document.getElementById('room-submit').disabled")
         await expect(page.locator('#room-host-mode')).to_have_value('native')
         await page.locator('#room-host-mode').select_option('embedded')
+        await expect(page.locator('#room-submit')).to_be_enabled()
         assert await page.locator('#room-collaboration-mode option').evaluate_all('nodes=>nodes.map(n=>n.value)') == ['default', 'custom']
         assert await page.locator('#room-collaboration-mode').input_value() == 'default'
         assert 'Lead' in await page.locator('#slot1-responsibility-label').inner_text()
@@ -865,6 +948,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         results.update(await verify_names(browser, artifacts, in_page_fixture))
         results.update(await verify_activation(browser))
         results.update(await verify_cleanup_controls(browser, artifacts, in_page_fixture))
+        results.update(await verify_native_creation(browser, artifacts, in_page_fixture))
         results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))
         from test_management_lan_browser import verify_lan
         results.update(await verify_lan(browser, artifacts, in_page_fixture))

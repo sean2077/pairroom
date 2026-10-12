@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/sean2077/pairroom/internal/lanshare"
+	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/privatelock"
@@ -184,9 +185,12 @@ func validateRecord(r record) error {
 			return ErrInvalidState
 		}
 		for slot, kind := range r.Room.Runtimes {
-			if !slot.ValidParticipant() || !kind.Valid() {
+			if !slot.ValidParticipant() || !kind.Valid() && !(r.Room.DynamicBindings && slot != r.Room.Slot && kind == model.RuntimeAwaitingBinding) {
 				return ErrInvalidState
 			}
+		}
+		if r.Room.DynamicBindings && r.Room.PeerGeneration == 0 {
+			return ErrInvalidState
 		}
 	} else if r.Status == "accepted" {
 		return ErrInvalidState
@@ -311,7 +315,11 @@ func (c *Client) Metadata(ctx context.Context) (Metadata, error) {
 		return Metadata{}, err
 	}
 	b := binding(r)
-	return Metadata{ID: r.ID, Invite: r.Invite, Workspace: r.Workspace, Runtime: r.Runtime, SessionID: r.SessionID, BindID: r.BindID, Generation: b.Generation, Slot: b.Slot, Status: r.Status, Binding: b, PreviousBindID: r.PreviousBindID}, nil
+	meta := Metadata{ID: r.ID, Invite: r.Invite, Workspace: r.Workspace, Runtime: r.Runtime, SessionID: r.SessionID, BindID: r.BindID, Generation: b.Generation, Slot: b.Slot, Status: r.Status, Binding: b, PreviousBindID: r.PreviousBindID}
+	if r.Room != nil {
+		meta.DynamicBindings, meta.PeerGeneration = r.Room.DynamicBindings, r.Room.PeerGeneration
+	}
+	return meta, nil
 }
 
 func (c *Client) Snapshot(ctx context.Context) (Snapshot, error) {
@@ -326,11 +334,15 @@ func (c *Client) Snapshot(ctx context.Context) (Snapshot, error) {
 	s := Snapshot{ID: r.ID, RemoteRoomID: r.Invite.RoomID, Workspace: r.Workspace, Runtime: r.Runtime, Status: r.Status, Connected: connected, LastSeen: lastSeen, HostPin: r.Invite.HostPin, Endpoint: r.Invite.Endpoint, OwnerKey: ownerKey}
 	if r.Room != nil {
 		s.Name, s.Slot, s.Generation = r.Room.Name, r.Room.Slot, r.Room.Generation
+		s.DynamicBindings = r.Room.DynamicBindings
 	}
 	return s, nil
 }
 
 func authenticate(r record, auth relay.Auth, leaving bool) error {
+	if auth.Runtime != "" && auth.Runtime != r.Runtime || r.Room != nil && r.Room.DynamicBindings && auth.Runtime != r.Runtime {
+		return relay.ErrAuth
+	}
 	if r.BindID != auth.BindID || r.SessionID != auth.SessionID || subtle.ConstantTimeCompare([]byte(r.CredentialHash), []byte(relay.Digest(auth.Secret))) != 1 {
 		return relay.ErrAuth
 	}

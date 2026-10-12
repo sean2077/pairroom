@@ -71,24 +71,28 @@ class StorageFormatTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.write("internal/version/version.go", """package version
 const (
-    StoreSchema = 13
+    StoreSchema = 14
+    LANStoreSchema = 13
     LocalStoreSchema = 12
 )
 """)
-        self.write("internal/service/provision.go", "payload := roomProvisionedPayload{Schema: 6, HostMode: room.HostMode}")
+        self.write("internal/service/provision.go", "payload := roomProvisionedPayload{Schema: 7, HostMode: room.HostMode}")
         self.write("internal/service/registry.go", """package service
-const registryCheckpointSchema = 4
+const registryCheckpointSchema = 5
+const lanRegistryCheckpointSchema = 4
 const localRegistryCheckpointSchema = 3
 func validate() {
-    if (payload.Schema == 5 && storeSchema != 12) || (payload.Schema == 6 && storeSchema != 13) { reject() }
+    if !validRoomFormat(storeSchema, payload.Schema) { reject() }
+    if !validRoomFormat(schema, header.Schema) { reject() }
 }
 """)
-        self.summary = ("New Rooms write **Store schema 13/provisioning 6**; existing local "
+        self.write("internal/service/native_selections.go", "return storeSchema == 12 && provisionSchema == 5 || storeSchema == 13 && provisionSchema == 6 || storeSchema == 14 && provisionSchema == 7")
+        self.summary = ("New Rooms write **Store schema 14/provisioning 7**; existing LAN Store 13/provisioning 6 and local "
                         "Store 12/provisioning 5 remains readable. New Registry checkpoints "
-                        "use 4; existing local checkpoint 3 remains readable.\n")
+                        "use 5; existing local checkpoint 3 and LAN checkpoint 4 remain readable.\n")
         self.table = ("\n| Format | New writes | Existing local reads |\n|---|---|---|\n"
-                      "| Room Store / provisioning | 13/6 | 12/5 |\n"
-                      "| Registry checkpoint | 4 | 3 |\n")
+                      "| Room Store / provisioning | 14/7 | 12/5, 13/6 |\n"
+                      "| Registry checkpoint | 5 | 3, 4 |\n")
         for name in ("STORAGE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "UPGRADING.md"):
             self.write("docs/" + name, self.summary + (self.table if name == "STORAGE.md" else ""))
 
@@ -98,7 +102,7 @@ func validate() {
         path.write_text(text, encoding="utf-8")
 
     def test_current_writers_and_existing_local_readers_are_both_supported(self):
-        self.assertEqual(docs_check.storage_format_window(self.root), ((13, 6), (12, 5), 4, 3))
+        self.assertEqual(docs_check.storage_format_window(self.root), ((14, 7), [(12, 5), (13, 6)], 5, [3, 4]))
         self.assertEqual(docs_check.check_storage_formats(self.root), [])
 
     def test_old_head_architecture_claim_is_rejected(self):
@@ -116,8 +120,8 @@ func validate() {
                 self.assertTrue(any("docs/TROUBLESHOOTING.md" in item for item in docs_check.check_storage_formats(self.root)))
 
     def test_writer_reader_columns_cannot_be_swapped(self):
-        for old, wrong in (("| 13/6 | 12/5 |", "| 12/5 | 13/6 |"),
-                           ("| 4 | 3 |", "| 3 | 4 |")):
+        for old, wrong in (("| 14/7 | 12/5, 13/6 |", "| 12/5 | 14/7, 13/6 |"),
+                           ("| 5 | 3, 4 |", "| 3 | 5, 4 |")):
             with self.subTest(wrong=wrong):
                 self.write("docs/STORAGE.md", self.summary + self.table.replace(old, wrong))
                 failures = docs_check.check_storage_formats(self.root)
@@ -125,9 +129,9 @@ func validate() {
                 self.assertIn("table must distinguish", failures[0])
 
     def test_source_writer_change_requires_current_documentation(self):
-        self.write("internal/service/registry.go", (self.root / "internal/service/registry.go").read_text().replace("registryCheckpointSchema = 4", "registryCheckpointSchema = 5"))
+        self.write("internal/service/registry.go", (self.root / "internal/service/registry.go").read_text().replace("registryCheckpointSchema = 5", "registryCheckpointSchema = 6"))
         failures = docs_check.check_storage_formats(self.root)
-        self.assertTrue(any("new checkpoint 5" in item for item in failures), failures)
+        self.assertTrue(any("new checkpoint 6" in item for item in failures), failures)
 
     def test_history_is_preserved_and_examples_cannot_supply_current_contract(self):
         self.write("CHANGELOG.md", "Historical Store 11/provisioning 4 and checkpoint 2.\n")

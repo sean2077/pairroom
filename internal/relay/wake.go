@@ -160,9 +160,9 @@ func (e *Engine) wakeCandidateLocked(messageID string) (WakeCandidate, bool) {
 	return candidate, true
 }
 
-// Only the immutable Room selection identifies the runtime. Binding.Runtime is
-// an inspection projection, not a durable runtime source. An absent/unknown
-// selection never gains a slot default or a vendor wake capability.
+// cfg.Runtimes is the effective identity projection: immutable Room selections
+// for legacy Native, active binding facts for dynamic Native. An absent or
+// unknown identity never gains a slot default or a vendor wake capability.
 func (e *Engine) wakeRuntimeLocked(slot model.ActorID) model.RuntimeKind {
 	return e.cfg.Runtimes[slot].Canonical()
 }
@@ -333,15 +333,10 @@ func HasWakeWork(roomID string, events []model.Event, runtimes map[model.ActorID
 	return HasWakeWorkWithSharedSlot(roomID, events, runtimes, "")
 }
 
-func HasWakeWorkWithSharedSlot(roomID string, events []model.Event, runtimes map[model.ActorID]model.RuntimeKind, sharedSlot model.ActorID) (bool, error) {
-	e := &Engine{cfg: Config{RoomID: roomID, Runtimes: runtimes, SharedSlot: sharedSlot}, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
-	for _, ev := range events {
-		if ev.RoomID != roomID {
-			return false, errors.New("native relay Room identity mismatch")
-		}
-		if err := e.apply(ev); err != nil {
-			return false, err
-		}
+func HasWakeWorkWithSharedSlot(roomID string, events []model.Event, runtimes map[model.ActorID]model.RuntimeKind, sharedSlot model.ActorID, dynamic ...bool) (bool, error) {
+	e, err := replayNativeHistory(roomID, events, runtimes, sharedSlot, len(dynamic) > 0 && dynamic[0])
+	if err != nil {
+		return false, err
 	}
 	if !e.wakeEnabled {
 		return false, nil

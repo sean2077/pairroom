@@ -191,14 +191,32 @@ func joinLAN(ctx context.Context, root string, o options, out io.Writer) error {
 		return errors.New("LAN membership changed while confirming its local binding; inspect the original admission before resuming")
 	}
 	route := &LANTransport{ClientID: room, Endpoint: meta.Invite.Endpoint, HostPin: meta.Invite.HostPin, RoomID: meta.Invite.RoomID}
-	state := State{Schema: 3, LAN: route, Room: room, Slot: binding.Slot, Runtime: kind, Workspace: root, BindID: attempt.Credentials.BindID, Generation: binding.Generation, SessionID: session, TranscriptPath: binding.TranscriptPath}
+	state := State{Schema: 3, LAN: route, Room: room, Slot: binding.Slot, Runtime: kind, Workspace: root, BindID: attempt.Credentials.BindID, Generation: binding.Generation, SessionID: session, TranscriptPath: binding.TranscriptPath, DynamicBindings: result.DynamicBindings}
 	var previous State
 	if err := readPrivate(filepath.Join(slotDir, "state.json"), &previous); err == nil {
-		if !validStateFormat(previous) || previous.Schema != 3 || *previous.LAN != *state.LAN || previous.BindID != state.BindID || previous.Generation != state.Generation || previous.SessionID != session || previous.Runtime != kind || previous.Workspace != root || previous.Room != room || previous.Slot != binding.Slot {
+		if !validStateFormat(previous) || previous.Schema != 3 || *previous.LAN != *state.LAN || previous.BindID != state.BindID || previous.Generation != state.Generation || previous.SessionID != session || previous.Runtime != kind || previous.Workspace != root || previous.Room != room || previous.Slot != binding.Slot || previous.DynamicBindings != state.DynamicBindings {
 			return errors.New("joined Room local state changed; do not replace or replay it implicitly")
 		}
 		state = previous // retain every publication receipt and uncertain outbox entry
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if state.DynamicBindings && (result.PeerGeneration == 0 || !meta.DynamicBindings) {
+		return errors.New("dynamic LAN admission omitted its peer-generation context; repeat the same join after updating CLI and host")
+	}
+	if attempt.PreviousBindID != "" {
+		var retired State
+		err := readPrivate(filepath.Join(root, ".pairroom", "retired", attempt.PreviousBindID, "state.json"), &retired)
+		if err == nil {
+			if retired.BindID != attempt.PreviousBindID || retired.Room != room || !validStateFormat(retired) || retired.LAN == nil {
+				return errors.New("retired LAN response context does not match this replacement")
+			}
+			state.inheritResponseContext(retired)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := retainResponseContext(ctx, &state, result.PeerGeneration); err != nil {
 		return err
 	}
 	if pid, name, ok := harnessAncestor(); ok && harnessRuntimes[name] == kind {
@@ -217,6 +235,12 @@ func joinLAN(ctx context.Context, root string, o options, out io.Writer) error {
 		return fmt.Errorf("LAN admission confirmed but session locator failed: %w; repeat the same join", err)
 	}
 	payload := map[string]any{"status": "accepted", "room": room, "binding": binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": "Direct LAN Native relay ready. No local Service is required. This session is pinned to the Room host; other local or remote Room bindings keep their own targets. Use relay wait or hooks to receive messages. Incoming files are verified local evidence."}
+	if state.DynamicBindings {
+		payload["dynamic_bindings"], payload["peer_generation"] = true, result.PeerGeneration
+		if state.AutomaticPaused {
+			payload["automatic_publication_notice"] = automaticPauseNotice(result.PeerGeneration)
+		}
+	}
 	if err := captureClaudeInbox(slotDir, state); err != nil {
 		payload["wake_notice"] = "Claude external wake is unavailable; use relay wait in this session. An optional local Service can provide background wake."
 	}

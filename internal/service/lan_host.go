@@ -20,23 +20,6 @@ import (
 	"github.com/sean2077/pairroom/internal/relay"
 )
 
-func prepareLANSelections(owner model.ActorID, input map[model.ActorID]model.AgentSelection) (map[model.ActorID]model.AgentSelection, error) {
-	if !owner.ValidParticipant() {
-		return nil, errors.New("LAN creation requires owner_slot slot1 or slot2")
-	}
-	local, ok := input[owner]
-	if !ok || local.AwaitingPeer || !local.Runtime.Valid() {
-		return nil, errors.New("LAN creation requires the local owner's actual runtime")
-	}
-	peer := model.OtherParticipant(owner)
-	if other, ok := input[peer]; ok && !other.AwaitingPeer {
-		return nil, errors.New("LAN peer runtime is selected only when its owner-approved request is admitted")
-	}
-	if len(input) > 2 {
-		return nil, errors.New("invalid LAN Agent selections")
-	}
-	return map[model.ActorID]model.AgentSelection{owner: local, peer: {AwaitingPeer: true}}, nil
-}
 func validateLANSelections(mode model.HostMode, sharing string, owner model.ActorID, agents map[model.ActorID]model.AgentSelection) error {
 	if sharing == "" {
 		if owner != "" {
@@ -326,19 +309,30 @@ func (s *ManagementServer) lanOwnerAction(w http.ResponseWriter, r *http.Request
 			nativeResult(w, nil, err)
 			return
 		}
-		writeManagementJSON(w, 200, lanshare.JoinResponse{Status: "accepted", Receipt: req.Receipt, Room: s.lanRoomInfo(n, b)})
+		room, err := s.lanRoomInfo(n, b)
+		if err != nil {
+			nativeResult(w, nil, err)
+			return
+		}
+		writeManagementJSON(w, 200, lanshare.JoinResponse{Status: "accepted", Receipt: req.Receipt, Room: room})
 	case "revoke":
 		nativeResult(w, map[string]bool{"revoked": true}, n.engine.RevokeLANMember(owner...))
 	default:
 		writeManagementError(w, 404, "unknown LAN owner operation")
 	}
 }
-func (s *ManagementServer) lanRoomInfo(n *nativeHostRuntime, b relay.Binding) *lanshare.RoomInfo {
+func (s *ManagementServer) lanRoomInfo(n *nativeHostRuntime, b relay.Binding) (*lanshare.RoomInfo, error) {
+	bootstrap, peerGeneration, err := n.engine.BootstrapContextForBinding(b)
+	if err != nil {
+		return nil, err
+	}
 	name := n.room.Name
 	if room, ok := s.registry.Room(n.room.ID); ok {
 		name = room.Name
 	}
-	return &lanshare.RoomInfo{RoomID: n.room.ID, Name: name, Slot: b.Slot, Generation: b.Generation, BindID: b.BindID, Runtimes: n.engine.Runtimes(), Collaboration: model.CloneCollaboration(n.room.Collaboration)}
+	runtimes := n.engine.Runtimes()
+	runtimes[b.Slot] = b.Runtime
+	return &lanshare.RoomInfo{DynamicBindings: n.room.DynamicBindings, PeerGeneration: peerGeneration, Bootstrap: bootstrap, RoomID: n.room.ID, Name: name, Slot: b.Slot, Generation: b.Generation, BindID: b.BindID, Runtimes: runtimes, Collaboration: model.CloneCollaboration(n.room.Collaboration)}, nil
 }
 
 // enter takes one in-flight capacity slot for a certified key of one Room. It
@@ -518,7 +512,11 @@ func (h *lanHostServer) serveJoin(w http.ResponseWriter, r *http.Request, n *nat
 			nativeResult(w, nil, err)
 			return
 		}
-		resp.Room = h.owner.lanRoomInfo(n, b)
+		resp.Room, err = h.owner.lanRoomInfo(n, b)
+		if err != nil {
+			nativeResult(w, nil, err)
+			return
+		}
 	}
 	writeManagementJSON(w, 200, resp)
 }

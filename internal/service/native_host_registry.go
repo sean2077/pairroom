@@ -12,7 +12,7 @@ import (
 )
 
 func nativeRegistryBinding(b relay.Binding) Binding {
-	result := Binding{Agent: b.Slot, Mode: BindingNew, Pending: true, BoundAt: b.LastActivity}
+	result := Binding{Agent: b.Slot, Runtime: b.Runtime, Mode: BindingNew, Pending: true, BoundAt: b.LastActivity}
 	if b.RemoteKey != "" {
 		result.RemoteKey = b.RemoteKey
 		result.Pending = !b.Active
@@ -41,7 +41,10 @@ func (r *Registry) checkNativeIdentityLocked(candidate Room, slot model.ActorID,
 	if session == "" {
 		return nil
 	}
-	runtime := candidate.Agents[slot].Runtime.CanonicalForSlot(slot)
+	runtime := roomBindingRuntime(candidate, slot)
+	if !runtime.Valid() {
+		return errors.New("native binding requires its actual runtime")
+	}
 	if candidate.HostMode == model.HostNative && r.identities != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -58,7 +61,7 @@ func (r *Registry) checkNativeIdentityLocked(candidate Room, slot model.ActorID,
 			if candidate.ID != "" && other.ID == candidate.ID && actor == slot {
 				continue
 			}
-			if b.OwnsIdentity() && b.SessionID == session && other.Agents[actor].Runtime.CanonicalForSlot(actor) == runtime {
+			if b.OwnsIdentity() && b.SessionID == session && roomBindingRuntime(other, actor) == runtime {
 				return fmt.Errorf("%w: native session is already associated with another Room slot", ErrBindingOwned)
 			}
 		}
@@ -90,7 +93,9 @@ func (r *Registry) commitNativeBinding(roomID string, b relay.Binding, appendFac
 	if room.HostMode != model.HostNative || room.Archived() {
 		return errors.New("native binding requires an active native Room")
 	}
-	if err := r.checkNativeIdentityLocked(room, b.Slot, b.SessionID); err != nil {
+	candidate := cloneRoom(room)
+	candidate.Bindings[b.Slot] = nativeRegistryBinding(b)
+	if err := r.checkNativeIdentityLocked(candidate, b.Slot, b.SessionID); err != nil {
 		return err
 	}
 	key := nativeClaimKey(roomID, b.Slot)
@@ -107,7 +112,9 @@ func (r *Registry) commitNativeBinding(roomID string, b relay.Binding, appendFac
 		}
 		room = cloneRoom(room)
 		room.Bindings[b.Slot] = nativeRegistryBinding(b)
-		if b.RemoteKey != "" {
+		if room.DynamicBindings {
+			room.Agents[b.Slot] = nativeDynamicSelection(b.Runtime, b.Active, room.Sharing == "lan" && b.Slot != room.OwnerSlot)
+		} else if b.RemoteKey != "" {
 			room.Agents[b.Slot] = nativeLANSelection(b.Runtime, b.Active)
 		}
 		room.UpdatedAt = r.now()
@@ -137,7 +144,11 @@ func (r *Registry) nativeIdentityClaim(room Room, b relay.Binding) *nativeidenti
 	if room.HostMode != model.HostNative || b.RemoteKey != "" || !b.Active || b.SessionID == "" {
 		return nil
 	}
-	return &nativeidentity.Claim{Runtime: room.Agents[b.Slot].Runtime.CanonicalForSlot(b.Slot), SessionID: b.SessionID, Association: nativeidentity.Hosted(r.root, room.ID, b.Slot), BindID: b.BindID, Generation: b.Generation}
+	runtime := b.Runtime
+	if !room.DynamicBindings && !runtime.Valid() {
+		runtime = room.Agents[b.Slot].Runtime.CanonicalForSlot(b.Slot)
+	}
+	return &nativeidentity.Claim{Runtime: runtime, SessionID: b.SessionID, Association: nativeidentity.Hosted(r.root, room.ID, b.Slot), BindID: b.BindID, Generation: b.Generation}
 }
 
 // Register live and archived hosted Native bindings before this Registry can
@@ -156,7 +167,7 @@ func (r *Registry) reserveNativeIdentities(ctx context.Context) error {
 			if !ok {
 				// Checkpoint-only archived Rooms still own their explicit session
 				// identity. This reserves it without inventing relay credentials.
-				claim = nativeidentity.Claim{Runtime: room.Agents[slot].Runtime.CanonicalForSlot(slot), SessionID: b.SessionID, Association: nativeidentity.Hosted(r.root, room.ID, slot), BindID: "archived-checkpoint"}
+				claim = nativeidentity.Claim{Runtime: roomBindingRuntime(room, slot), SessionID: b.SessionID, Association: nativeidentity.Hosted(r.root, room.ID, slot), BindID: "archived-checkpoint"}
 				retained, exists, err := r.identities.Retained(ctx, claim)
 				if err != nil {
 					return fmt.Errorf("%w: archived native identity conflicts with another local association: %v", ErrBindingOwned, err)

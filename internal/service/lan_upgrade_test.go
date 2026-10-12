@@ -14,14 +14,24 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/nativeidentity"
 	"github.com/sean2077/pairroom/internal/privatefile"
+	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/relayclient"
 )
 
 func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
+	assertLegacyRoomsPreserved(t, "pre-lan-local", 3)
+}
+
+func TestNativeDynamicUpgradePreservesRealV8LocalAndLANRooms(t *testing.T) {
+	assertLegacyRoomsPreserved(t, "native-v8-lan", 4)
+}
+
+func assertLegacyRoomsPreserved(t *testing.T, fixtureName string, checkpointSchema int) {
+	t.Helper()
 	relayclient.IsolateNativeCaller(t)
 	root, workspace := t.TempDir(), testGitRepo(t)
-	fixture := filepath.Join("testdata", "pre-lan-local")
+	fixture := filepath.Join("testdata", fixtureName)
 	readFixture := func(name string) []byte {
 		t.Helper()
 		data, err := os.ReadFile(filepath.Join(fixture, name))
@@ -59,8 +69,8 @@ func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
 	if err := json.Unmarshal(checkpoint, &before); err != nil {
 		t.Fatal(err)
 	}
-	if before.Schema != 3 || len(before.Rooms) != 2 {
-		t.Fatal("pre-LAN fixture is not the captured current local format")
+	if before.Schema != checkpointSchema || len(before.Rooms) != 2 {
+		t.Fatal("fixture is not the captured prior writer format")
 	}
 	if err := os.WriteFile(filepath.Join(root, "service-registry.json"), checkpoint, 0o600); err != nil {
 		t.Fatal(err)
@@ -72,7 +82,14 @@ func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, name := range []string{"metadata.json", "events.jsonl"} {
-			data := readFixture(string(room.HostMode) + "-" + name)
+			prefix := string(room.HostMode)
+			if fixtureName == "native-v8-lan" {
+				prefix = "native-local"
+				if room.Sharing == "lan" {
+					prefix = "native-lan"
+				}
+			}
+			data := readFixture(prefix + "-" + name)
 			path := filepath.Join(dir, name)
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
@@ -82,11 +99,11 @@ func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
 	}
 	registry, err := OpenRegistry(context.Background(), RegistryConfig{Root: root})
 	if err != nil {
-		t.Fatalf("current pre-LAN root was rejected: %v", err)
+		t.Fatalf("supported legacy root was rejected: %v", err)
 	}
 	for _, expected := range before.Rooms {
 		actual, ok := registry.Room(expected.ID)
-		if !ok || actual.HostMode != expected.HostMode || actual.Name != expected.Name || actual.Sharing != "" || actual.OwnerSlot != "" {
+		if !ok || actual.HostMode != expected.HostMode || actual.Name != expected.Name || actual.Sharing != expected.Sharing || actual.OwnerSlot != expected.OwnerSlot || actual.DynamicBindings {
 			t.Fatalf("existing Room changed: %+v", actual)
 		}
 		for _, slot := range model.SlotActors() {
@@ -100,8 +117,32 @@ func TestLANUpgradePreservesRealPreLANLocalRooms(t *testing.T) {
 			t.Fatalf("upgrade rewrote Room facts %s: %v", filepath.Base(path), err)
 		}
 	}
-	if schema, _, err := readSchemaHeader(filepath.Join(root, "service-registry.json")); err != nil || schema != 4 {
+	if schema, _, err := readSchemaHeader(filepath.Join(root, "service-registry.json")); err != nil || schema != 5 {
 		t.Fatalf("derived checkpoint did not mark the new reader: schema=%d error=%v", schema, err)
+	}
+	for _, expected := range before.Rooms {
+		if expected.HostMode != model.HostNative {
+			continue
+		}
+		room, _ := registry.Room(expected.ID)
+		project, ok := registry.Project(room.ProjectID)
+		if !ok {
+			t.Fatal("legacy Room lost its Project")
+		}
+		runtime, err := startNativeHostRuntime(context.Background(), registry, project, room, "127.0.0.1", nativeWakerConfig{Mock: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		native := runtime.(*nativeHostRuntime)
+		if native.engine.ProtocolVersion() != protocol.NativeVersion || native.engine.Snapshot().DynamicBindings {
+			t.Fatal("legacy Native Room was silently upgraded to v9")
+		}
+		if _, err := native.engine.Bind("", relay.BindRequest{Runtime: model.RuntimeCodex, BindID: "legacy-auto-bind", SessionID: "legacy-auto-session", CredentialHash: relay.Digest("legacy-auto-secret")}); err == nil {
+			t.Fatal("legacy Native Room accepted dynamic automatic slot allocation")
+		}
+		if err := native.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

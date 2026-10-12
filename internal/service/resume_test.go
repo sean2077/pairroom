@@ -27,12 +27,12 @@ func TestResumePendingRoomsActivatesOnlyRoomsWithWakeWork(t *testing.T) {
 		want bool
 	}{
 		{name: "queued input for a bound session", want: true, prep: func(t *testing.T, f *nativeFixture, sender relay.Auth) {
-			if _, err := f.native.engine.Send(sender, relay.SendRequest{ID: "pending", Text: "please review"}); err != nil {
+			if _, err := f.native.engine.Send(sender, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "pending", Text: "please review"}); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{name: "input already attempted", prep: func(t *testing.T, f *nativeFixture, sender relay.Auth) {
-			m, err := f.native.engine.Send(sender, relay.SendRequest{ID: "attempted", Text: "please review"})
+			m, err := f.native.engine.Send(sender, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "attempted", Text: "please review"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func TestResumePendingRoomsActivatesOnlyRoomsWithWakeWork(t *testing.T) {
 			if err := f.native.engine.SetWakeEnabled(false); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := f.native.engine.Send(sender, relay.SendRequest{ID: "disabled", Text: "please review"}); err != nil {
+			if _, err := f.native.engine.Send(sender, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "disabled", Text: "please review"}); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -110,7 +110,6 @@ func TestResumePendingNativeRoomsWithoutExternalWakeStillNotify(t *testing.T) {
 			})
 			durable, err := registry.ProvisionRoom(context.Background(), ProvisionRequest{
 				ProjectID: project.ID, Name: "Pending native input", HostMode: model.HostNative,
-				Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeClaude}, model.ActorSlot2: {Runtime: kind}},
 			}, noSpawn)
 			if err != nil {
 				t.Fatal(err)
@@ -121,7 +120,7 @@ func TestResumePendingNativeRoomsWithoutExternalWakeStillNotify(t *testing.T) {
 			}
 			queuedAt := time.Now().Add(-inputWaitingThreshold - time.Minute).UTC()
 			engine, err := relay.Open(relay.Config{
-				RoomID: durable.ID, Store: log, Now: func() time.Time { return queuedAt },
+				DynamicBindings: durable.DynamicBindings, RoomID: durable.ID, Store: log, Now: func() time.Time { return queuedAt },
 				Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: kind},
 				CommitBinding: func(b relay.Binding, appendFact func() error) error {
 					return registry.commitNativeBinding(durable.ID, b, appendFact)
@@ -131,7 +130,7 @@ func TestResumePendingNativeRoomsWithoutExternalWakeStillNotify(t *testing.T) {
 				_ = log.Close()
 				t.Fatal(err)
 			}
-			if _, err := engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "pending-binding", CredentialHash: relay.Digest("fixture-secret"), SessionID: "pending-session"}); err != nil {
+			if _, err := engine.Bind(model.ActorSlot2, relay.BindRequest{Runtime: kind, BindID: "pending-binding", CredentialHash: relay.Digest("fixture-secret"), SessionID: "pending-session"}); err != nil {
 				_ = engine.Close()
 				t.Fatal(err)
 			}

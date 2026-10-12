@@ -19,7 +19,6 @@ import (
 
 	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/store"
 	"github.com/sean2077/pairroom/internal/websession"
@@ -93,7 +92,7 @@ func startNativeHostRuntime(ctx context.Context, registry *Registry, project Pro
 	if durable.Sharing == "lan" {
 		sharedSlot = model.OtherParticipant(durable.OwnerSlot)
 	}
-	engine, err := relay.Open(relay.Config{SharedSlot: sharedSlot, RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, OnAppend: registry.observeLANAuthorization, CommitBinding: func(b relay.Binding, appendFact func() error) error {
+	engine, err := relay.Open(relay.Config{DynamicBindings: durable.DynamicBindings, SharedSlot: sharedSlot, RoomID: durable.ID, Store: log, Runtimes: kinds, Media: media, OnAttention: onAttention, OnAppend: registry.observeLANAuthorization, CommitBinding: func(b relay.Binding, appendFact func() error) error {
 		return registry.commitNativeBinding(durable.ID, b, appendFact)
 	}})
 	if err != nil {
@@ -268,15 +267,27 @@ func (n *nativeHostRuntime) snapshot() map[string]any {
 	return n.snapshotWithRelay(n.engine.Snapshot())
 }
 func (n *nativeHostRuntime) snapshotWithRelay(projection any) map[string]any {
-	kinds := n.engine.Runtimes()
+	var bindings map[model.ActorID]relay.Binding
+	switch value := projection.(type) {
+	case relay.Snapshot:
+		bindings = value.Bindings
+	case relay.TailSnapshot:
+		bindings = value.Bindings
+	}
 	room := cloneRoom(n.room)
-	for slot, kind := range kinds {
-		if room.Sharing == "lan" && slot != room.OwnerSlot {
-			room.Agents[slot] = nativeLANSelection(kind, kind.Valid())
+	for _, slot := range model.SlotActors() {
+		binding, present := bindings[slot]
+		if present {
+			room.Bindings[slot] = nativeRegistryBinding(binding)
+		}
+		if room.DynamicBindings {
+			room.Agents[slot] = nativeDynamicSelection(binding.Runtime, binding.Active, room.Sharing == "lan" && slot != room.OwnerSlot)
+		} else if room.Sharing == "lan" && slot != room.OwnerSlot {
+			room.Agents[slot] = nativeLANSelection(binding.Runtime, binding.Active)
 		}
 	}
 	room = cloneRoom(room)
-	snapshot := map[string]any{"room": room, "relay": projection, "protocol": protocol.NativeVersion, "config_notice": "Provider, model, effort, instructions and permissions are display-only here; configure them in the native harness.", "summary": n.engine.Summary(), "identities": model.ParticipantIdentities(kinds)}
+	snapshot := map[string]any{"room": room, "relay": projection, "protocol": n.engine.ProtocolVersion(), "config_notice": "Configure provider, model, effort, instructions and permissions in the native harness. The current runtime is recorded when its session binds.", "summary": n.engine.Summary(), "identities": roomParticipantIdentities(room)}
 	// The join guide copies this text into an Agent session, so the Service that
 	// knows its own endpoint renders it once instead of the browser guessing.
 	if join := n.joinCommands(room); len(join) > 0 {
@@ -449,6 +460,10 @@ func nativeResult(w http.ResponseWriter, value any, err error) {
 			writeManagementJSON(w, status, map[string]string{"error": err.Error(), "code": relay.SendPayloadConflictCode})
 			return
 		}
+		if errors.Is(err, relay.ErrPeerChanged) {
+			writeManagementJSON(w, status, map[string]string{"error": err.Error(), "code": relay.PeerChangedCode})
+			return
+		}
 		writeManagementError(w, status, err.Error())
 		return
 	}
@@ -536,7 +551,7 @@ func (n *nativeHostRuntime) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseRelayAuth(r *http.Request, slot model.ActorID) (relay.Auth, error) {
-	auth := relay.Auth{Slot: slot, BindID: r.Header.Get("X-PairRoom-Bind"), SessionID: r.Header.Get("X-PairRoom-Session")}
+	auth := relay.Auth{Runtime: model.RuntimeKind(r.Header.Get("X-PairRoom-Runtime")), Slot: slot, BindID: r.Header.Get("X-PairRoom-Bind"), SessionID: r.Header.Get("X-PairRoom-Session")}
 	value := r.Header.Get("Authorization")
 	if !strings.HasPrefix(value, "Relay ") {
 		return auth, relay.ErrAuth

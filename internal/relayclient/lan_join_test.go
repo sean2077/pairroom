@@ -191,7 +191,7 @@ func TestLANCreatePreflightUsesActualCreatorWithoutDefaultPeer(t *testing.T) {
 	// A LAN creator has no reason to query a local saved pair. The guest's
 	// official Runtime is selected only during exact-key admission.
 	o, slot, err := prepareNativeCreation(context.Background(), relay.Endpoint{URL: "invalid-no-network"}, root, options{share: "lan"}, "")
-	if err != nil || slot != model.ActorSlot1 || len(o.preparedAgents) != 1 || o.preparedAgents[slot].Runtime != model.RuntimeClaude {
-		t.Fatalf("LAN preflight guessed a peer: %+v %s %v", o.preparedAgents, slot, err)
+	if err != nil || slot != model.ActorSlot1 || o.peer != "" {
+		t.Fatalf("LAN preflight guessed a peer: %+v %s %v", o, slot, err)
 	}
 }

@@ -9,8 +9,8 @@ import (
 
 func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 	for _, slot := range model.SlotActors() {
-		for _, a := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
-			for _, b := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok} {
+		for _, a := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini} {
+			for _, b := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini, model.RuntimeAwaitingPeer} {
 				text := NativeBootstrap(slot, a, b)
 				for _, version := range []int{1, model.CollaborationVersion} {
 					collaboration, err := (model.Collaboration{Version: version}).ForCreation()
@@ -27,7 +27,11 @@ func TestNativeBootstrapBudgetAndBoundaries(t *testing.T) {
 						t.Fatalf("LAN bootstrap + collaboration v%d %s/%s/%s = %d bytes", version, slot, a, b, len(lan))
 					}
 				}
-				for _, fragment := range []string{NativeVersion, "advisory", "relay send", "only when another reply is needed", "Send plus Stop can duplicate", "Never read or print relay credentials"} {
+				fragments := []string{NativeVersion, "relay send", "--legacy-native"}
+				if b != model.RuntimeAwaitingPeer {
+					fragments = append(fragments, "advisory", "only when another reply is needed", "Send plus Stop can duplicate", "Never read or print relay credentials")
+				}
+				for _, fragment := range fragments {
 					if !strings.Contains(text, fragment) {
 						t.Fatalf("missing %q", fragment)
 					}

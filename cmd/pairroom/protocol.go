@@ -23,6 +23,7 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	actorFlag := flags.String("actor", "", "limit actor-specific rules to slot1 or slot2; 1/2 and claude/codex are CLI aliases")
 
 	hostFlag := flags.String("host-mode", "native", "Room host mode: native (recommended) or embedded")
+	legacyFlag := flags.Bool("legacy-native", false, "emit the v8 contract for a Native Room created before dynamic bindings")
 	jsonFlag := flags.Bool("json", false, "emit the contract as JSON")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "usage: pairroom protocol [--host-mode native|embedded] [--actor slot1|slot2] [--json]")
@@ -42,6 +43,9 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	if !host.Valid() {
 		return fmt.Errorf("invalid host-mode %q", host)
 	}
+	if *legacyFlag && host != model.HostNative {
+		return errors.New("--legacy-native applies only to --host-mode native")
+	}
 	explicitHostMode := false
 	flags.Visit(func(value *flag.Flag) {
 		if value.Name == "host-mode" {
@@ -50,7 +54,10 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 	})
 	resolve := protocol.Resolve
 	if host == model.HostNative {
-		resolve = protocol.ResolveNative
+		resolve = protocol.ResolveNativeDynamic
+		if *legacyFlag {
+			resolve = protocol.ResolveNative
+		}
 	}
 	contract, err := resolve(protocol.Selection{Actor: parseProtocolActor(*actorFlag)})
 	if err != nil {
@@ -69,7 +76,7 @@ func writeProtocol(args []string, stdout, stderr io.Writer) error {
 		// host mode, and the default flipped from embedded to native. Name the
 		// assumed contract, so an Embedded Room's agent is never handed the
 		// Native rules silently.
-		_, err = io.WriteString(stdout, "\nNote: --host-mode was not given, so this is PairRoom's current Native default. An Embedded Room created by an older release should rerun this command with --host-mode embedded.\n")
+		_, err = io.WriteString(stdout, "\nNote: --host-mode was not given, so this is PairRoom's current Native default. An Embedded Room should use --host-mode embedded. A Native Room created before dynamic bindings keeps v8 and should use --legacy-native.\n")
 	}
 	return err
 }

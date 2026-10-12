@@ -15,7 +15,7 @@ import (
 )
 
 func (c *Client) localAuth() relay.Auth {
-	return relay.Auth{Slot: c.State.Slot, BindID: c.State.BindID, Generation: c.State.Generation, SessionID: c.State.SessionID, Secret: c.Secret}
+	return relay.Auth{Slot: c.State.Slot, BindID: c.State.BindID, Generation: c.State.Generation, SessionID: c.State.SessionID, Runtime: c.State.Runtime, Secret: c.Secret}
 }
 
 func (c *Client) close() {
@@ -93,6 +93,7 @@ func directSessionMetadata(ctx context.Context, caller nativeCaller) (*lanclient
 // the complete immutable route and native identity against its protected record.
 func matchesDirectMetadata(state State, meta lanclient.Metadata) bool {
 	return validStateFormat(state) && state.LAN != nil && state.Room == meta.ID && state.Slot == meta.Slot &&
+		state.DynamicBindings == meta.DynamicBindings &&
 		state.BindID == meta.BindID && state.Generation == meta.Generation && state.Runtime == meta.Runtime &&
 		state.SessionID == meta.SessionID && sameWorkspace(state.Workspace, meta.Workspace) &&
 		state.LAN.Endpoint == meta.Invite.Endpoint && state.LAN.HostPin == meta.Invite.HostPin && state.LAN.RoomID == meta.Invite.RoomID

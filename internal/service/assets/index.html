@@ -156,7 +156,7 @@
         </div>
         <section class="collaboration-config" data-room-only>
           <label><span class="field-label" data-i18n="ui.native.hostMode">Host mode</span><select id="room-host-mode"><option value="native" data-i18n="ui.native.native">Native · recommended (default)</option><option value="embedded" data-i18n="ui.native.embedded">Embedded · PairRoom manages sessions</option></select></label>
-          <p id="room-native-help" class="field-help" data-i18n="ui.native.help" hidden>Approve project Stop hooks, then bind both native sessions. PairRoom does not start or interrupt them. Provider, model, effort, instructions and permission settings below are display-only.</p>
+          <p id="room-native-help" class="field-help" data-i18n="ui.native.help" hidden>Create two empty Agent slots. Each session identifies its Runtime when it joins; you do not select a type or pair profile here. Configure models and permissions in each native harness.</p>
           <p id="room-embedded-help" class="field-help" data-i18n="ui.native.embeddedHelp" hidden>Native is recommended for new Rooms. Choose Embedded when you need PairRoom-owned sessions and adapter controls, or a Mock demonstration.</p>
           <div data-native-setup data-native-source="room-native-help" hidden></div>
           <label id="room-lan-choice" class="checkbox-label"><input id="room-share-lan" type="checkbox"><span data-i18n="room.lan.share">Invite the other side over LAN</span></label>
@@ -191,9 +191,13 @@
             </div>
           </details>
         </section>
-        <div class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p data-room-only class="field-help" data-i18n="room.agentConfigurationImmutable">Fixed once the Room is created.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
+        <div id="room-native-slots" class="binding-grid" hidden>
+          <article class="binding-card"><strong data-i18n="agent.agent1">Agent 1</strong> <code>@agent1</code><p id="room-native-slot1-state" class="field-help" data-i18n="room.native.awaitingBinding">Waiting for a native session to join</p></article>
+          <article class="binding-card"><strong data-i18n="agent.agent2">Agent 2</strong> <code>@agent2</code><p id="room-native-slot2-state" class="field-help" data-i18n="room.native.awaitingBinding">Waiting for a native session to join</p></article>
+        </div>
+        <div id="room-agent-selection-heading" class="section-label-row"><div><span class="field-label" data-i18n="room.agentConfiguration">Agent configuration</span><p data-room-only class="field-help" data-i18n="room.agentConfigurationImmutable">Fixed once the Room is created.</p></div><button id="agent-catalog-refresh" class="secondary-button compact-button" type="button" data-i18n="agent.refreshCatalog">Refresh Agent catalog</button></div>
         <p id="room-lan-peer" class="field-help" data-i18n="room.lan.awaitingPeerHelp" hidden>Other slot: awaiting the other side. No Runtime or native session is selected for them.</p>
-        <div class="binding-grid">
+        <div id="room-agent-selection-grid" class="binding-grid">
           <fieldset class="binding-card" data-actor="slot1">
             <legend><span class="agent-avatar slot1">1</span><span><strong id="slot1-responsibility-label" data-i18n="room.collaboration.leadSlot">Agent 1 · Lead</strong></span></legend>
             <div class="agent-selection-grid">
@@ -235,7 +239,7 @@
             <label data-room-only class="session-field" for="slot2-session-id"><span id="slot2-binding-label" data-i18n="agent.sessionOrThreadId">Session / Thread ID</span><input id="slot2-session-id" type="text" placeholder="Paste Thread ID" autocomplete="off" spellcheck="false" disabled="" data-i18n-placeholder="ui.pasteThreadId"></label>
           </fieldset>
         </div>
-        <div data-room-only class="callout boundary"><strong data-i18n="common.transcriptBoundary">Transcript Boundary</strong><span data-i18n="ui.existingResumesOnlyVendorContextPairroomDoesNotImportCopySummarizeOr">Existing resumes only vendor context; PairRoom does not import, copy, summarize, or display the pre-binding transcript.</span></div>
+        <div id="room-embedded-binding-help" data-room-only class="callout boundary"><strong data-i18n="common.transcriptBoundary">Transcript Boundary</strong><span data-i18n="ui.existingResumesOnlyVendorContextPairroomDoesNotImportCopySummarizeOr">Existing resumes only vendor context; PairRoom does not import, copy, summarize, or display the pre-binding transcript.</span></div>
         <p id="room-form-error" class="form-error" role="alert" hidden=""></p>
       </div>
       <footer class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="room-dialog" data-i18n="ui.cancel">Cancel</button><button id="room-submit" class="primary-button" type="submit" data-i18n="ui.createRooma1cda23">Create Room</button></footer>

@@ -62,32 +62,31 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		return Room{}, err
 	}
 	request.Collaboration = &collaboration
-	// A nil map represents the omitted JSON field and snapshots the current
-	// Service defaults. A non-nil empty/partial map is an explicit submission
-	// and must fail closed rather than silently filling one missing slot.
-	if request.Agents != nil && request.AgentPairProfileID != "" {
-		return Room{}, errors.New("provide agents or agent_pair_profile_id, not both")
-	}
-	if request.Agents == nil {
-		request.Agents, err = r.agentPairProfileSelections(request.AgentPairProfileID)
-		if err != nil {
-			return Room{}, err
+	request.DynamicBindings = request.HostMode == model.HostNative
+	if request.DynamicBindings {
+		if request.Agents != nil || request.AgentPairProfileID != "" {
+			return Room{}, errors.New("native creation does not select runtimes: omit agents and agent_pair_profile_id; each caller's actual runtime is detected at bind")
 		}
-	}
-	if request.Agents == nil {
-		if defaults, ok := provisioner.(defaultAgentSelectionProvider); ok {
-			request.Agents = defaults.DefaultSelections()
-		} else {
-			request.Agents = defaultAgentSelections()
+		request.Agents = nativeUnboundSelections(request.Sharing, request.OwnerSlot)
+	} else {
+		// A nil map represents the omitted JSON field and snapshots the current
+		// Service defaults. A non-nil empty/partial map is an explicit submission
+		// and must fail closed rather than silently filling one missing slot.
+		if request.Agents != nil && request.AgentPairProfileID != "" {
+			return Room{}, errors.New("provide agents or agent_pair_profile_id, not both")
 		}
-	}
-	if request.Sharing == "lan" {
-		if request.AgentPairProfileID != "" {
-			return Room{}, errors.New("LAN creation selects only its local owner runtime")
+		if request.Agents == nil {
+			request.Agents, err = r.agentPairProfileSelections(request.AgentPairProfileID)
+			if err != nil {
+				return Room{}, err
+			}
 		}
-		request.Agents, err = prepareLANSelections(request.OwnerSlot, request.Agents)
-		if err != nil {
-			return Room{}, err
+		if request.Agents == nil {
+			if defaults, ok := provisioner.(defaultAgentSelectionProvider); ok {
+				request.Agents = defaults.DefaultSelections()
+			} else {
+				request.Agents = defaultAgentSelections()
+			}
 		}
 	}
 	selections, err := validateAgentSelections(request.Agents)
@@ -241,7 +240,7 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 
 	now := r.now()
 	room := Room{
-		HostMode: request.HostMode, Sharing: request.Sharing, OwnerSlot: request.OwnerSlot,
+		DynamicBindings: request.DynamicBindings, HostMode: request.HostMode, Sharing: request.Sharing, OwnerSlot: request.OwnerSlot,
 		ID: roomID, ProjectID: project.ID, Name: strings.TrimSpace(request.Name),
 		Collaboration: model.CloneCollaboration(request.Collaboration),
 		Lifecycle:     RoomActive, Bindings: bindings, Agents: cloneAgentSelections(request.Agents),
@@ -249,7 +248,7 @@ func (r *Registry) ProvisionRoom(ctx context.Context, request ProvisionRequest, 
 		CreatedAt:                now, UpdatedAt: now,
 	}
 	payload := roomProvisionedPayload{
-		Schema: 6, HostMode: room.HostMode, Sharing: room.Sharing, OwnerSlot: room.OwnerSlot, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
+		Schema: 7, DynamicBindings: room.DynamicBindings, HostMode: room.HostMode, Sharing: room.Sharing, OwnerSlot: room.OwnerSlot, Collaboration: model.CloneCollaboration(room.Collaboration), Project: project, RoomID: room.ID, Name: room.Name,
 		Lifecycle: room.Lifecycle, Bindings: cloneBindings(room.Bindings),
 		Agents:                   cloneAgentSelections(room.Agents),
 		TranscriptBoundaryNotice: room.TranscriptBoundaryNotice, CreatedAt: room.CreatedAt,
@@ -308,7 +307,9 @@ func selectionsRuntimeKinds(agents map[model.ActorID]model.AgentSelection) map[m
 	for _, slot := range model.SlotActors() {
 		selection := agents[slot]
 		kinds[slot] = selection.Runtime
-		if selection.AwaitingPeer {
+		if selection.AwaitingBinding {
+			kinds[slot] = model.RuntimeAwaitingBinding
+		} else if selection.AwaitingPeer {
 			kinds[slot] = model.RuntimeAwaitingPeer
 		}
 	}
@@ -346,7 +347,7 @@ func writeInitialRoomLog(dir string, project Project, room Room, payload roomPro
 	if err := appendEvent("room.settings.updated", model.ActorSystem, model.DefaultRoomSettings()); err != nil {
 		return err
 	}
-	identities := model.ParticipantIdentities(selectionsRuntimeKinds(room.Agents))
+	identities := roomParticipantIdentities(room)
 	participants := []model.ParticipantSnapshot{
 		{ID: model.ActorSlot1, DisplayName: identities[model.ActorSlot1].DisplayName, MentionHandle: identities[model.ActorSlot1].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorSlot1), State: model.StateStopped, Model: room.Agents[model.ActorSlot1].Model, RuntimeKind: room.Agents[model.ActorSlot1].Runtime, SessionID: room.Bindings[model.ActorSlot1].SessionID},
 		{ID: model.ActorSlot2, DisplayName: identities[model.ActorSlot2].DisplayName, MentionHandle: identities[model.ActorSlot2].MentionHandle, Role: model.RolePeer, PermissionProfile: model.PermissionConfigured, Responsibility: room.Collaboration.Responsibility(model.ActorSlot2), State: model.StateStopped, Model: room.Agents[model.ActorSlot2].Model, RuntimeKind: room.Agents[model.ActorSlot2].Runtime, SessionID: room.Bindings[model.ActorSlot2].SessionID},

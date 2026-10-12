@@ -37,13 +37,18 @@ type lanCLIWire struct {
 	policy      model.Collaboration
 	requests    atomic.Int64
 	connections atomic.Int64
+	dynamic     bool
+	dropReport  atomic.Bool
 }
 
-func newLANCLIWire(t *testing.T) *lanCLIWire {
+func newLANCLIWire(t *testing.T, dynamic ...bool) *lanCLIWire {
 	t.Helper()
 	isolateCaller(t)
 	stubLineage(t, 4242, "codex", true)
 	f := &lanCLIWire{root: sessionGitRoot(t)}
+	if len(dynamic) > 0 {
+		f.dynamic = dynamic[0]
+	}
 	var err error
 	f.policy, err = (model.Collaboration{}).ForCreation()
 	if err != nil {
@@ -53,7 +58,7 @@ func newLANCLIWire(t *testing.T) *lanCLIWire {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.engine, err = relay.Open(relay.Config{RoomID: "cli-lifecycle-room", Store: log, SharedSlot: model.ActorSlot2, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeAwaitingPeer}})
+	f.engine, err = relay.Open(relay.Config{RoomID: "cli-lifecycle-room", Store: log, DynamicBindings: f.dynamic, SharedSlot: model.ActorSlot2, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeAwaitingPeer}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +108,8 @@ func newLANCLIWire(t *testing.T) *lanCLIWire {
 					w.WriteHeader(403)
 					return
 				}
-				response.Room = &lanshare.RoomInfo{RoomID: "cli-lifecycle-room", Slot: binding.Slot, Generation: binding.Generation, BindID: binding.BindID, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: binding.Runtime}, Collaboration: &f.policy}
+				bootstrap, peerGeneration := f.engine.BootstrapContext(binding.Slot)
+				response.Room = &lanshare.RoomInfo{RoomID: "cli-lifecycle-room", Slot: binding.Slot, Generation: binding.Generation, BindID: binding.BindID, Runtimes: f.engine.Runtimes(), Collaboration: &f.policy, DynamicBindings: f.dynamic, PeerGeneration: peerGeneration, Bootstrap: bootstrap}
 			}
 			value = response
 		} else {
@@ -112,12 +118,56 @@ func newLANCLIWire(t *testing.T) *lanCLIWire {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
+			var request struct {
+				ID                     string        `json:"id"`
+				Text                   string        `json:"text"`
+				To                     model.ActorID `json:"to"`
+				ExpectedPeerGeneration uint64        `json:"expected_peer_generation"`
+				ReportSeq              uint64        `json:"report_seq"`
+				Receipt                string        `json:"receipt"`
+				Digest                 string        `json:"digest"`
+				Generation             uint64        `json:"generation"`
+				Park                   bool          `json:"park"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, "bad request", 400)
+				return
+			}
 			switch action {
 			case "summary":
 				value, callErr = f.engine.AuthSummary(auth)
 			case "unbind":
 				callErr = f.engine.UnbindAs(auth)
 				value = map[string]bool{"unbound": callErr == nil}
+			case "send":
+				value, callErr = f.engine.Send(auth, relay.SendRequest{ID: request.ID, Text: request.Text, To: request.To, ExpectedPeerGeneration: request.ExpectedPeerGeneration})
+			case "report":
+				value, callErr = f.engine.Report(auth, request.ReportSeq, request.Text, request.ExpectedPeerGeneration)
+				if callErr == nil && f.dropReport.Swap(false) {
+					conn, _, _ := w.(http.Hijacker).Hijack()
+					_ = conn.Close()
+					return
+				}
+			case "publication":
+				var p relay.Publication
+				var accepted bool
+				p, accepted, callErr = f.engine.Publication(auth, request.ReportSeq)
+				value = map[string]any{"accepted": accepted, "publication": p}
+			case "head":
+				var head *relay.Prepared
+				head, callErr = f.engine.PrepareHead(r.Context(), auth, request.Park)
+				value = map[string]any{"head": head}
+			case "claim":
+				if request.Generation != auth.Generation {
+					callErr = relay.ErrAuth
+					break
+				}
+				var claim *relay.StructuredClaim
+				claim, callErr = f.engine.ClaimPrepared(r.Context(), auth, request.ID, request.Digest, request.Park)
+				value = map[string]any{"claim": claim}
+			case "ack":
+				callErr = f.engine.Ack(auth, request.ID, request.Receipt)
+				value = map[string]bool{"handed_off": callErr == nil}
 			default:
 				t.Errorf("unexpected lifecycle wire action: %s", action)
 				w.WriteHeader(404)
@@ -125,6 +175,10 @@ func newLANCLIWire(t *testing.T) *lanCLIWire {
 			}
 		}
 		if callErr != nil {
+			if errors.Is(callErr, relay.ErrPeerChanged) || errors.Is(callErr, relay.ErrSendPayloadConflict) {
+				dynamicWireResult(w, nil, callErr)
+				return
+			}
 			w.WriteHeader(403)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "fixture rejected admission"})
 			return

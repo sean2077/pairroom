@@ -688,6 +688,7 @@ func TestScopedRelaySetupRoute(t *testing.T) {
 		{http.MethodGet, "/api/v1/agent-catalog"},
 		{http.MethodPost, "/api/v1/projects"},
 		{http.MethodPost, "/api/v1/projects/proj/rooms"},
+		{http.MethodPost, "/api/v1/rooms/room1/native-bindings"},
 		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot1"},
 		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot2"},
 	}
@@ -704,6 +705,10 @@ func TestScopedRelaySetupRoute(t *testing.T) {
 		{http.MethodPost, "/api/v1/projects/proj/rooms/extra"},
 		{http.MethodPost, "/api/v1/rooms/room1/activate"},
 		{http.MethodPost, "/api/v1/rooms/room1/native-bindings/slot3"},
+		{http.MethodPost, "/api/v1/rooms//native-bindings"},
+		{http.MethodPost, "/api/v1/rooms/room1/extra/native-bindings"},
+		{http.MethodGet, "/api/v1/rooms/room1/native-bindings"},
+		{http.MethodDelete, "/api/v1/rooms/room1/native-bindings"},
 		{http.MethodDelete, "/api/v1/rooms/room1/native-bindings/slot1"},
 		{http.MethodPost, "/api/v1/rooms/room1/archive"},
 		{http.MethodGet, "/api/v1/rooms/room1/surface/"},

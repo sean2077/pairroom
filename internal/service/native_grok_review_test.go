@@ -22,7 +22,7 @@ func TestGrokReservesFinalStopBeforeVendorContinuationCutoff(t *testing.T) {
 	// Grok does not call Stop again after eight block decisions. Our eighth
 	// Stop must publish its complete reply and allow, not ask for that round.
 	for i := 0; i < relay.MaxBlocks; i++ {
-		text := fmt.Sprintf("@codex complete result %d", i)
+		text := fmt.Sprintf("@agent2 complete result %d", i)
 		out, err := grokHook(t, f, a, text, map[string]any{"stopHookActive": i > 0})
 		if err != nil {
 			t.Fatal(err)
@@ -43,7 +43,7 @@ func TestGrokReservesFinalStopBeforeVendorContinuationCutoff(t *testing.T) {
 		}
 	}
 	messages := f.native.engine.Snapshot().Messages
-	if len(messages) != relay.MaxBlocks+1 || messages[0].State != "queued" || messages[len(messages)-1].Text != "@codex complete result 7" {
+	if len(messages) != relay.MaxBlocks+1 || messages[0].State != "queued" || messages[len(messages)-1].Text != "@agent2 complete result 7" {
 		t.Fatalf("final reply lost or readiness claimed an envelope: %+v", messages)
 	}
 	// The next real user turn gets a fresh cap, without changing bindings.

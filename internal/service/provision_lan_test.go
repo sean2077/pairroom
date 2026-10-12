@@ -20,6 +20,7 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 		for _, localKind := range kinds {
 			for _, remoteKind := range kinds {
 				t.Run(string(owner)+"/"+string(localKind)+"/"+string(remoteKind), func(t *testing.T) {
+					relayclient.IsolateNativeCaller(t)
 					ctx := context.Background()
 					registry, project := testRegistry(t, testGitRepo(t))
 					peer := model.OtherParticipant(owner)
@@ -27,7 +28,7 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 						t.Error("native LAN provisioning attempted to start a vendor runtime")
 						return Binding{}, nil, errors.New("unexpected native process")
 					})
-					room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Name: "Shared work", HostMode: model.HostNative, Sharing: "lan", OwnerSlot: owner, Agents: map[model.ActorID]model.AgentSelection{owner: {Runtime: localKind, Provider: model.NativeProviderRef()}}}, noSpawn)
+					room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Name: "Shared work", HostMode: model.HostNative, Sharing: "lan", OwnerSlot: owner}, noSpawn)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -36,8 +37,8 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 						if !room.Agents[peer].AwaitingPeer || room.Agents[peer].Runtime != "" || room.RuntimeNames[peer] != "" {
 							t.Fatalf("unadmitted peer acquired a runtime or native name: %+v", room)
 						}
-						if room.Agents[owner].Runtime != localKind || !strings.Contains(room.RuntimeNames[owner], " · @"+string(localKind)+" · ") {
-							t.Fatalf("known owner identity was omitted or renumbered: %+v", room.RuntimeNames)
+						if !room.Agents[owner].AwaitingBinding || room.Agents[owner].Runtime != "" || room.RuntimeNames[owner] != "" {
+							t.Fatalf("owner runtime was preselected before binding: %+v", room.RuntimeNames)
 						}
 					}
 					assertPending(room)
@@ -55,11 +56,9 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 							t.Fatal(err)
 						}
 						seen[participant.ID] = true
-						if participant.ID == peer && (participant.RuntimeKind != "" || participant.MentionHandle != "" || participant.DisplayName != "Awaiting peer") {
-							t.Fatalf("initial durable participant invented a peer: %+v", participant)
-						}
-						if participant.ID == owner && (participant.RuntimeKind != localKind || participant.MentionHandle != "@"+string(localKind)) {
-							t.Fatalf("initial durable owner was renumbered: %+v", participant)
+						identity := model.NativeParticipantIdentityFor(participant.ID)
+						if participant.RuntimeKind != "" || participant.MentionHandle != identity.MentionHandle || participant.DisplayName != identity.DisplayName {
+							t.Fatalf("initial participant preselected a Runtime or lost its stable seat: %+v", participant)
 						}
 					}
 					if len(seen) != 2 {
@@ -83,10 +82,13 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 							t.Error(err)
 						}
 					})
-					initial := native.snapshotWithRelay(native.engine.Summary())
+					initial := native.snapshot()
 					identities := initial["identities"].(map[model.ActorID]model.ParticipantIdentity)
-					if identities[peer].MentionHandle != "" || identities[owner].MentionHandle != "@"+string(localKind) {
+					if identities[peer].MentionHandle != model.NativeParticipantIdentityFor(peer).MentionHandle || identities[owner].MentionHandle != model.NativeParticipantIdentityFor(owner).MentionHandle {
 						t.Fatalf("live initial identities disagree with the durable selection: %+v", identities)
+					}
+					if _, err := native.engine.Bind(owner, relay.BindRequest{Runtime: localKind, BindID: "actual-owner", SessionID: "owner-session", CredentialHash: relay.Digest("owner-secret")}); err != nil {
+						t.Fatal(err)
 					}
 					invite, err := native.engine.CreateLANInvite()
 					if err != nil {
@@ -103,15 +105,7 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 						t.Fatal(err)
 					}
 					wantHandle := func(slot model.ActorID) string {
-						kind := localKind
-						if slot == peer {
-							kind = remoteKind
-						}
-						suffix := ""
-						if localKind == remoteKind {
-							suffix = map[model.ActorID]string{model.ActorSlot1: "0", model.ActorSlot2: "1"}[slot]
-						}
-						return "@" + string(kind) + suffix
+						return model.NativeParticipantIdentityFor(slot).MentionHandle
 					}
 					assertAdmitted := func(room Room) {
 						t.Helper()
@@ -126,7 +120,7 @@ func TestLANProvisioningKeepsPeerUnselectedUntilRealAdmission(t *testing.T) {
 					}
 					room, _ = registry.Room(room.ID)
 					assertAdmitted(room)
-					live := native.snapshotWithRelay(native.engine.Summary())
+					live := native.snapshot()
 					assertAdmitted(live["room"].(Room))
 					identities = live["identities"].(map[model.ActorID]model.ParticipantIdentity)
 					for _, slot := range model.SlotActors() {

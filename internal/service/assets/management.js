@@ -41,6 +41,7 @@
     archivedOpen: new Set(),
     dragTabID: '',
     roomDialogRevision: 0,
+    roomAgentLoadRevision: 0,
     pairProfileMode: false,
     pairProfileReady: false,
     pairProfileID: '',
@@ -1048,7 +1049,7 @@
     // it, so request it once and re-render only while this Project is still the
     // visible route. An unavailable catalog is not an error here: the rows keep
     // showing the compact reference.
-    if (!state.agentCatalog && !state.agentCatalogPromise && visibleRooms.some((room) => room.agents)) {
+    if (!state.agentCatalog && !state.agentCatalogPromise && visibleRooms.some((room) => !room.dynamic_bindings && room.agents)) {
       loadAgentCatalog().then((catalog) => {
         // Any Project view benefits from the names, not only the one that started
         // the request. Honour the same focus/dialog deferral as the refresh path
@@ -1202,6 +1203,15 @@
   function roomAgentGroup(actor, room) {
     const selection = room.agents?.[actor];
     const binding = room.bindings?.[actor];
+    if (room.dynamic_bindings) {
+      const waiting = selection?.awaiting_peer ? t('room.lan.awaitingPeer') : t('room.native.unbound');
+      const bound = Boolean(binding && !binding.pending && (binding.session_id || binding.remote_key));
+      const title = [room.runtime_names?.[actor], binding?.session_id].filter(Boolean).join('\n');
+      return node('div', { className: 'room-meta-group', 'data-slot': actor, title },
+        node('span', { className: 'room-meta-label', textContent: actor === 'slot1' ? '@agent1' : '@agent2' }),
+        node('span', { className: 'room-meta-line', textContent: bound ? runtimeDisplayName(selection?.runtime) : waiting }),
+        bound ? node('span', { className: 'badge plain binding-chip good', textContent: t(binding.remote_key ? 'room.lan.member' : 'room.native.bound') }) : null);
+    }
     if (selection?.awaiting_peer) return node('div', { className: 'room-meta-group', 'data-slot': actor },
       node('span', { className: 'room-meta-label', textContent: actor === 'slot1' ? t('agent.agent1') : t('agent.agent2') }),
       node('span', { className: 'room-meta-line', textContent: t('room.lan.awaitingPeer') }));
@@ -1228,7 +1238,7 @@
   }
 
   function runtimeDisplayName(runtime) {
-    return runtimeCatalogEntry(runtime)?.display_name || runtime || '';
+    return runtimeCatalogEntry(runtime)?.display_name || ({claude: 'Claude Code', codex: 'Codex', grok: 'Grok Build', gemini: 'Gemini CLI'}[runtime]) || runtime || '';
   }
 
   // Join the immutable reference against the Agent catalog exactly the way the
@@ -2236,21 +2246,33 @@
       : t("ui.createRoomInValue", { value0: projectName(projects.find((project) => project.id === select.value)) }));
     syncPairProfileDialogLabels();
     showDialog('room-dialog');
-    $('room-submit').disabled = true;
+    syncHostMode();
+    queueMicrotask(() => $(editor ? 'pair-profile-name' : 'room-name').focus());
+    // Native rooms contain empty slots. Their creation must remain available
+    // even if no vendor is installed or a saved Embedded profile is damaged.
+    if (!editor) return;
+    await loadRoomAgentControls(revision);
+  }
+
+  async function loadRoomAgentControls(revision = state.roomDialogRevision) {
+    if (state.pairProfileReady || state.roomAgentLoadRevision === revision) return;
+    state.roomAgentLoadRevision = revision;
+    const editor = state.pairProfileMode, profileID = state.pairProfileID;
+    syncHostMode();
     try {
       const [, profiles] = await Promise.all([loadAgentCatalog(), loadAgentPairProfiles(true)]);
       if (revision !== state.roomDialogRevision || !$('room-dialog').open || !state.authenticated) return;
       const selectedID = editor ? profileID : (profiles.default_profile_id || '');
       populatePairProfilePicker(selectedID);
       applyPairProfile(selectedID);
-      syncHostMode();
       state.pairProfileReady = true;
       $('room-pair-profile').disabled = false;
       $('pair-profile-save-new').disabled = false;
-      $('room-submit').disabled = false;
-      queueMicrotask(() => $(editor ? 'pair-profile-name' : 'room-name').focus());
     } catch (error) {
-      if (revision === state.roomDialogRevision) showFormError('room-form-error', error.message);
+      if (revision === state.roomDialogRevision && !nativeCreation()) showFormError('room-form-error', error.message);
+    } finally {
+      if (state.roomAgentLoadRevision === revision) state.roomAgentLoadRevision = 0;
+      if (revision === state.roomDialogRevision && $('room-dialog').open) syncHostMode();
     }
   }
 
@@ -2266,7 +2288,7 @@
   function syncCollaborationControls() {
     const custom = state.pairProfileMode || $('room-collaboration-mode').value === 'custom';
     $('collaboration-custom-field').hidden = !custom;
-    $('collaboration-default-details').hidden = custom;
+    $('collaboration-default-details').hidden = custom || !state.agentCatalog?.collaboration_default?.instructions;
     $('room-collaboration-instructions').required = custom;
     $('collaboration-help').textContent = t(custom ? 'room.collaboration.customHelp' : 'room.collaboration.defaultHelp');
     $('collaboration-default-instructions').textContent = state.agentCatalog?.collaboration_default?.instructions || t('room.collaboration.defaultHelp');
@@ -2284,22 +2306,28 @@
     $('room-lan-choice').hidden = !native;
     $('room-lan-fields').hidden = !shared;
     $('room-lan-peer').hidden = !shared;
-    $('room-pair-profile-controls').hidden = shared;
+    $('room-pair-profile-controls').hidden = native;
+    $('room-agent-selection-heading').hidden = native;
+    $('room-agent-selection-grid').hidden = native;
+    $('room-embedded-binding-help').hidden = native || state.pairProfileMode;
+    $('room-native-slots').hidden = !native;
+    for (const actor of ['slot1', 'slot2']) {
+      $(`room-native-${actor}-state`).textContent = t(shared && actor !== $('room-lan-owner-slot').value ? 'room.lan.awaitingPeer' : 'room.native.awaitingBinding');
+    }
     const warning = document.querySelector('[data-i18n="room.collaboration.yoloWarning"]');
     if (warning) warning.hidden = native || state.pairProfileMode;
     for (const actor of ['slot1', 'slot2']) {
-      const peer = shared && actor !== $('room-lan-owner-slot').value;
       const card = document.querySelector(`fieldset[data-actor="${actor}"]`);
-      card.hidden = peer;
-      card.disabled = peer;
+      card.hidden = native;
+      card.disabled = native;
       if (native) document.querySelector(`input[name="${actor}-mode"][value="new"]`).checked = true;
       document.querySelectorAll(`input[name="${actor}-mode"]`).forEach(input => { input.disabled = native; });
       const select = $(`${actor}-runtime`);
-      for (const option of select.options) option.disabled = native ? !['claude', 'codex', 'grok', 'gemini'].includes(option.value) : !runtimeCatalogEntry(option.value)?.available;
-      if (native && !['claude', 'codex', 'grok', 'gemini'].includes(select.value)) select.value = actor === 'slot1' ? 'claude' : 'codex';
+      for (const option of select.options) option.disabled = !runtimeCatalogEntry(option.value)?.available;
       select.setCustomValidity(native || runtimeCatalogEntry(select.value)?.available ? '' : t('agent.unavailable'));
     }
     syncBindingInputs();
+    if (!state.pairProfileBusy && !state.busyButtons.has($('room-submit'))) $('room-submit').disabled = !native && !state.pairProfileReady;
   }
 
   function syncBindingInputs() {
@@ -2318,6 +2346,7 @@
     if (state.pairProfileBusy || $('room-submit').disabled) return;
     const projectID = $('room-project-id').value;
     const name = $('room-name').value.trim();
+    const native = nativeCreation();
     const shared = lanCreation();
     const ownerSlot = $('room-lan-owner-slot').value;
     if (!validRoomName($('room-name').value, true)) {
@@ -2331,10 +2360,8 @@
     }
     const collaboration = { mode, ...(mode === 'custom' ? { instructions } : {}) };
     const bindings = {};
-    for (const actor of ['slot1', 'slot2']) {
-      if (shared && actor !== ownerSlot) { bindings[actor] = { mode: 'new' }; continue; }
-      if (!nativeCreation() && (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity())) return;
-      if (nativeCreation() && !['claude', 'codex', 'grok', 'gemini'].includes($(`${actor}-runtime`).value)) { showFormError('room-form-error', t('ui.native.supported')); return; }
+    for (const actor of native ? [] : ['slot1', 'slot2']) {
+      if (!$(`${actor}-runtime`).reportValidity() || !$(`${actor}-provider`).reportValidity()) return;
       const mode = document.querySelector(`input[name="${actor}-mode"]:checked`)?.value || 'new';
       const sessionID = $(`${actor}-session-id`).value.trim();
       if (mode === 'existing' && !sessionID) {
@@ -2343,15 +2370,14 @@
       }
 	  bindings[actor] = mode === 'existing' ? { mode, session_id: sessionID } : { mode };
 	}
-	const agents = shared ? { [ownerSlot]: readAgentSelection(ownerSlot) }
-      : { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') };
+    const selection = native ? {} : { bindings, agents: { slot1: readAgentSelection('slot1'), slot2: readAgentSelection('slot2') } };
     await withBusy($('room-submit'), async () => {
       try {
         hideFormError('room-form-error');
         if (shared) await lan.ensureEnabled();
-		const created = await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, bindings, agents, collaboration, host_mode: $('room-host-mode').value, ...(shared ? { sharing: 'lan', owner_slot: ownerSlot } : {}) }) });
+		const created = await api(`/api/v1/projects/${encodeURIComponent(projectID)}/rooms`, { method: 'POST', body: JSON.stringify({ name, ...selection, collaboration, host_mode: native ? 'native' : 'embedded', ...(shared ? { sharing: 'lan', owner_slot: ownerSlot } : {}) }) });
         closeDialog('room-dialog');
-        toast(t("ui.roomCreated"), t(shared ? "room.lan.created" : nativeCreation() ? "ui.native.pending" : "ui.agentBindingsCompletedAtomicVerification"), 'success');
+        toast(t("ui.roomCreated"), t(shared ? "room.lan.created" : native ? "ui.native.pending" : "ui.agentBindingsCompletedAtomicVerification"), 'success');
         await refresh({ forceRender: true, fresh: true });
         navigate(`#/projects/${encodeURIComponent(projectID)}`);
         if (shared) await lan.openRoom(created);
@@ -3256,7 +3282,9 @@
         hideFormError('room-form-error');
         toast(t('agent.catalogRefreshed'), '', 'success');
       } catch (error) {
-        showFormError('room-form-error', error.message);
+        if (revision === state.roomDialogRevision && !nativeCreation()) showFormError('room-form-error', error.message);
+      } finally {
+        if (revision === state.roomDialogRevision && $('room-dialog').open) syncHostMode();
       }
     });
   });
@@ -3272,7 +3300,11 @@
   });
   $('project-form').addEventListener('submit', submitProject);
   $('room-collaboration-mode').addEventListener('change', syncCollaborationControls);
-  $('room-host-mode').addEventListener('change', syncHostMode);
+  $('room-host-mode').addEventListener('change', async () => {
+    hideFormError('room-form-error');
+    syncHostMode();
+    if (!nativeCreation()) await loadRoomAgentControls();
+  });
   $('room-share-lan').addEventListener('change', syncHostMode);
   $('room-lan-owner-slot').addEventListener('change', syncHostMode);
   $('room-lan-settings').addEventListener('click', () => closeDialog('room-dialog'));
@@ -3465,6 +3497,7 @@
     render();
     if ($('room-dialog').open) {
       syncCollaborationControls();
+      syncHostMode();
       syncPairProfileDialogLabels();
       if (state.pairProfileReady && !state.pairProfileBusy) populatePairProfilePicker(state.pairProfileID);
     }

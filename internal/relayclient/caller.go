@@ -168,8 +168,8 @@ func applyCallerDefaults(root, action string, o *options) error {
 		return nil
 	}
 	if action == "bind" || action == "join" {
-		// New bindings still resolve against the Service's active Room and pair
-		// selections, then associate from the harness session id at bind.
+		// Resolve the Service's active Room, then claim a vacancy (or a legacy
+		// selected slot) using the official current harness session at bind.
 		return nil
 	}
 	return errNoAssociatedBinding

@@ -71,7 +71,7 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
         # tool-call subprocess. Expose exactly one per invocation (clearing the
         # others) so caller resolution never sees conflicting metadata; hooks match
         # by payload session_id and explicit-flag commands need none.
-        session_vars = ('CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID', 'GROK_SESSION_ID')
+        session_vars = ('CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID', 'GROK_SESSION_ID', 'GEMINI_SESSION_ID')
         # Never inherit the surrounding (real) harness session into the fixture;
         # cli() exposes exactly one synthetic id per bind, and direct subprocess
         # calls then run with no session metadata so explicit flags win.
@@ -124,22 +124,25 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 await expect(page.locator('#room-embedded-help')).to_be_hidden()
                 await expect(page.locator('input[name="slot1-mode"][value="existing"]')).to_be_disabled()
                 for slot in ('slot1', 'slot2'):
-                    await expect(page.locator(f'#{slot}-runtime option[value="grok"]')).to_be_enabled()
-                    await page.locator(f'#{slot}-runtime').select_option('grok')
+                    await expect(page.locator(f'#{slot}-runtime')).to_be_hidden()
+                    await expect(page.locator(f'#{slot}-runtime')).to_be_disabled()
+                    await expect(page.locator(f'#room-native-{slot}-state')).to_have_text('Waiting for a native session to join')
+                await expect(page.locator('#room-pair-profile-controls')).to_be_hidden()
+                await expect(page.locator('#room-submit')).to_be_enabled()
                 await page.locator('#room-host-mode').select_option('embedded')
                 await expect(page.locator('#room-embedded-help')).to_be_visible()
                 await expect(page.locator('#room-embedded-help')).to_contain_text('Native is recommended')
                 await expect(page.locator('#room-native-help')).to_be_hidden()
                 await page.locator('#room-host-mode').select_option('native')
-                for slot, runtime in (('slot1', 'claude'), ('slot2', 'codex')):
-                    await expect(page.locator(f'#{slot}-runtime')).to_have_value('grok')
-                    await page.locator(f'#{slot}-runtime').select_option(runtime)
+                await expect(page.locator('#room-submit')).to_be_enabled()
                 async with page.expect_response(lambda r: r.url.endswith('/rooms') and r.request.method == 'POST') as created:
                     await page.locator('#room-submit').click()
                 creation = await created.value
                 assert creation.status == 201, f'Native Room creation: {creation.status}'
+                assert not {'agents','agent_pair_profile_id','bindings'}.intersection(creation.request.post_data_json), 'Native request carried creation-time selections'
                 room = await creation.json()
-                assert room['host_mode'] == 'native' and all(b['pending'] for b in room['bindings'].values())
+                assert room['host_mode'] == 'native' and room['dynamic_bindings'] and all(b['pending'] for b in room['bindings'].values())
+                assert all(a.get('awaiting_binding') for a in room['agents'].values()), room['agents']
                 room_id = room['id']
                 await page.locator(f'.tree-room[data-room-id="{room_id}"]').click()
                 frame = page.frame_locator(f'#room-stage [data-room-id="{room_id}"] iframe')
@@ -187,7 +190,9 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                     response = await context.request.post(surface+f'/api/v1/participants/{slot}/park', headers=headers, data={'enabled':False})
                     assert response.status == 200
                 snapshot = await wait_snapshot(context,snapshot_url,lambda s:all(b.get('session_id') for b in s['relay']['bindings'].values()))
-                assert snapshot['protocol'] == 'pairroom-protocol/v8'
+                assert snapshot['protocol'] == 'pairroom-protocol/v9'
+                await expect(frame.locator('[data-slot="slot1"] h3')).to_have_text('@agent1')
+                await expect(frame.locator('[data-slot="slot2"] h3')).to_have_text('@agent2')
                 await expect(frame.locator('[data-slot="slot1"]')).to_contain_text('Associated')
                 # UI -> durable inbox -> CLI stdout -> explicit ack, with no model
                 # acceptance fiction. A draft survives independent SSE messages.
@@ -248,14 +253,14 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                                 'last_assistant_message':f'@{peer} complete boundary reply {round_no} from {runtime}',
                                 'stop_hook_active':round_no>0}
                     left,right = await asyncio.gather(
-                        asyncio.to_thread(cli,['hook','--runtime','claude'],hook('claude','codex','slot1')),
-                        asyncio.to_thread(cli,['hook','--runtime','codex'],hook('codex','claude','slot2')))
+                        asyncio.to_thread(cli,['hook','--runtime','claude'],hook('claude','agent2','slot1')),
+                        asyncio.to_thread(cli,['hook','--runtime','codex'],hook('codex','agent1','slot2')))
                     assert json.loads(left)['decision'] == json.loads(right)['decision'] == 'block'
                     assert f'reply {round_no} from codex' in json.loads(left)['reason']
                     assert f'reply {round_no} from claude' in json.loads(right)['reason']
                 await asyncio.to_thread(cli,['send','--room',room_id,'--slot','slot1','--id','restart-fixture','--text','Queued across Service restart'])
                 checkpoint=json.loads((root/'state'/'service-registry.json').read_text())
-                assert checkpoint['schema']==4 and all(r.get('host_mode') in ('embedded','native') for r in checkpoint['rooms'])
+                assert checkpoint['schema']==5 and all(r.get('host_mode') in ('embedded','native') for r in checkpoint['rooms'])
                 print('Native browser: independent pending history and accepted-response loss across refresh', flush=True)
                 # Add terminal publications through the actual authenticated API,
                 # forcing the original unknown message outside the recent window.
@@ -376,10 +381,10 @@ async def verify(binary: Path | None, browser_path: str | None, artifacts: Path)
                 assert not errors, f'browser errors: {errors}'
                 (artifacts/'results.json').write_text(json.dumps({
                     'mode':'synthetic native-hook inputs over real CLI/HTTP/SSE/browser',
-                    'real_vendor_e2e':False,'native_creation':True,'native_grok_selection':True,'bind_env_association':True,
+                    'real_vendor_e2e':False,'native_creation':True,'native_runtime_free_creation':True,'bind_env_association':True,
                     'fifo_stdout_ack':True,'idempotent_explicit_send':True,'conflicting_send_id_rejected':True,'three_bidirectional_rounds':True,
                     'pending_outside_tail':True,'refresh_receipt_recovery_without_resend':True,'review_anchor_staleness':True,'safe_native_markdown':True,'killed_cli_unknown':True,'explicit_retry_confirmation':True,'cancel_only_queued':True,
-                    'checkpoint_schema_3_canonical':True,'restart_queue_and_bindings':True,
+                    'checkpoint_schema_5_canonical':True,'restart_queue_and_bindings':True,
                     'initial_snapshot_recovery':True,'offline_recovery_preserves_draft_without_send':True,
                     'english_chinese_light_dark_responsive':True,'browser_errors':errors,
                 },indent=2)+'\n',encoding='utf-8')

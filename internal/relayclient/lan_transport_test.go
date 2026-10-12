@@ -72,7 +72,7 @@ func TestDirectTransportLoadsOnlyTheOriginalPrivateRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.close()
-	if client.LAN == nil || client.Endpoint.URL != "" || client.State.EndpointPath != "" || client.localAuth() != (relay.Auth{Slot: state.Slot, BindID: state.BindID, Generation: state.Generation, SessionID: state.SessionID, Secret: "local-secret"}) {
+	if client.LAN == nil || client.Endpoint.URL != "" || client.State.EndpointPath != "" || client.localAuth() != (relay.Auth{Slot: state.Slot, BindID: state.BindID, Generation: state.Generation, SessionID: state.SessionID, Runtime: state.Runtime, Secret: "local-secret"}) {
 		t.Fatal("direct load did not retain the original route and exact local capability")
 	}
 	if after, err := os.ReadFile(filepath.Join(dir, "state.json")); err != nil || !bytes.Equal(after, before) {

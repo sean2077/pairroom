@@ -4,21 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"unicode"
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
-
-type defaultPairRuntimeMismatchError struct {
-	Runtime model.RuntimeKind
-}
-
-func (e *defaultPairRuntimeMismatchError) Error() string {
-	return fmt.Sprintf("the %q harness matches no slot in the Service default pair", e.Runtime)
-}
 
 func requireSessionID(kind model.RuntimeKind) (string, error) {
 	if kind == model.RuntimeGemini {
@@ -45,10 +36,13 @@ func requireSessionID(kind model.RuntimeKind) (string, error) {
 	return id, nil
 }
 
-// Resolve and pin the actual Service-owned defaults before any provisioning.
-// Both catalog endpoints are read-only; the creation endpoint still owns full
-// validation, including Provider revalidation. No Registry schema changes.
+// New Native Rooms have two untyped seats. Verify this tool caller and its
+// installation before provisioning; the Service records its runtime at bind.
+// Managed default pairs and installed peer binaries cannot choose a runtime.
 func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root string, o options, slot model.ActorID) (options, model.ActorID, error) {
+	if o.peer != "" {
+		return o, slot, errors.New("native Room runtimes are identified when each agent joins; omit --peer-runtime")
+	}
 	caller := callerRuntime(o)
 	if _, err := requireSessionID(caller); err != nil {
 		return o, slot, err
@@ -56,65 +50,10 @@ func prepareNativeCreation(ctx context.Context, endpoint relay.Endpoint, root st
 	if err := installed(root, caller); err != nil {
 		return o, slot, err
 	}
-	if o.share == "lan" {
-		if slot == "" {
-			slot = model.ActorSlot1
-		}
-		o.slot = string(slot)
-		o.preparedAgents = map[model.ActorID]model.AgentSelection{slot: {Runtime: caller}}
-		return o, slot, nil
-	}
-	defaultSlot := slot == ""
-	if defaultSlot {
-		var err error
-		slot, err = inferCreateSlot(o)
-		if err != nil {
-			return o, slot, err
-		}
-	}
-	agents, err := createAgents(o, slot)
-	if err != nil {
-		return o, slot, err
-	}
-	usingServiceDefaults := agents == nil
-	if agents == nil {
-		agents, err = readDefaultPair(ctx, endpoint)
-		if err != nil {
-			return o, slot, err
-		}
-	}
-	if len(agents) != 2 {
-		return o, slot, errors.New("Service defaults must contain both Agent selections")
-	}
-	for _, actor := range model.SlotActors() {
-		selection, ok := agents[actor]
-		if !ok {
-			return o, slot, errors.New("Service defaults are missing an Agent selection")
-		}
-		selection = selection.Normalized(actor)
-		if err := selection.Validate(actor); err != nil {
-			return o, slot, err
-		}
-		if !selection.Runtime.Valid() {
-			return o, slot, fmt.Errorf("the default pair includes %s, which does not support native hosting", selection.Runtime)
-		}
-		agents[actor] = selection
-	}
-	if usingServiceDefaults && len(runtimeSlots(agents, caller)) == 0 {
-		return o, slot, &defaultPairRuntimeMismatchError{Runtime: caller}
-	}
-	if usingServiceDefaults && defaultSlot && agents[slot].Runtime != caller {
-		// Orient the new Room around its creator, not the catalog/profile's
-		// historical runtime order. Move the complete selections so Provider,
-		// model, instructions and native policy stay with their runtime.
-		peer := peerSlot(slot)
-		agents[slot], agents[peer] = agents[peer], agents[slot]
-	}
-	if agents[slot].Runtime != caller {
-		return o, slot, errors.New("the selected creator slot does not match this session's runtime; choose a matching slot or configure the intended pair")
+	if slot == "" {
+		slot = model.ActorSlot1
 	}
 	o.slot = string(slot)
-	o.preparedAgents = agents
 	return o, slot, nil
 }
 
@@ -126,32 +65,4 @@ func runtimeSlots(agents map[model.ActorID]model.AgentSelection, runtime model.R
 		}
 	}
 	return matches
-}
-
-func readDefaultPair(ctx context.Context, endpoint relay.Endpoint) (map[model.ActorID]model.AgentSelection, error) {
-	var profiles struct {
-		DefaultProfileID string `json:"default_profile_id"`
-		Profiles         []struct {
-			ID     string                                 `json:"id"`
-			Agents map[model.ActorID]model.AgentSelection `json:"agents"`
-		} `json:"profiles"`
-	}
-	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/agent-pair-profiles", nil, &profiles); err != nil {
-		return nil, err
-	}
-	if profiles.DefaultProfileID != "" {
-		for _, profile := range profiles.Profiles {
-			if profile.ID == profiles.DefaultProfileID {
-				return profile.Agents, nil
-			}
-		}
-		return nil, errors.New("Service default Agent pair profile is missing")
-	}
-	var catalog struct {
-		Defaults map[model.ActorID]model.AgentSelection `json:"defaults"`
-	}
-	if err := management(ctx, endpoint, http.MethodGet, "/api/v1/agent-catalog", nil, &catalog); err != nil {
-		return nil, err
-	}
-	return catalog.Defaults, nil
 }

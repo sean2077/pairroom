@@ -41,7 +41,7 @@ In the first Agent session, load the installed skill and invoke:
 
 That session creates and binds one Room, then prints the peer's join command. Ask the **other Agent** to execute that command through its native tool environment. Bind reads official tool-call session metadata (Gemini uses its approved BeforeTool hook; see [Gemini setup](NATIVE_RELAY.md#gemini-cli)) and is immediately ready; do not echo a nonce, wait for an initial Stop, or add a status check after every success. A detached terminal or Grok `!` shell is not the intended tool-call environment.
 
-Alternatively, create a Native Room with the intended pair in Management and bind to it; skip skill-based creation. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
+Alternatively, create a Native Room in Management without selecting any Agent type or pair profile, then bind to its empty slots; skip skill-based creation. Each session supplies its actual Runtime when it joins. New Rooms keep `@agent1` / `@agent2` handles, even for two sessions of the same Runtime. Zero-flag bind works only when selection is unambiguous. Reuse the binding across review rounds. If creation succeeded but bind failed, use the printed recovery command rather than `--create` again.
 
 To confirm setup once, let each bound session finish a turn and check that `pairroom relay doctor` shows a recent `last_hook_at`, which means the response hook (Stop, or Gemini's AfterAgent) ran. There is no need to repeat this every round.
 

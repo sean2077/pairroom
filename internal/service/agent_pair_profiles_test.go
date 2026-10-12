@@ -45,7 +45,7 @@ func TestAgentPairProfilesPersistIndependentlyOfRoomsAndRegistryIndex(t *testing
 	}
 	// Copies returned to callers are not shared mutable configuration.
 	catalog.Profiles[0].Agents[model.ActorSlot1] = model.AgentSelection{}
-	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
+	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestManagementAgentPairProfileCRUDAndCreation(t *testing.T) {
 	pairProfileRequest(t, server, "GET", agentPairProfilesPath, nil, 200)
 	createPath := "/api/v1/projects/" + project.ID + "/rooms"
 	for _, override := range []string{"default", "explicit-profile", "explicit-agents"} {
-		body := map[string]any{"bindings": specs(BindingNew, BindingNew, "")}
+		body := map[string]any{"host_mode": "embedded", "bindings": specs(BindingNew, BindingNew, "")}
 		if override == "explicit-profile" {
 			body["agent_pair_profile_id"] = id
 		}
@@ -246,8 +246,8 @@ func TestManagementAgentPairProfileCRUDAndCreation(t *testing.T) {
 			t.Fatal("default overrode explicit selections")
 		}
 	}
-	pairProfileRequest(t, server, "POST", createPath, map[string]any{"bindings": specs(BindingNew, BindingNew, ""), "agent_pair_profile_id": "missing"}, 404)
-	pairProfileRequest(t, server, "POST", createPath, map[string]any{"bindings": specs(BindingNew, BindingNew, ""), "agent_pair_profile_id": id, "agents": input.Agents}, 400)
+	pairProfileRequest(t, server, "POST", createPath, map[string]any{"host_mode": "embedded", "bindings": specs(BindingNew, BindingNew, ""), "agent_pair_profile_id": "missing"}, 404)
+	pairProfileRequest(t, server, "POST", createPath, map[string]any{"host_mode": "embedded", "bindings": specs(BindingNew, BindingNew, ""), "agent_pair_profile_id": id, "agents": input.Agents}, 400)
 	input.Name = "Renamed"
 	input.IsDefault = false
 	pairProfileRequest(t, server, "PUT", agentPairProfilesPath+"/"+id, input, 200)
@@ -319,7 +319,7 @@ func TestManagementAgentPairProfilesRevalidateProvidersAtCreation(t *testing.T) 
 	input.Agents[model.ActorSlot2] = selection
 	pairProfileRequest(t, server, "POST", agentPairProfilesPath, input, 201)
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, managementRequest("POST", "/api/v1/projects/"+project.ID+"/rooms", `{"bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}}}`, true))
+	server.Handler().ServeHTTP(response, managementRequest("POST", "/api/v1/projects/"+project.ID+"/rooms", `{"host_mode":"embedded","bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}}}`, true))
 	if response.Code < 400 {
 		t.Fatalf("stale Provider was accepted: %s", response.Body.String())
 	}
@@ -353,11 +353,11 @@ func TestAgentPairProfileLimitAndIndependentExplicitRoomSelection(t *testing.T) 
 	if err := os.WriteFile(path, []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{}); !errors.Is(err, errAgentPairProfilesStore) {
+	if _, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{}); !errors.Is(err, errAgentPairProfilesStore) {
 		t.Fatalf("implicit profile fallback = %v", err)
 	}
 	// Broken profile configuration must not affect explicitly supplied pairs.
-	if _, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, ""), Agents: input.Agents}, SyntheticProvisioner{}); err != nil {
+	if _, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Bindings: specs(BindingNew, BindingNew, ""), Agents: input.Agents}, SyntheticProvisioner{}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -61,6 +61,12 @@ func (e *Engine) SnapshotTailSince(knownSequence *uint64) TailSnapshot {
 
 func (e *Engine) snapshotRangeLocked(messageStart, auditStart int) Snapshot {
 	s := Snapshot{HostMode: model.HostNative, RoomID: e.cfg.RoomID, Bindings: map[model.ActorID]Binding{}, Messages: make([]Message, 0, len(e.order)-messageStart), Audit: append([]Audit(nil), e.audit[auditStart:]...), Sequence: e.sequence, Notice: "handed_off = CLI stdout, not acceptance. Pre-publication loss may be undetectable. Park is bounded; native work remains user-owned."}
+	s.DynamicBindings, s.Protocol, s.TargetGenerations = e.cfg.DynamicBindings, e.ProtocolVersion(), e.targetGenerationsLocked()
+	if e.cfg.DynamicBindings {
+		for _, slot := range model.SlotActors() {
+			s.Bindings[slot] = Binding{Slot: slot, Runtime: e.cfg.Runtimes[slot]}
+		}
+	}
 	for slot, b := range e.bindings {
 		s.Bindings[slot] = b.Binding
 	}

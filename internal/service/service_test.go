@@ -1073,10 +1073,10 @@ func TestRegistryRequiresCurrentProvisioningAndExplicitSelections(t *testing.T) 
 	}{
 		{"schema-1", func(p *roomProvisionedPayload) { p.Schema = 1 }, "retired room provisioning schema"},
 		{"schema-2", func(p *roomProvisionedPayload) { p.Schema = 2 }, "retired room provisioning schema"},
-		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 7 }, "unsupported room provisioning schema"},
+		{"future-schema", func(p *roomProvisionedPayload) { p.Schema = 8 }, "unsupported room provisioning schema"},
 		{"missing-collaboration", func(p *roomProvisionedPayload) { p.Collaboration = nil }, "requires collaboration"},
-		{"missing-agents", func(p *roomProvisionedPayload) { p.Agents = nil }, "Agent selections"},
-		{"missing-agent-2", func(p *roomProvisionedPayload) { delete(p.Agents, model.ActorSlot2) }, "Agent selections"},
+		{"missing-agents", func(p *roomProvisionedPayload) { p.Agents = nil }, "exactly two seats"},
+		{"missing-agent-2", func(p *roomProvisionedPayload) { delete(p.Agents, model.ActorSlot2) }, "exactly two seats"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

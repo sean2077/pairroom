@@ -63,8 +63,8 @@ def fixture_html(isolated: bool = False) -> str:
       remoteHuman:'Other side', hostHuman:'Host owner',
       agent1:'Agent 1', agent2:'Agent 2', runtime:'Runtime', nativeDefault:'native default',
       join:'Join this Room', setup:'Setup guide', help:'Run the command inside the matching Agent session.',
-      joinCopy:'Copy command', joinCopied:'Command copied', joinManual:'The browser could not copy. The command is selected; copy it manually.',
-      joinUnavailable:'This Service cannot name its own endpoint here.'
+      'join.copy':'Copy command', 'join.copied':'Command copied', 'join.manual':'The browser could not copy. The command is selected; copy it manually.',
+      'join.unavailable':'This Service cannot name its own endpoint here.'
     };
     window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.split('.').pop()]||key;}};
     window.__message = (id,from='slot1',state='handed_off',text='Review '+id) => ({

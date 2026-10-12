@@ -237,7 +237,7 @@ func TestLANUploadStreamsPrivatelyAndRevocationRemovesUncommittedStage(t *testin
 	}
 	progress := make(chan error, 1)
 	go func() {
-		_, err := f.native.engine.Send(f.owner, relay.SendRequest{ID: "during-upload", Text: "owner remains usable"})
+		_, err := f.native.engine.Send(f.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "during-upload", Text: "owner remains usable"})
 		progress <- err
 	}()
 	select {

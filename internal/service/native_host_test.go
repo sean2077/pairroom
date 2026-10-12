@@ -21,13 +21,15 @@ import (
 )
 
 type nativeFixture struct {
-	registry *Registry
-	room     Room
-	project  Project
-	manager  *RuntimeManager
-	server   *httptest.Server
-	native   *nativeHostRuntime
-	endpoint string
+	registry   *Registry
+	runtimes   map[model.ActorID]model.RuntimeKind
+	room       Room
+	project    Project
+	manager    *RuntimeManager
+	management *ManagementServer
+	server     *httptest.Server
+	native     *nativeHostRuntime
+	endpoint   string
 }
 
 func nativeHTTP(t *testing.T) *nativeFixture {
@@ -89,7 +91,7 @@ func nativeHTTPWith(t *testing.T, wakeConfig nativeWakerConfig, notifier *Notifi
 	if !ok {
 		t.Fatal("native Room became embedded runtime")
 	}
-	return &nativeFixture{registry: registry, room: room, project: project, manager: manager, server: server, native: native, endpoint: endpoint}
+	return &nativeFixture{runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeCodex}, registry: registry, room: room, project: project, manager: manager, management: management, server: server, native: native, endpoint: endpoint}
 }
 func (f *nativeFixture) exec(t *testing.T, args []string, input any) ([]byte, error) {
 	t.Helper()
@@ -142,7 +144,7 @@ func sessionEnvVar(kind model.RuntimeKind) string {
 
 func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) relay.Auth {
 	t.Helper()
-	kind := f.room.Agents[slot].Runtime
+	kind := f.runtimes[slot]
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -187,12 +189,12 @@ func (f *nativeFixture) bind(t *testing.T, slot model.ActorID) relay.Auth {
 	if err := relay.AtomicJSON(statePath, local); err != nil {
 		t.Fatal(err)
 	}
-	return relay.Auth{Slot: slot, BindID: result.Binding.BindID, Generation: result.Binding.Generation, Secret: cred.Secret, SessionID: session}
+	return relay.Auth{Runtime: kind, Slot: slot, BindID: result.Binding.BindID, Generation: result.Binding.Generation, Secret: cred.Secret, SessionID: session}
 }
 func (f *nativeFixture) hook(t *testing.T, a relay.Auth, text string, active bool) ([]byte, error) {
 	t.Helper()
 	// The synthetic invocation carries this caller's environment as well as its payload.
-	return f.runAs(t, f.room.Agents[a.Slot].Runtime, a.SessionID, []string{"hook", "--runtime", string(f.room.Agents[a.Slot].Runtime)}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
+	return f.runAs(t, f.runtimes[a.Slot], a.SessionID, []string{"hook", "--runtime", string(f.runtimes[a.Slot])}, map[string]any{"hook_event_name": "Stop", "session_id": a.SessionID, "cwd": f.project.Root, "last_assistant_message": text, "stop_hook_active": active, "transcript_path": "/unavailable/optional/transcript"})
 }
 func associateCLI(t *testing.T, f *nativeFixture, slot model.ActorID) relay.Auth {
 	t.Helper()
@@ -329,6 +331,7 @@ func TestNativeHTTPAckSettlesDrainingRuntime(t *testing.T) {
 			req.Header.Set("X-PairRoom-Bind", a.BindID)
 			req.Header.Set("X-PairRoom-Generation", fmt.Sprint(a.Generation))
 			req.Header.Set("X-PairRoom-Session", a.SessionID)
+			req.Header.Set("X-PairRoom-Runtime", string(a.Runtime))
 			res, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -367,13 +370,13 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 	b := associateCLI(t, f, model.ActorSlot2)
 	// Native input is mocked; every CLI call below traverses real authenticated
 	// HTTP, durable Room events and the same Stop continuation serializer.
-	if _, err := f.hook(t, a, "@codex discuss this whole reply", false); err != nil {
+	if _, err := f.hook(t, a, "@agent2 discuss this whole reply", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.native.engine.Park(b.Slot, true); err != nil {
 		t.Fatal(err)
 	}
-	output, err = f.hook(t, b, "@claude contribution before collection", false)
+	output, err = f.hook(t, b, "@agent1 contribution before collection", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,14 +385,14 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 		t.Fatalf("Stop did not wake with envelope: %s", output)
 	}
 	for i := 1; i < 8; i++ {
-		if _, err := f.native.engine.Send(a, relay.SendRequest{ID: fmt.Sprintf("budget-%d", i), Text: "next peer input"}); err != nil {
+		if _, err := f.native.engine.Send(a, relay.SendRequest{ExpectedPeerGeneration: 1, ID: fmt.Sprintf("budget-%d", i), Text: "next peer input"}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := f.hook(t, b, "completed current contribution", true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ninth, err := f.native.engine.Send(a, relay.SendRequest{ID: "budget-nine", Text: "must remain queued"})
+	ninth, err := f.native.engine.Send(a, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "budget-nine", Text: "must remain queued"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +411,7 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 		t.Fatal("budget exhaustion consumed inbox")
 	}
 	before := len(state.Messages)
-	if _, err := f.run(t, []string{"hook", "--runtime", "codex"}, map[string]any{"hook_event_name": "StopFailure", "session_id": b.SessionID, "cwd": f.project.Root, "error": "API key must never enter log", "last_assistant_message": "@claude partial content"}); err != nil {
+	if _, err := f.run(t, []string{"hook", "--runtime", "codex"}, map[string]any{"hook_event_name": "StopFailure", "session_id": b.SessionID, "cwd": f.project.Root, "error": "API key must never enter log", "last_assistant_message": "@agent1 partial content"}); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(f.room.DataDir, "events.jsonl"))
@@ -416,14 +419,14 @@ func TestNativeCLIHookAssociationRoutingAndEightBlockBudget(t *testing.T) {
 		t.Fatal("StopFailure relayed content or secret error")
 	}
 	peer, err := f.run(t, []string{"peer", "--room", f.room.ID, "--slot", "claude"}, nil)
-	if err != nil || !strings.Contains(string(peer), b.SessionID) || !strings.Contains(string(peer), `"runtime":"codex"`) {
-		t.Fatal("peer metadata unavailable")
+	if err != nil || !strings.Contains(string(peer), `"runtime":"codex"`) || !strings.Contains(string(peer), `"peer_generation":1`) {
+		t.Fatalf("peer metadata unavailable: %s, %v", peer, err)
 	}
-	if strings.Contains(string(peer), b.Secret) {
-		t.Fatal("peer reveals credential")
+	if strings.Contains(string(peer), b.Secret) || strings.Contains(string(peer), b.SessionID) {
+		t.Fatal("peer reveals private credential or native session identity")
 	}
-	if got := f.native.engine.Snapshot().Bindings[b.Slot].Runtime; got != "" {
-		t.Fatalf("peer response runtime leaked into durable binding: %q", got)
+	if got := f.native.engine.Snapshot().Bindings[b.Slot].Runtime; got != model.RuntimeCodex {
+		t.Fatalf("peer runtime not recorded in binding: %q", got)
 	}
 }
 func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
@@ -444,6 +447,7 @@ func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
 			req.Header.Set("X-PairRoom-Bind", auth.BindID)
 			req.Header.Set("X-PairRoom-Generation", fmt.Sprint(auth.Generation))
 			req.Header.Set("X-PairRoom-Session", auth.SessionID)
+			req.Header.Set("X-PairRoom-Runtime", string(auth.Runtime))
 		}
 		res, err := f.server.Client().Do(req)
 		if err != nil {
@@ -467,7 +471,7 @@ func TestNativeHTTPAuthorizationAndPublicSurface(t *testing.T) {
 			t.Fatalf("unauthorized code=%d body=%s", code, body)
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"id": "large-valid", "text": strings.Repeat("x", 100<<10)})
+	body, _ := json.Marshal(map[string]any{"id": "large-valid", "text": strings.Repeat("x", 100<<10), "expected_peer_generation": 1})
 	if code, data := call(path, string(body), a, false); code != 200 {
 		t.Fatalf("valid response above old Management 64k limit rejected: %d %s", code, data)
 	}
@@ -546,9 +550,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	f := nativeHTTP(t)
 	a := associateCLI(t, f, model.ActorSlot1)
 	// Same runtime in a different stable slot still conflicts globally.
-	pair := defaultAgentSelections()
-	pair[model.ActorSlot2] = pair[model.ActorSlot1]
-	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "other native", HostMode: model.HostNative, Agents: pair}, SyntheticProvisioner{})
+	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "other native", HostMode: model.HostNative}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +561,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	native := rt.(*nativeHostRuntime)
 	// Association is captured at bind, so binding the same official session into
 	// another Room slot conflicts globally during Bind itself.
-	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "other-bind", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
+	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{Runtime: model.RuntimeClaude, BindID: "other-bind", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatalf("duplicate runtime identity accepted: %v", err)
 	}
 	embedded, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: f.project.ID, Name: "embedded", Bindings: specs(BindingNew, BindingNew, "")}, deferredNewProvisioner{})
@@ -579,7 +581,7 @@ func TestNativeGlobalSessionOwnershipIncludingEmbeddedAndArchive(t *testing.T) {
 	if _, err := f.registry.ArchiveRoom(context.Background(), f.room.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{BindID: "other-bind-2", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
+	if _, err := native.engine.Bind(model.ActorSlot2, relay.BindRequest{Runtime: model.RuntimeClaude, BindID: "other-bind-2", CredentialHash: relay.Digest("secret"), SessionID: a.SessionID}); !errors.Is(err, ErrBindingOwned) {
 		t.Fatal("archive released binding ownership")
 	}
 }

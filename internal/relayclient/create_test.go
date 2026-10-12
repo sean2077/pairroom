@@ -36,16 +36,27 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 		t.Fatal(err)
 	}
 	created := 0
+	dynamic := false
 	mux := http.NewServeMux()
-	serveDefaultPairForTest(mux, map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: own}, model.ActorSlot2: {Runtime: model.RuntimeCodex}})
+	for _, path := range []string{"GET /api/v1/agent-pair-profiles", "GET /api/v1/agent-catalog"} {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			t.Error("Native creation must not read a Managed default pair")
+			http.Error(w, "unused", 500)
+		})
+	}
 	mux.HandleFunc("GET /api/v1/service", func(w http.ResponseWriter, r *http.Request) {
 		rooms := []any{}
 		for i := 1; i <= created; i++ {
-			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "lifecycle": "active", "agents": map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: own}, model.ActorSlot2: {Runtime: model.RuntimeCodex}}})
+			rooms = append(rooms, map[string]any{"id": fmt.Sprintf("room%d", i), "project_id": "project", "host_mode": "native", "lifecycle": "active", "dynamic_bindings": dynamic, "agents": map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: own}, model.ActorSlot2: {Runtime: model.RuntimeCodex}}})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{map[string]string{"id": "project", "root": root}}, "rooms": rooms})
 	})
 	mux.HandleFunc("POST /api/v1/projects/project/rooms", func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if json.NewDecoder(r.Body).Decode(&request) != nil || request["agents"] != nil || request["pair_profile_id"] != nil {
+			t.Error("Native creation included runtime selections")
+		}
+		dynamic = true
 		created++
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprintf("room%d", created)})
 	})
@@ -55,7 +66,7 @@ func createBindFixture(t *testing.T, own model.RuntimeKind) (string, string, *in
 			t.Error(err)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Generation: 1, Slot: model.ActorSlot1, Active: true, SessionID: request.SessionID}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"binding": relay.Binding{BindID: request.BindID, Runtime: request.Runtime, Generation: 1, Slot: model.ActorSlot1, Active: true, SessionID: request.SessionID}, "dynamic_bindings": dynamic, "peer_generation": 1})
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -79,15 +90,15 @@ func TestBindCreateMissingHooksDoesNotCreateRoom(t *testing.T) {
 	}
 }
 
-func TestBindCreateSlotRuntimeMismatchFailsBeforeCreation(t *testing.T) {
+func TestBindCreateIgnoresManagedDefaultRuntime(t *testing.T) {
 	root, endpoint, created := createBindFixture(t, model.RuntimeCodex)
 	if err := editHooks(root, model.RuntimeClaude, false); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	err := bind(context.Background(), root, options{slot: "claude", create: true, endpoint: endpoint}, &out)
-	if err == nil || *created != 0 || !strings.Contains(err.Error(), "matches no slot") || !strings.Contains(err.Error(), "no Room was created") || !strings.Contains(err.Error(), "--peer-runtime <claude|codex|grok|gemini>") || strings.Contains(err.Error(), "--slot") || out.Len() != 0 {
-		t.Fatalf("creator-slot preflight did not fail before provisioning: created=%d err=%v", *created, err)
+	if err != nil || *created != 1 || out.Len() == 0 {
+		t.Fatalf("Managed defaults blocked Native creation: created=%d err=%v", *created, err)
 	}
 }
 
@@ -174,7 +185,7 @@ func TestCreateNativeRoomRegistersMissingProject(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	id, err := createNativeRoom(context.Background(), relay.Endpoint{URL: srv.URL, Token: "token"}, "/ws", options{name: "Discuss", kind: "codex", peer: "claude"}, model.ActorSlot2)
+	id, err := createNativeRoom(context.Background(), relay.Endpoint{URL: srv.URL, Token: "token"}, "/ws", options{name: "Discuss", kind: "codex"}, model.ActorSlot2)
 	if err != nil {
 		t.Fatalf("createNativeRoom: %v", err)
 	}
@@ -187,21 +198,12 @@ func TestCreateNativeRoomRegistersMissingProject(t *testing.T) {
 	if roomRequest["host_mode"] != "native" || roomRequest["name"] != "Discuss" {
 		t.Fatalf("room request = %v", roomRequest)
 	}
-	agents, ok := roomRequest["agents"].(map[string]any)
-	if !ok {
-		t.Fatalf("agents missing: %v", roomRequest)
-	}
-	codex, _ := agents["slot2"].(map[string]any)
-	claude, _ := agents["slot1"].(map[string]any)
-	if codex["runtime"] != "codex" || claude["runtime"] != "claude" {
-		t.Fatalf("agents = %v", agents)
-	}
-	if _, exists := codex["model"]; exists {
-		t.Fatalf("runtime override must stay an empty-field selection: %v", codex)
+	if _, exists := roomRequest["agents"]; exists {
+		t.Fatalf("Native creation must omit runtime selections: %v", roomRequest)
 	}
 }
 
-func TestCreateNativeRoomReusesRegisteredProjectWithServerDefaults(t *testing.T) {
+func TestCreateNativeRoomReusesRegisteredProjectWithoutPairDefaults(t *testing.T) {
 	projectPosted := false
 	var roomRequest map[string]any
 	mux := http.NewServeMux()
@@ -232,16 +234,16 @@ func TestCreateNativeRoomReusesRegisteredProjectWithServerDefaults(t *testing.T)
 		t.Fatalf("room request = %v", roomRequest)
 	}
 	if _, exists := roomRequest["agents"]; exists {
-		t.Fatalf("omitted runtimes must keep the Service default pair: %v", roomRequest)
+		t.Fatalf("Native creation must omit runtime selections: %v", roomRequest)
 	}
 	if _, exists := roomRequest["name"]; exists {
 		t.Fatalf("omitted name must stay generated once by the Service: %v", roomRequest)
 	}
 }
 
-func TestCreateNativeRoomRejectsUnsupportedRuntimeBeforeAnyRequest(t *testing.T) {
+func TestCreateNativeRoomRejectsRetiredPeerRuntimeBeforeAnyRequest(t *testing.T) {
 	_, err := createNativeRoom(context.Background(), relay.Endpoint{URL: "http://127.0.0.1:0"}, "/ws", options{peer: "unsupported"}, model.ActorSlot1)
-	if err == nil || !strings.Contains(err.Error(), "claude, codex, grok or gemini") {
+	if err == nil || !strings.Contains(err.Error(), "omit --peer-runtime") {
 		t.Fatalf("err = %v", err)
 	}
 }

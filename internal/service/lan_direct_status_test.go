@@ -39,7 +39,7 @@ func TestLANDirectCLIStatusPreservesBoundedTailAndExactTotals(t *testing.T) {
 	count := relay.SnapshotMessageLimit + omitted
 	messages := make([]relay.Message, 0, count)
 	for i := 0; i < count; i++ {
-		request := relay.SendRequest{ID: fmt.Sprintf("status-evidence-%03d", i), Text: fmt.Sprintf("Complete evidence %03d: <tag> \\\"quoted\\\"\nnext line", i)}
+		request := relay.SendRequest{ExpectedPeerGeneration: 1, ID: fmt.Sprintf("status-evidence-%03d", i), Text: fmt.Sprintf("Complete evidence %03d: <tag> \\\"quoted\\\"\nnext line", i)}
 		if i == count-1 {
 			request.QuoteID = messages[0].ID
 		}

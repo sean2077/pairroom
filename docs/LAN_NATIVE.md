@@ -34,8 +34,16 @@ semantics; [Security](../SECURITY.md) owns the trust and network boundaries.
    Share the returned `peer_join` command with the colleague. It contains a
    public invitation, not a Management token, native session ID, or relay
    credential. The creator occupies Agent 1 unless `--slot 2` was explicitly
-   requested. The other slot is `awaiting_peer`; omit `--peer-runtime` because
-   the joining native session establishes its actual Runtime at admission.
+   requested. New Native creation selects no Runtime: CLI creation then binds
+   the caller, while the other slot stays `awaiting_peer` until exact-key
+   admission records its Runtime. Do not pass `--peer-runtime`.
+
+   Management can instead create the shared Room with both slots unbound:
+   choose the local owner slot, without any Runtime or Agent pair profile. Its
+   owner is `awaiting_binding`, and the remote slot is `awaiting_peer`. Both
+   use stable `@agent1` / `@agent2` handles. This remains one local owner and one
+   remote guest; a workstation hosting two independent remote participants is
+   outside the current topology.
 3. On the guest machine, make the CLI available in the Agent's tool shell and
    install/approve hooks for its Runtime in the intended workspace. Check the
    guest setup, then run the received command as a tool call inside that native
@@ -185,6 +193,16 @@ not authorize those actions. The Room host can read the shared content; TLS
 protects transport, not content from the host itself.
 
 ## Observe and recover
+
+New Native Rooms keep stable slot handles while replacement advances a binding
+generation and invalidates the old credential. Message history retains the
+publisher's original Runtime and generation. A peer change pauses automatic
+Stop publication in the surviving old session: inspect `relay peer` and use
+`send` / `exchange --peer-generation N --id NEW` for a deliberate new
+publication; foreground `wait` remains available. Same-session rebind cannot
+silently reset that automatic context. [Participant replacement](NATIVE_RELAY.md#replace-a-participant-deliberately)
+owns the local workflow and queued/claimed-work boundaries.
+
 
 The guest keeps its certificate, admission and transport recovery journal in a
 private per-user client store, separate from Service data roots. Its exact
