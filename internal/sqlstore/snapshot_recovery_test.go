@@ -86,6 +86,23 @@ func TestSnapshotUnknownWhenReplacementCannotVerify(t *testing.T) {
 	expectKernel(t, err, OutcomeUnknown, ClassConnectionFailed)
 }
 
+// With the work connection gone and the lease backend terminated, the
+// replacement path still refuses and discloses nothing.
+func TestSnapshotReplacementRefusesAfterLeaseLoss(t *testing.T) {
+	proxy := startProxy(t, "drop-response")
+	f := newFixtureProxy(t, func(dsn string) string { return proxy.dsn(dsn) })
+	ctx := context.Background()
+	cmd := humanSendCommand("u-owner", "chain-5", "slot2", "lease body")
+	proxy.arm()
+	res, err := f.store.CommitHumanSend(ctx, cmd)
+	if kerr := kernelErr(t, res, err); kerr.Outcome != OutcomeUnknown {
+		t.Fatalf("setup loss: %+v", res)
+	}
+	f.terminate(t, f.store.lease.pid, "lease")
+	_, err = f.store.ReadonlySnapshot(ctx, AuthContext{Deployment: "dep-test", UserID: "u-owner"}, "room-1")
+	expectKernel(t, err, OutcomeRefused, ClassLeaseLost)
+}
+
 // Authorization still gates the replacement path: a disabled principal gets a
 // refusal with zero disclosure even though the work connection is gone.
 func TestSnapshotReplacementStillEnforcesAuthorization(t *testing.T) {

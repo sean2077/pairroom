@@ -2,10 +2,14 @@ package sqlstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/sean2077/pairroom/internal/model"
 )
 
 func expectKernel(t *testing.T, err error, outcome Outcome, class string) {
@@ -162,6 +166,63 @@ func TestReadonlySnapshotWaitsOnConcurrentWriter(t *testing.T) {
 	}
 	if events, operations, audits, seq, revision := f.roomCounts(t); events != 1 || operations != 1 || audits != 1 || seq != 1 || revision != 1 {
 		t.Fatalf("unexpected state after the chain: %d/%d/%d/%d/%d", events, operations, audits, seq, revision)
+	}
+}
+
+// The snapshot's SQL lock gate, proven against an independent writer
+// connection: the writer holds the Room update lock inside a real transaction
+// carrying a legal fact and the matching sequence/revision, the snapshot's own
+// backend is observably reported as waiting on that lock, and only after the
+// writer commits does the snapshot return the complete new fact/sequence/
+// revision — with zero writes of its own. Removing the snapshot's Room
+// FOR SHARE makes both the observable wait and these state assertions fail;
+// the fault-injection log records that sensitivity experiment.
+func TestReadonlySnapshotWaitsOnExternalWriterCommit(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	writer := schemaConn(t, f.dsn, f.schema)
+	tx, err := writer.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT host_mode, current_seq, revision FROM `+f.store.table("rooms")+` WHERE room_id = 'room-1' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UTC().Truncate(time.Microsecond)
+	event := model.Event{Seq: 1, ID: "evt-ext-1", RoomID: "room-1", Kind: humanSendKind, Actor: model.ActorUser, CreatedAt: created, Data: []byte(`{"note":"external writer"}`)}
+	encoding, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO `+f.store.table("room_events")+` (room_id, seq, event_id, fact_version, event_encoding, kind, actor, created_at, origin_user) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		"room-1", 1, event.ID, factCodecVersion, encoding, event.Kind, string(event.Actor), created, "u-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE `+f.store.table("rooms")+` SET current_seq = 1, revision = 1 WHERE room_id = 'room-1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	snapDone := make(chan RoomSnapshot, 1)
+	var serr error
+	go func() {
+		snap, err := f.store.ReadonlySnapshot(ctx, AuthContext{Deployment: "dep-test", UserID: "u-owner"}, "room-1")
+		serr = err
+		snapDone <- snap
+	}()
+	// The snapshot's own backend is blocked on the Room lock.
+	waitForLockWait(t, f.admin, f.store.work.PgConn().PID())
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snap := <-snapDone
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if snap.Seq != 1 || snap.Revision != 1 || len(snap.Events) != 1 || snap.Events[0].ID != "evt-ext-1" {
+		t.Fatalf("snapshot must observe the complete external commit: %+v", snap)
+	}
+	if events, operations, audits, seq, revision := f.roomCounts(t); events != 1 || operations != 0 || audits != 0 || seq != 1 || revision != 1 {
+		t.Fatalf("snapshot wrote state: %d/%d/%d/%d/%d", events, operations, audits, seq, revision)
 	}
 }
 
