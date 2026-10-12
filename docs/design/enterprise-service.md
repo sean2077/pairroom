@@ -1,0 +1,150 @@
+# Enterprise Native service
+
+Status: approved product direction; implementation pending. Updated: 2026-10-12.
+
+This record owns the durable enterprise-service design. It is not a setup guide or evidence that a deployable service exists. Delivery status and implementation evidence belong in [PR #151](https://github.com/sean2077/pairroom/pull/151). The source baseline for this record is `7acbd2d67abd26d0742578d951eee8b7efb0b548`. Read [Architecture](../ARCHITECTURE.md), [Protocol](../PROTOCOL.md), [Storage](../STORAGE.md), [Security](../../SECURITY.md), and [Contributing](../../CONTRIBUTING.md) before implementation. Existing contracts remain authoritative for shipped behavior until explicitly changed with regression evidence.
+
+## 1. Scope and decisions
+
+Provide a single-organization, self-hosted Linux service for at least 100 registered users and 500 persisted Rooms as a capacity-planning workload, not a certified throughput claim. Native Agents continue running in user-owned harnesses on endpoints. Preserve Local-first and Embedded behavior. The first deployment has one active application instance. Prepare durable recovery and ownership boundaries now; implement planned handover and automatic failover in later milestones.
+
+Enterprise mode uses generic OIDC, application-owned user/device credentials, explicit resource authorization, PostgreSQL persistence, and two symmetric remotely attachable slots. There is no requirement for a server-side checkout, vendor CLI, model credential, or local Agent. The administrator and Room Owner do not occupy a slot. Different endpoint sessions may use local and remote services concurrently, including two sessions on one device joining the same remote Room.
+
+Do not introduce a second Relay protocol/state machine, mandatory endpoint daemon, dynamic Go plugin system, general workflow engine, public SaaS tenancy, multi-Agent group chat, or distributed message broker. Enterprise infrastructure does not start arbitrary endpoint processes or execute vendor turns. Identity-provider implementation is external to this repository; public code, fixtures and CI use only standard protocols and synthetic identities.
+
+SQL table names, HTTP routes, package boundaries and numeric defaults below are design candidates, not existing interfaces. The implementer may refine them with documented rationale while preserving approved behavior and security boundaries.
+
+## 2. Baseline gaps and owning code
+
+| Gap | Starting point | Required outcome |
+|---|---|---|
+| Loopback management assumes a local OS user | `internal/service/management.go`, `surface.go` | Separate authenticated enterprise entrypoint; no exposure of local setup, filesystem, process or Embedded privileges |
+| LAN has one local owner and one guest | `internal/service/types.go`, `internal/relay/lan.go` | Two symmetric bindings; ownership belongs to a human principal |
+| Remote client records collide for a Room | `internal/lanclient/store.go`, `internal/relayclient/lan_*` | Per-service, per-device, per-Agent binding records; preserve local/remote coexistence |
+| Projects resolve a server-local Git root | `internal/service/project.go` | Logical Project; endpoint Workspace mapping remains local |
+| Engine depends directly on JSONL | `internal/relay/engine.go`, `internal/store/jsonl.go` | Storage/transaction boundary sharing existing transitions with a PostgreSQL implementation |
+| Resident Room cost and history grow | `internal/service/native_host_runtime.go`, `internal/relay/history.go` | Bounded resident state, paginated reads, explicit capacity budgets |
+| Browser state is not enterprise-user scoped | Service UI assets and management API | Session-specific, server/user/Room-scoped drafts, outbox, reads and navigation |
+
+The original Management and LAN security boundaries must remain intact. An SSO reverse proxy alone does not supply object-level authorization.
+
+## 3. Resource model and authorization
+
+Separate Organization, User, ExternalIdentity, DeviceRegistration, AgentInstance, Project, Room, RoomMembership, Slot and Binding. Each enterprise resource belongs to the configured organization. Use stable internal IDs and enforce foreign-key/uniqueness constraints; display names, email addresses, Runtime names and filesystem paths are not identities.
+
+ExternalIdentity maps a configured trust connection and exact issuer/subject to a User. Do not auto-link accounts by matching email. Reconfiguring an issuer must not silently repoint existing identities. DeviceRegistration identifies an authorized installation/OS-user environment, not a hardware attestation. AgentInstance represents one native session on that device; Runtime is recorded on actual join and does not establish authorization. Binding contains Room, stable slot, AgentInstance and generation. Human publications must retain the human User ID in immutable provenance in addition to the existing protocol actor.
+
+Projects are logical, optional Room scopes. Project discovery and metadata must be filtered by explicit access; knowing an ID or sharing an organization is not authorization. Endpoint-local paths and vendor session identifiers are not public directory fields. Start with Room-level collaboration and avoid inventing implicit project-wide access through a single Room invitation.
+
+| Operation | Organization administrator | Room Owner | Member | Viewer |
+|---|---|---|---|---|
+| Disable users/devices; set service policy | Yes | Own device only | Own device only | Own device only |
+| Read Room/history/attachments | Only with explicit content access | Yes | Yes | Yes |
+| Send as human | Only with corresponding Room role | Yes | Yes | No |
+| Offer own Agent to a vacant slot | Corresponding Room role required | Yes | Yes, subject to admission | No |
+| Invite/change members; retire a slot | Explicit Room authority required | Yes | No | No |
+| Bind another user's Agent without their device authorization | No | No | No | No |
+| Transfer ownership; archive Room | Explicit Room authority required | Yes | No | No |
+
+Owner admission and endpoint consent are separate. A replacement is explicit, names the slot and observed generation, and never grants permission to impersonate its successor. Ownership transfer is transactional and targets an eligible active member. Keep historical authors when users are disabled or removed. Protect the last administrator; bootstrap through an explicit operator-selected identity, never an unauthenticated first-login race. Any emergency content-access mechanism must be explicit and audited; the ordinary administrator role does not automatically read all Rooms.
+
+Default Room history visibility is full Room history for admitted members. Admission must disclose this. Reusing a Room for a different confidentiality boundary requires a new Room; filtering recent messages alone does not hide attachments, quotes or earlier context. A slot replacement does not revoke the previous owner's human membership: revoke that separately when needed. Application ACLs do not prevent a server operator from reading storage; transport security is not end-to-end encryption.
+
+## 4. Generic OIDC boundary
+
+Use Authorization Code with S256 PKCE and a server-managed login transaction. Bind random one-time state and nonce to the initiating browser, configured issuer/client, callback and allowed return path. A valid state received from another browser must fail. Bound concurrent login transactions, expiry, body sizes, outbound requests and timeouts; do not hold database locks across provider calls.
+
+Use a maintained verifier and implement the checks required by [OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html): trusted signature/algorithm, exact issuer, audience/authorized-party rules, expiry, nonce and requested authentication-time evidence. Match UserInfo subject when UserInfo is used. Do not accept arbitrary token-provided key URLs or dynamic issuers. Token/JWKS/discovery destinations and redirects are governed by operator configuration, including deliberate access to an internal IdP. Do not blanket-reject private networks that an internal deployment requires, and do not permit an end user to select arbitrary outbound targets.
+
+Commit user/session creation before issuing a browser session. Cookies are Secure, HttpOnly and scoped appropriately; state-changing routes require CSRF protection and Origin checks. Sanitize return paths; keep tokens out of URLs, logs, browser storage and Agent context. Upstream credentials are not Pairroom API credentials. Local logout, provider logout and account disable are distinct operations. Reauthentication requires actual evidence, not merely another redirect. See [OAuth security BCP](https://www.rfc-editor.org/rfc/rfc9700.html).
+
+A successful login is also subject to configured admission policy. Arbitrary claims must not assign administrative privileges. Provider outage prevents new authentication; previously established Pairroom sessions follow their own expiry/revocation policy rather than silently gaining access or automatically being revoked without a defined reason.
+
+## 5. CLI, device and Agent grants
+
+Separate browser session, device/CLI authorization, and narrow Room Binding grant. Pin them to a stable service deployment ID plus trusted HTTPS origin, User, Device and scope; distinguish deployment identity, application instance identity, ownership epoch and restore/revocation epoch. Never forward an existing credential to a service from an invitation URL or HTTP redirect. Revocable opaque random tokens stored as hashes are a valid first implementation. Bearer tokens are not device-bound cryptographic proof; do not claim hardware or process attestation.
+
+The normal CLI flow opens the system browser and completes a one-time, browser-approved Pairroom device enrollment. Bind completion to the requesting client secret or proof and display the destination service/device clearly. A loopback callback carries only a one-use completion code; validate exact loopback destination and transaction state. Keep upstream provider callback handling server-side. Follow [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252.html) for native authorization considerations. No client secret compiled into a distributed CLI is confidential.
+
+Support a headless pairing flow only with an explicit verification step, attempt limits, polling interval, expiry and request binding. Reuse an IdP's supported device flow when applicable; if Pairroom implements its own enrollment, it owns that security boundary and must not assert RFC compliance without implementing the relevant contract. [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628.html) is the reference. Token rotation must address concurrent processes and a lost refresh response; never issue unlimited reusable previous-token grace.
+
+Keep local files owner-only and use platform credential facilities where available. A session must select one binding unambiguously; changing cwd or the user's default server must not retarget it. Hooks remain inert when unbound, and noninteractive when login expires. They preserve uncertain work locally and surface a foreground recovery instruction. Same-OS-user Agents are not isolated sandboxes.
+
+## 6. Revocation and race semantics
+
+Every read, write, download, event stream, CLI operation and retained LAN-style entrypoint must resolve the same authorization policy. Authentication precedes idempotent receipt disclosure; a revoked credential cannot recover a receipt. An otherwise authorized retry can recover its accepted original receipt before a peer-generation check, preserving current Native semantics.
+
+User disable, device revoke and membership removal durably change authorization state and audit facts. New operations authorized after that commit fail. Previously serialized operations may have completed before revocation; record that ordering honestly. Cancel active streams and recheck downloads at bounded chunk/time boundaries. Bytes already delivered cannot be recalled. Set and test a bounded stream-revocation delay; five seconds is a proposed lab target, not an implemented guarantee.
+
+For revocation/write races, define a global lock order. Shared authorization-row locks or a proven transactional equivalent permit concurrent authorized work while conflicting with disable/removal. A version checked outside the transaction is insufficient. Document transaction isolation, locking and retry behavior. Do not use a lock mode that fails to conflict with a non-key status update. See [PostgreSQL locking](https://www.postgresql.org/docs/current/explicit-locking.html). Never hold the transaction open while waiting for Agent output, HTTP streaming or model execution.
+
+## 7. PostgreSQL and Relay integration
+
+Keep one transition implementation for Local and Enterprise. Refactor the current concrete JSONL dependency into the smallest event/command persistence boundary needed for transactional enterprise authorization. Merely replacing Append with an SQL INSERT does not solve stale in-memory state or cross-object races.
+
+Suggested data domains are identity/membership, sessions/device grants, logical catalog/Room ACLs, Agent bindings, Room events and derived delivery/index state, object manifests, audit and service ownership. Separate authoritative control tables from rebuildable Relay projections; event replay must not recreate revoked authorization from old audit history. Event rows retain schema version, Room sequence, original actor/provenance and accepted operation identity. Commit authoritative control changes and corresponding audit/domain facts together.
+
+An enterprise command transaction must:
+
+1. Acquire the appropriate ownership, authorization and Room consistency guards in documented order.
+2. Check live user/device/membership/scope and the command's expected binding/peer generation.
+3. Recover an authorized existing idempotent result, otherwise validate current state and prepare events.
+4. Append contiguous Room sequence entries and update required control/projection/receipt records atomically.
+5. Commit before publishing a notification, returning a successful write or delivering an envelope; apply or reload the in-memory projection only after the outcome is known.
+
+If commit outcome is uncertain, invalidate the resident projection and reconcile by the original command identity. Do not retry external effects or publish guessed success. Sequence gaps, conflicting idempotency payloads and unsupported event versions fail closed. The exact order of generation checks versus accepted-receipt recovery must preserve the distinction between a new stale publication and recovery of an already accepted one.
+
+Idempotency identity includes service, Room, publisher/binding generation and operation ID. Compare payloads including destination generation, attachments, quotes and review data. Do not deduplicate semantically different human commands. Claim-before-stdout, ack-after-stdout, unknown outcomes and no automatic replay remain unchanged. `handed_off` never means native model acceptance or exactly-once execution. Peer replacement keeps immutable history, retires old grants and leaves late output addressed to its original generation.
+
+Use indexed pagination and bounded Room caches. Idle eviction cannot lose pending receipts, grants, leases or claims. PostgreSQL connections must not be held per long poll. One enterprise HTTPS listener with multiplexed Room routing is preferred over one public listener per Room. Notifications are hints; durable sequences/receipts remain authoritative. Capacity must include log replay, long histories and reconnect storms, not only fast empty-Room requests.
+
+## 8. Attachments and recovery
+
+Define an ObjectStore boundary and use local disk initially if necessary. Object keys are server-generated and authorization uses Room-scoped manifests; a content digest is not a capability. Define upload-reserved, uploaded/verified, referenced, abandoned and deletion-pending states. Verify content length/hash, enforce concurrent quotas atomically, prevent symlink/path traversal, and serve untrusted content with safe download headers. A revoked token or cross-Room digest must not access an object.
+
+Keep object bytes immutable while referenced. Record logical deletion first, delete asynchronously after a retention grace, and make garbage collection retryable. Database and object storage have no implicit shared transaction. A consistent backup manifest and object-retention barrier must protect objects needed by the database restore point. Local disk attachments block cross-host handover until bytes are copied and validated; an interface alone does not implement HA.
+
+Migration is explicit and copy-based. Do not reinterpret existing Local/LAN Rooms as belonging to the first OIDC user. Validate supported source versions and immutable actors/generations, assign enterprise ownership explicitly, create an isolated destination, and reauthorize endpoint bindings. Keep the source untouched. Do not revive local management tokens, LAN credentials or native automatic-reply contexts. Delay an import tool rather than ship an unsafe implicit migration.
+
+## 9. Single instance now; ownership and HA later
+
+Use stable deployment identity and persistent ownership generation. Initially reject a second active writer. A database-coordinated ownership record and a correctly scoped advisory lock are candidate primitives, not sufficient proof by themselves. Every mutating transaction must be fenced against the current owner, and a process losing ownership must stop serving private reads/deliveries as well as writes. Lock loss on one connection must not leave pooled connections writing as an old leader. Long-running transactions must be bounded.
+
+The first release must recover after restart without requiring all users to log in again, except where revocation/restore policy demands it. Client reconnection has bounded exponential backoff with jitter, preserves operation IDs and resynchronizes durable cursors. Stream disconnects during a restart are expected and recoverable; do not advertise zero interruption.
+
+HA-1 is a future planned drain/handover with compatible old/new readers and schema expansion before contraction. HA-2 adds unplanned failure takeover, database promotion, object availability and split-brain protection. Application fencing cannot protect two independently writable database primaries. PostgreSQL asynchronous replication may lose acknowledged commits on failure; synchronous policy trades latency/availability for stronger durability. Choose and test the required RPO/RTO before advertising HA. See [PostgreSQL standby documentation](https://www.postgresql.org/docs/current/warm-standby.html).
+
+On restore, a backup may resurrect previously revoked tokens. Require an explicit restore fence/epoch rotation, then either reestablish revocation state from a trustworthy newer source or invalidate all restored sessions and grants. Keep history; do not reopen old credentials merely because their hashes exist in the backup. Secrets and object keys require separate protected backup/rotation procedures.
+
+## 10. UI and operations
+
+Provide My Rooms, Room details/members/slots, My Agents, My Devices/sessions, logical Projects and an authorized administration view. Differentiate online transport, active collector, idle, unknown delivery, retired binding and expired login. No UI status claims the model is working or finished without evidence. Creation has no Runtime/provider/model picker for Native Rooms. Replacing a slot is separate from joining; show generation and consequences.
+
+Scope cached drafts/outbox/read positions to deployment, User and Room. Account switching closes old streams and never submits another user's queued message. Tokens never enter localStorage. Human history shows stable author provenance, not the current slot occupant. Archived Rooms are paginated/read-only and do not stop user sessions. Browser and CLI use the same resource policy.
+
+Linux delivery includes a non-root container/systemd option, example PostgreSQL/TLS configuration, exact proxy trust and canonical origin, persistent volumes, secret references, readiness/liveness, graceful drain and schema compatibility checks. Private endpoints/paths and credentials must not appear in examples, diagnostics or artifacts. A proxy's forwarded headers are trusted only from configured peers. No automatic embedded execution or local filesystem registration is exposed through the enterprise entrypoint.
+
+Set user/device/active-Room/queue/request/upload/storage limits. Metrics use low-cardinality labels, exclude message content and identity tokens, and distinguish transport from model activity. Audit records identify internal principals, action, target, outcome and correlation ID with appropriate access/retention. Required audit persistence failure fails privileged mutation closed. IdP, database, disk-full and attachment failures each have explicit degraded behavior and operator guidance.
+
+Capacity fixtures must cover 100 synthetic users and at least 500 persisted Rooms; exercise 50, 100 and 250 active Rooms plus an exploratory 500-active-Room scenario. These are test scenarios, not supported limits. Record hardware, message/attachment sizes, history lengths, churn, RTT, connection counts, p50/p95/p99, memory, storage growth, recovery time and correctness. Define the supported envelope from measurements rather than guessing a server size.
+
+## 11. Implementation sequence and release gates
+
+| Stage | Deliverable | Exit evidence |
+|---|---|---|
+| A | Behavioral characterization, detailed lock/transaction design and dependency review | Existing Native recovery fixtures retained; no public interface opened |
+| B | Storage seam and PostgreSQL transactional persistence | Equivalent transition traces; commit-ambiguity, stale-writer, migration and restart tests |
+| C | OIDC, device/session/grant lifecycle and authorization | Cross-user denial, callback binding, token/revocation race tests |
+| D | Logical Projects, symmetric remote binding, CLI and Room management | Two remote endpoints; same-device dual sessions; local/remote coexistence |
+| E | UI, attachment lifecycle and Linux deployment | Real browser interactions; object authorization; backup/restore rehearsal |
+| F | Capacity, fault injection, repeated review and documentation | Measured workload report and no unresolved medium/high-value findings in reviewed scope |
+
+Stages may overlap on separate worktrees after interfaces are agreed. Keep the existing PR draft until the required implementation and acceptance are actually present. Do not merge an unauthenticated intermediary service. Root dependency additions/changes require deliberate allowlist, lockfile and license review under Contributing; an artifact's proposed module file is not an approved dependency change. Keep desktop module synchronization and Local-first regressions in scope.
+
+Required negative/failure tests include callback replay/cross-browser transfer, wrong issuer/audience/signature/nonce, denied admission, user/device/member revocation, competing slot claims, late replies after replacement, accepted-send response loss, ambiguous SQL commit, process termination after claim before acknowledgement, stale ownership after restart, cross-Room attachment access, quota races, account-switch outbox leakage, corrupt/unsupported events, stale backup credential resurrection and a reconnect storm. Test each authorization entrypoint, including event streams, export, attachment range requests and any retained certificate ingress.
+
+Run existing `make docs-check`, `make check`, `make smoke`, browser/desktop/platform gates and the new real-PostgreSQL enterprise suite as applicable. Report the exact head, environment, commands, failures and exclusions. Synthetic IdP/Agent fixtures do not certify a real provider or authenticated native vendor session. Review at least security/identity, persistence/concurrency, CLI/protocol and UI/operations independently when reviewers are available; otherwise label sequential self-review honestly. Fix findings with failing-before/passing-after evidence and repeat affected review. A clean review is scoped evidence, never proof that no defects exist.
+
+## 12. Remaining engineering decisions
+
+Resolve in implementation ADRs without reopening the confirmed product direction: precise event-store transaction API and lock order; library/version/license selection; enrollment/refresh lost-response recovery; operator bootstrap procedure; object-backup consistency; idle eviction criteria; explicit import tooling boundary; measured capacity/default limits; and subsequent HA RPO/RTO. No current design choice authorizes removing existing approval gates, weakening dependency checks or changing published Native uncertainty semantics.
