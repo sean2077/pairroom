@@ -1,0 +1,52 @@
+name: Enterprise
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/enterprise.yml'
+      - 'internal/enterprise/**'
+      - 'internal/relay/**'
+      - 'internal/store/**'
+      - 'cmd/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'deploy/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification-source:
+    name: Reproducible verification inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Verify toolchain and collect public verification inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_go_versions.py minimum go.mod
+          mkdir -p "${RUNNER_TEMP}/enterprise-verification-inputs"
+          git archive --format=tar HEAD | gzip > "${RUNNER_TEMP}/enterprise-verification-inputs/source.tar.gz"
+          go mod download
+          tar -czf "${RUNNER_TEMP}/enterprise-verification-inputs/toolchain.tar.gz" -C "$(go env GOROOT)" .
+          tar -czf "${RUNNER_TEMP}/enterprise-verification-inputs/modules.tar.gz" -C "$(go env GOMODCACHE)" cache/download
+          git rev-parse HEAD > "${RUNNER_TEMP}/enterprise-verification-inputs/revision.txt"
+          go version >> "${RUNNER_TEMP}/enterprise-verification-inputs/revision.txt"
+          cd "${RUNNER_TEMP}/enterprise-verification-inputs"
+          sha256sum source.tar.gz toolchain.tar.gz modules.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: enterprise-verification-inputs
+          path: ${{ runner.temp }}/enterprise-verification-inputs/
+          if-no-files-found: error
+          retention-days: 3
