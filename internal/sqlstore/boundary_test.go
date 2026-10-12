@@ -249,10 +249,23 @@ func (f *flipMembershipTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn,
 
 func (f *flipMembershipTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+// noopTracer keeps openStoreWithTracer usable without a tracer (pgx accepts a
+// tracer only as an interface value).
+type noopTracer struct{}
+
+func (noopTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (noopTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
 // openStoreWithTracer composes a Store over a raw fixture with a driver
 // tracer on the work connection; it mirrors Open without any production seam.
 func openStoreWithTracer(t *testing.T, f *fixture, tracer pgx.QueryTracer) *Store {
 	t.Helper()
+	if tracer == nil {
+		tracer = noopTracer{}
+	}
 	ctx := context.Background()
 	conf, err := pgx.ParseConfig(f.cfg.DSN)
 	if err != nil {
@@ -273,6 +286,58 @@ func openStoreWithTracer(t *testing.T, f *fixture, tracer pgx.QueryTracer) *Stor
 	store := &Store{cfg: f.cfg, lease: lease, work: work, sem: make(chan struct{}, 1)}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+// The server reaps a stalled kernel transaction without any cooperation from
+// the wedged process: after the lease backend is killed and nobody rolls back
+// or closes the stalled work connection, the successor waits only until the
+// server's idle-in-transaction timeout terminates the old work backend and
+// releases its locks, then takes over with a new epoch. Nothing in this test
+// rolls the stalled transaction back or closes its connection.
+//
+// The production idle timeout is 15s (asserted by
+// TestSessionBudgetsAreConfigured); this work connection shrinks its own
+// budget to 1s as an explicit fixture override so the regression stays fast.
+func TestStalledTransactionTakeoverWithoutRollback(t *testing.T) {
+	f := newRawFixture(t)
+	ctx := context.Background()
+	store := openStoreWithTracer(t, f, nil)
+	if _, err := store.work.Exec(ctx, `SELECT pg_catalog.set_config('idle_in_transaction_session_timeout', '1s', false)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.work.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT epoch, lease_pid, lease_backend_start FROM `+store.table("ownership")+` WHERE id FOR SHARE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT current_seq, revision FROM `+store.table("rooms")+` WHERE room_id = 'room-1' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	f.terminate(t, store.lease.pid, "lease")
+
+	start := time.Now()
+	successor, err := Open(ctx, f.cfg)
+	if err != nil {
+		t.Fatalf("successor did not take over after the server reaped the stalled transaction: %v", err)
+	}
+	defer func() { _ = successor.Close() }()
+	if elapsed := time.Since(start); elapsed > 25*time.Second {
+		t.Fatalf("takeover was not server-bounded: %v", elapsed)
+	}
+	var epoch int64
+	if err := successor.work.QueryRow(ctx, `SELECT epoch FROM `+successor.table("ownership")).Scan(&epoch); err != nil {
+		t.Fatal(err)
+	}
+	if epoch != 2 {
+		t.Fatalf("takeover epoch = %d, want 2", epoch)
+	}
+	// The old work connection was reaped by the server, not by this test.
+	var one int
+	if err := store.work.QueryRow(ctx, `SELECT 1`).Scan(&one); err == nil {
+		t.Fatal("the stalled work connection still answered after the idle timeout")
+	}
 }
 
 // A dependency change arriving while the kernel waits on the lock: the
