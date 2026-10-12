@@ -25,6 +25,9 @@ const (
 	// for the work connection — even when the caller passes an unbounded
 	// context. The earlier of this budget and the caller's deadline applies.
 	maxOperationBudget = 60 * time.Second
+	// openBudget bounds Open (and its ownership transaction) when the caller
+	// passes an unbounded context.
+	openBudget = 30 * time.Second
 )
 
 // Config binds one Store to exactly one immutable deployment inside one
@@ -48,21 +51,17 @@ type Store struct {
 	sem      chan struct{}
 	poisoned error
 	closed   bool
-
-	// Test seams (nil outside tests): observe or perturb the narrow windows
-	// between discovery and locking, right before COMMIT, and before the
-	// Resolve lookup.
-	afterDiscovery      func()
-	beforeCommit        func()
-	beforeResolveLookup func()
 }
 
 // Open connects the lease and work connections, verifies the schema version
 // and the bound deployment, and acquires the deployment's ownership lease.
+// The whole open is bounded even for an unbounded caller context.
 func Open(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.DSN == "" || cfg.DeploymentID == "" || !schemaNamePattern.MatchString(cfg.Schema) {
 		return nil, fmt.Errorf("sqlstore: DSN, schema and deployment id are required")
 	}
+	ctx, cancel := context.WithTimeout(ctx, openBudget)
+	defer cancel()
 	lease, err := openLease(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -70,7 +69,9 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			_ = lease.conn.Close(context.WithoutCancel(ctx))
+			cctx, ccancel := cleanupCtx()
+			defer ccancel()
+			_ = lease.conn.Close(cctx)
 		}
 	}()
 	// openLease verified the schema version and the bound deployment on the
@@ -79,8 +80,10 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlstore: connect work: %w", err)
 	}
-	if err := pinSearchPath(ctx, work, cfg.Schema); err != nil {
-		_ = work.Close(context.WithoutCancel(ctx))
+	if err := configureSession(ctx, work, cfg.Schema); err != nil {
+		cctx, ccancel := cleanupCtx()
+		defer ccancel()
+		_ = work.Close(cctx)
 		return nil, err
 	}
 	ok = true
@@ -247,16 +250,13 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
-	if s.afterDiscovery != nil {
-		s.afterDiscovery()
-	}
 	tx, err := s.work.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
 	defer func() {
-		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rctx, cancel := cleanupCtx()
 		defer cancel()
 		_ = tx.Rollback(rctx)
 	}()
@@ -305,26 +305,30 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 	}
 
 	// Idempotency: same key and identical stable mutation replays the original
-	// stored fact; same key with a different mutation is a definite conflict.
+	// stored fact; same key with a different mutation is a definite conflict —
+	// the same OutcomeConflict that Resolve reports for this situation.
 	var storedHash []byte
 	var resultSeq int64
+	var resultRevision int64
 	err = tx.QueryRow(ctx, `
-		SELECT intent_hash, result_seq FROM `+s.table("operations")+`
+		SELECT intent_hash, result_seq, result_revision FROM `+s.table("operations")+`
 		 WHERE op_namespace = $1 AND deployment_id = $2 AND room_id = $3
 		   AND binding_id = '' AND generation = 0 AND op_kind = $4 AND identifier = $5 AND principal = $6`,
-		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal).Scan(&storedHash, &resultSeq)
+		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
 	switch {
 	case err == nil:
 		if !bytes.Equal(storedHash, hash[:]) {
-			return refused3(ClassPayloadConflict, nil)
+			kerr := &KernelError{Outcome: OutcomeConflict, Class: ClassPayloadConflict}
+			return Result{Outcome: OutcomeConflict, Class: ClassPayloadConflict, Err: kerr, Revision: uint64(resultRevision)}, kerr, false
 		}
 		original, err := s.loadFact(ctx, tx, cmd.Key.RoomID, uint64(resultSeq))
 		if err != nil {
 			return refused3(ClassStoredFactUnreadable, err)
 		}
-		// Replayed reports the current locked revision as-is; only a commit
-		// defines expected+1.
-		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: locked.revision, Fact: original}, nil, false
+		// Replayed returns the original stored result, including the Room
+		// revision that original commit defined — never the current revision,
+		// which may have advanced past it.
+		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: uint64(resultRevision), Fact: original}, nil, false
 	case errors.Is(err, pgx.ErrNoRows):
 		// A new operation.
 	default:
@@ -361,8 +365,8 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 		cmd.Key.RoomID, int64(stored.Seq), stored.ID, factCodecVersion, encoding, stored.Kind, string(stored.Actor), stored.CreatedAt, cmd.Auth.UserID); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("operations")+` (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal, intent_hash, expected_revision, result_seq, committed_at) VALUES ($1, $2, $3, '', 0, $4, $5, $6, $7, $8, $9, $10)`,
-		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal, hash[:], int64(cmd.ExpectedRevision), int64(stored.Seq), now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("operations")+` (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal, intent_hash, expected_revision, result_seq, result_revision, committed_at) VALUES ($1, $2, $3, '', 0, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal, hash[:], int64(cmd.ExpectedRevision), int64(stored.Seq), int64(locked.revision+1), now); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("audit")+` (deployment_id, room_id, user_id, kind, outcome, detail, at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -372,9 +376,6 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 	if _, err := tx.Exec(ctx, `UPDATE `+s.table("rooms")+` SET current_seq = $2, revision = $3 WHERE room_id = $1`,
 		cmd.Key.RoomID, int64(stored.Seq), int64(locked.revision+1)); err != nil {
 		return s.postBeginFailure(ctx, err)
-	}
-	if s.beforeCommit != nil {
-		s.beforeCommit()
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return s.commitFailure(err)

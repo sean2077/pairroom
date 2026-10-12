@@ -72,10 +72,10 @@ type fixture struct {
 	admin  *pgx.Conn
 }
 
-// newFixture creates a unique schema with the kernel schema applied, seeds one
-// deployment, two users, one Room and an owner plus a viewer membership, and
-// opens the Store.
-func newFixture(t *testing.T) *fixture {
+// newRawFixture creates a uniquely schemed, seeded fixture without opening a
+// Store; tests that compose their own Store over these rows (driver tracers)
+// use it.
+func newRawFixture(t *testing.T) *fixture {
 	t.Helper()
 	dsn := testDSN(t)
 	ctx := context.Background()
@@ -94,19 +94,60 @@ func newFixture(t *testing.T) *fixture {
 			t.Fatal(err)
 		}
 	}
-	f := &fixture{
+	return &fixture{
 		cfg:    Config{DSN: dsn, Schema: schema, DeploymentID: "dep-test"},
 		dsn:    dsn,
 		schema: schema,
 		admin:  conn,
 	}
-	store, err := Open(ctx, f.cfg)
+}
+
+// newFixture seeds a fixture and opens its Store on the direct DSN.
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	return openFixture(t, nil)
+}
+
+// newFixtureProxy opens the fixture Store through a transformed DSN (the
+// protocol proxy) while fixtures and assertions stay on the direct connection.
+func newFixtureProxy(t *testing.T, transform func(string) string) *fixture {
+	t.Helper()
+	return openFixture(t, transform)
+}
+
+func openFixture(t *testing.T, transform func(string) string) *fixture {
+	t.Helper()
+	f := newRawFixture(t)
+	cfg := f.cfg
+	if transform != nil {
+		cfg.DSN = transform(cfg.DSN)
+	}
+	store, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.store = store
 	t.Cleanup(func() { _ = store.Close() })
 	return f
+}
+
+// waitForLockWait is a real database barrier: it polls pg_stat_activity until
+// the given backend is waiting on a lock, so tests synchronize on observable
+// database state instead of sleeps.
+func waitForLockWait(t *testing.T, admin *pgx.Conn, pid uint32) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waitType *string
+		if err := admin.QueryRow(context.Background(), `SELECT wait_event_type FROM pg_catalog.pg_stat_activity WHERE pid = $1`, int32(pid)).Scan(&waitType); err != nil {
+			t.Fatal(err)
+		}
+		if waitType != nil && *waitType == "Lock" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("backend never reached a lock wait")
 }
 
 // command builds a valid append_fact command for the fixture Room.

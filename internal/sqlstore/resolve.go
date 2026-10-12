@@ -47,9 +47,9 @@ func (s *Store) Resolve(ctx context.Context, auth AuthContext, key OpKey, mutati
 		return result, err
 	}
 	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rctx, cancel := cleanupCtx()
 		defer cancel()
-		_ = replacement.Close(closeCtx)
+		_ = replacement.Close(rctx)
 	}()
 	return s.resolveOnce(opCtx, cmd, hash, replacement)
 }
@@ -70,13 +70,17 @@ func (s *Store) openVerificationConn(ctx context.Context) (*pgx.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := pinSearchPath(ctx, conn, s.cfg.Schema); err != nil {
-		_ = conn.Close(context.WithoutCancel(ctx))
+	fail := func(err error) (*pgx.Conn, error) {
+		cctx, ccancel := cleanupCtx()
+		defer ccancel()
+		_ = conn.Close(cctx)
 		return nil, err
 	}
+	if err := configureSession(ctx, conn, s.cfg.Schema); err != nil {
+		return fail(err)
+	}
 	if err := verifySchemaVersion(ctx, conn, s.cfg.Schema); err != nil {
-		_ = conn.Close(context.WithoutCancel(ctx))
-		return nil, err
+		return fail(err)
 	}
 	return conn, nil
 }
@@ -90,7 +94,7 @@ func (s *Store) resolveOnce(ctx context.Context, cmd Command, hash [32]byte, con
 		return resolveIncomplete(ctx, err)
 	}
 	defer func() {
-		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rctx, cancel := cleanupCtx()
 		defer cancel()
 		_ = tx.Rollback(rctx)
 	}()
@@ -122,9 +126,6 @@ func (s *Store) resolveOnce(ctx context.Context, cmd Command, hash [32]byte, con
 		}
 		return resolveIncomplete(ctx, err)
 	}
-	if s.beforeResolveLookup != nil {
-		s.beforeResolveLookup()
-	}
 
 	switch {
 	case locked.roomMissing:
@@ -135,24 +136,27 @@ func (s *Store) resolveOnce(ctx context.Context, cmd Command, hash [32]byte, con
 
 	var storedHash []byte
 	var resultSeq int64
+	var resultRevision int64
 	err = tx.QueryRow(ctx, `
-		SELECT intent_hash, result_seq FROM `+s.table("operations")+`
+		SELECT intent_hash, result_seq, result_revision FROM `+s.table("operations")+`
 		 WHERE op_namespace = $1 AND deployment_id = $2 AND room_id = $3
 		   AND binding_id = '' AND generation = 0 AND op_kind = $4 AND identifier = $5 AND principal = $6`,
-		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal).Scan(&storedHash, &resultSeq)
+		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
 	switch {
 	case err == nil:
 		if !bytes.Equal(storedHash, hash[:]) {
 			// The stored payload hash is authoritative; a differing mutation
 			// under the same key is a definite conflict.
 			kerr := &KernelError{Outcome: OutcomeConflict, Class: ClassPayloadConflict}
-			return Result{Outcome: OutcomeConflict, Class: ClassPayloadConflict, Err: kerr, Revision: locked.revision}, kerr
+			return Result{Outcome: OutcomeConflict, Class: ClassPayloadConflict, Err: kerr, Revision: uint64(resultRevision)}, kerr
 		}
 		original, err := s.loadFact(ctx, tx, cmd.Key.RoomID, uint64(resultSeq))
 		if err != nil {
 			return resolveIncomplete(ctx, err)
 		}
-		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: locked.revision, Fact: original}, nil
+		// The original stored result, including the Room revision that the
+		// original commit defined — never the current revision.
+		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: uint64(resultRevision), Fact: original}, nil
 	case errors.Is(err, pgx.ErrNoRows):
 		return Result{Outcome: OutcomeNotCommitted, Revision: locked.revision}, nil
 	default:

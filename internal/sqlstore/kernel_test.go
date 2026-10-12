@@ -83,6 +83,13 @@ func TestIdempotentReplayReturnsTheOriginalFact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A later operation advances the Room revision; the replay must still
+	// return the original result revision, never the current one.
+	later := f.command("idem-2")
+	later.ExpectedRevision = 1
+	if res, err := f.store.Commit(ctx, later); err != nil || res.Revision != 2 {
+		t.Fatalf("later commit: %+v %v", res, err)
+	}
 
 	recandidate := f.command("idem-1")
 	recandidate.Mutation.Fact.ID = "evt-regenerated"
@@ -94,23 +101,30 @@ func TestIdempotentReplayReturnsTheOriginalFact(t *testing.T) {
 	if res2.Outcome != OutcomeReplayed || res2.Seq != res1.Seq {
 		t.Fatalf("replay outcome: %+v", res2)
 	}
+	if res2.Revision != 1 {
+		t.Fatalf("replay must return the original result revision, got %d", res2.Revision)
+	}
 	if res2.Fact.ID != first.Mutation.Fact.ID || !res2.Fact.CreatedAt.Equal(first.Mutation.Fact.CreatedAt) {
 		t.Fatalf("replay must return the original fact, got %+v", res2.Fact)
+	}
+	resolved, err := f.store.Resolve(ctx, recandidate.Auth, recandidate.Key, recandidate.Mutation)
+	if err != nil || resolved.Outcome != OutcomeReplayed || resolved.Seq != res1.Seq || resolved.Revision != 1 || resolved.Fact.ID != first.Mutation.Fact.ID {
+		t.Fatalf("resolve must return the original result: %+v %v", resolved, err)
 	}
 
 	changedBody := f.command("idem-1")
 	changedBody.Mutation.Fact.Data = []byte(`{"text":"changed"}`)
 	res3, err := f.store.Commit(ctx, changedBody)
-	if kerr := kernelErr(t, res3, err); kerr.Class != ClassPayloadConflict {
+	if kerr := kernelErr(t, res3, err); kerr.Outcome != OutcomeConflict || kerr.Class != ClassPayloadConflict {
 		t.Fatalf("changed body must conflict: %+v", res3)
 	}
 	changedKind := f.command("idem-1")
 	changedKind.Mutation.Fact.Kind = "room.other"
 	res4, err := f.store.Commit(ctx, changedKind)
-	if kerr := kernelErr(t, res4, err); kerr.Class != ClassPayloadConflict {
+	if kerr := kernelErr(t, res4, err); kerr.Outcome != OutcomeConflict || kerr.Class != ClassPayloadConflict {
 		t.Fatalf("changed fact kind must conflict: %+v", res4)
 	}
-	if events, operations, _, _, revision := f.roomCounts(t); events != 1 || operations != 1 || revision != 1 {
+	if events, operations, _, _, revision := f.roomCounts(t); events != 2 || operations != 2 || revision != 2 {
 		t.Fatalf("replays and conflicts must not append: events=%d operations=%d revision=%d", events, operations, revision)
 	}
 }
@@ -161,22 +175,10 @@ func TestConstraintFailureRollsBackTheWholeTransaction(t *testing.T) {
 	}
 }
 
-// A COMMIT whose signal is lost is reported as unknown — never as rolled back
-// and never as success. In this construction the injected backend loss lands
-// before COMMIT is sent, so no effect actually exists, and the kernel still
-// must not claim a definite outcome.
-func TestCommitAfterBackendLossIsUnknown(t *testing.T) {
-	f := newFixture(t)
-	ctx := context.Background()
-	f.store.beforeCommit = func() { f.terminate(t, f.store.work.PgConn().PID(), "work") }
-	res, err := f.store.Commit(ctx, f.command("unknown-1"))
-	if kerr := kernelErr(t, res, err); kerr.Outcome != OutcomeUnknown || kerr.Class != ClassConnectionException {
-		t.Fatalf("lost commit signal: %+v", res)
-	}
-	if events, _, _, _, _ := f.roomCounts(t); events != 0 {
-		t.Fatalf("killed commit still wrote %d events", events)
-	}
-}
+// A COMMIT whose signal is lost is reported as unknown — never as rolled
+// back and never as success. The two real boundaries — a forwarded COMMIT
+// whose response is dropped, and a connection break before the server sees
+// COMMIT — are injected by the protocol proxy in boundary_test.go.
 
 // Resolve is the only sanctioned adjudication: a stored operation replays its
 // original fact, a complete check proves absence, a same-key different
@@ -192,7 +194,7 @@ func TestResolveOutcomes(t *testing.T) {
 	recandidate := f.command("res-1")
 	recandidate.Mutation.Fact.ID = "evt-regenerated"
 	res, err := f.store.Resolve(ctx, recandidate.Auth, recandidate.Key, recandidate.Mutation)
-	if err != nil || res.Outcome != OutcomeReplayed || res.Fact.ID != cmd.Mutation.Fact.ID {
+	if err != nil || res.Outcome != OutcomeReplayed || res.Revision != 1 || res.Fact.ID != cmd.Mutation.Fact.ID {
 		t.Fatalf("resolve replay: %+v %v", res, err)
 	}
 
@@ -208,83 +210,12 @@ func TestResolveOutcomes(t *testing.T) {
 	if kerr := kernelErr(t, res, err); kerr.Outcome != OutcomeConflict || kerr.Class != ClassPayloadConflict {
 		t.Fatalf("resolve conflict: %+v", res)
 	}
-
-	// The work connection dies during the check: the bounded replacement
-	// connection completes the read-only verification and recovers the stored
-	// outcome.
-	killed := false
-	f.store.beforeResolveLookup = func() {
-		if killed {
-			return
-		}
-		killed = true
-		f.terminate(t, f.store.work.PgConn().PID(), "work")
-	}
-	res, err = f.store.Resolve(ctx, cmd.Auth, cmd.Key, cmd.Mutation)
-	if err != nil || res.Outcome != OutcomeReplayed || res.Fact.ID != cmd.Mutation.Fact.ID {
-		t.Fatalf("replacement verification: %+v %v", res, err)
-	}
-}
-
-// When verification cannot complete on either the work connection or the
-// replacement connection, the outcome is unknown — never a guessed absence.
-func TestResolveUnknownWhenVerificationCannotComplete(t *testing.T) {
-	f := newFixture(t)
-	ctx := context.Background()
-	cmd := f.command("res-unreachable")
-	f.store.beforeResolveLookup = func() {
-		f.store.cfg.DSN = "postgres://postgres@127.0.0.1:1/pairroom_test?sslmode=disable&connect_timeout=1"
-		f.terminate(t, f.store.work.PgConn().PID(), "work")
-	}
-	res, err := f.store.Resolve(ctx, cmd.Auth, cmd.Key, cmd.Mutation)
-	if kerr := kernelErr(t, res, err); kerr.Outcome != OutcomeUnknown {
-		t.Fatalf("unverifiable resolve: %+v", res)
-	}
 }
 
 // A dependency change between discovery and locking restarts the pure
-// discovery phase once and then refuses on the fresh state.
-func TestDiscoveryRestartThenRefusal(t *testing.T) {
-	f := newFixture(t)
-	ctx := context.Background()
-	calls := 0
-	f.store.afterDiscovery = func() {
-		calls++
-		if calls == 1 {
-			if _, err := f.admin.Exec(ctx, `UPDATE room_members SET disabled = true WHERE room_id = 'room-1' AND user_id = 'u-owner'`); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	res, err := f.store.Commit(ctx, f.command("dr-1"))
-	if kerr := kernelErr(t, res, err); kerr.Class != ClassAuthorization {
-		t.Fatalf("restart then refusal: %+v", res)
-	}
-	if calls != 2 {
-		t.Fatalf("expected one restart (two discovery reads), got %d", calls)
-	}
-	if events, _, _, _, _ := f.roomCounts(t); events != 0 {
-		t.Fatalf("restart produced %d events", events)
-	}
-}
-
-// A dependency that keeps changing exhausts the bounded restart and reports
-// the explicit over-limit state; the loop is classified, not silent.
-func TestDiscoveryRestartLimit(t *testing.T) {
-	f := newFixture(t)
-	ctx := context.Background()
-	flip := false
-	f.store.afterDiscovery = func() {
-		flip = !flip
-		if _, err := f.admin.Exec(ctx, `UPDATE room_members SET disabled = $1 WHERE room_id = 'room-1' AND user_id = 'u-owner'`, flip); err != nil {
-			t.Fatal(err)
-		}
-	}
-	res, err := f.store.Commit(ctx, f.command("drl-1"))
-	if kerr := kernelErr(t, res, err); kerr.Outcome != OutcomeNotCommitted || kerr.Class != ClassDiscoveryRestart {
-		t.Fatalf("restart limit: %+v", res)
-	}
-}
+// discovery phase and then refuses the stale plan. The concurrent-change
+// boundary and the restart-limit path live in boundary_test.go, driven by a
+// real lock barrier and a driver tracer.
 
 // Unsupported surfaces and non-writer roles are refused with stable classes
 // and no effect.

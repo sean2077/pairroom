@@ -62,10 +62,12 @@ func openLease(ctx context.Context, cfg Config) (*leaseState, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			_ = conn.Close(context.WithoutCancel(ctx))
+			cctx, ccancel := cleanupCtx()
+			defer ccancel()
+			_ = conn.Close(cctx)
 		}
 	}()
-	if err := pinSearchPath(ctx, conn, cfg.Schema); err != nil {
+	if err := configureSession(ctx, conn, cfg.Schema); err != nil {
 		return nil, err
 	}
 	if err := verifySchemaVersion(ctx, conn, cfg.Schema); err != nil {
@@ -94,7 +96,11 @@ func openLease(ctx context.Context, cfg Config) (*leaseState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlstore: open ownership transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer func() {
+		cctx, ccancel := cleanupCtx()
+		defer ccancel()
+		_ = tx.Rollback(cctx)
+	}()
 	var current int64
 	err = tx.QueryRow(ctx, `SELECT epoch FROM `+qualified(cfg.Schema, "ownership")+` WHERE id FOR UPDATE`).Scan(&current)
 	switch {

@@ -67,6 +67,7 @@ CREATE TABLE operations (
   intent_hash       bytea NOT NULL CHECK (octet_length(intent_hash) = 32),
   expected_revision bigint NOT NULL CHECK (expected_revision >= 0),
   result_seq        bigint NOT NULL,
+  result_revision   bigint NOT NULL CHECK (result_revision >= 0),
   committed_at      timestamptz NOT NULL,
   FOREIGN KEY (room_id, result_seq) REFERENCES room_events(room_id, seq),
   PRIMARY KEY (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal)
