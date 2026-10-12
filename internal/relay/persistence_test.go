@@ -11,12 +11,11 @@ import (
 	"github.com/sean2077/pairroom/internal/store"
 )
 
-// injectAppendError reports an append outcome a transactional backend may
-// produce when it cannot establish the commit. Local JSONL never returns one
-// (a local write or sync failure poisons the writer instead), so a controlled
-// double is the only way to reach the engine's fail-closed boundary. Its two
-// modes are indistinguishable to a caller: "the fact landed, then reporting
-// failed" and "nothing landed" both surface as one non-nil error.
+// injectAppendError deterministically simulates append returning a non-nil
+// error with and without a persisted fact; local write/sync errors also have
+// uncertain effects. Its two modes are indistinguishable to a caller: "the
+// fact landed, then reporting failed" and "nothing landed" both surface as
+// one non-nil error.
 type injectAppendError struct {
 	Persistence
 	enabled bool
