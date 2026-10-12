@@ -19,7 +19,6 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
 	"github.com/sean2077/pairroom/internal/protocol"
-	"github.com/sean2077/pairroom/internal/store"
 )
 
 type Config struct {
@@ -29,11 +28,12 @@ type Config struct {
 	// SharedSlot is the remote participant of a Native LAN Room. It cannot be locally bound.
 	SharedSlot model.ActorID
 	RoomID     string
-	Store      *store.JSONLStore
-	Runtimes   map[model.ActorID]model.RuntimeKind
-	Media      *attachment.Store
-	Now        func() time.Time
-	Lease      time.Duration
+	// Store is the Room's durable boundary; every append error stays fail-closed.
+	Store    Persistence
+	Runtimes map[model.ActorID]model.RuntimeKind
+	Media    *attachment.Store
+	Now      func() time.Time
+	Lease    time.Duration
 	// CommitBinding serializes global native identity ownership with the active
 	// Room writer. It must call appendFact exactly once or return an error.
 	CommitBinding func(Binding, func() error) error
@@ -104,7 +104,7 @@ type Engine struct {
 }
 
 func Open(cfg Config) (*Engine, error) {
-	if cfg.Store == nil || cfg.RoomID == "" {
+	if nilPersistence(cfg.Store) || cfg.RoomID == "" {
 		return nil, errors.New("native relay requires a published Room store")
 	}
 	if cfg.Now == nil {
@@ -208,6 +208,9 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 	ev.CreatedAt = e.cfg.Now()
 	e.derived = nil
 	if err := e.cfg.Store.Append(&ev); err != nil {
+		// Fail closed: a non-nil append error never establishes that no effect
+		// exists (the write may have landed), so the Room accepts no further
+		// writes until it is reopened and the durable facts are replayed.
 		e.fatal = err
 		e.signal()
 		return err
