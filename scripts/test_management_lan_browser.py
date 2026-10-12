@@ -12,7 +12,7 @@ from playwright.async_api import expect
 
 
 async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
-    from test_management_browser import fixture_html, load_csp_fixture, wait_fixture_state
+    from test_management_browser import assert_checkbox_row, fixture_html, load_csp_fixture, wait_fixture_state
 
     page = await browser.new_page(viewport={'width': 1440, 'height': 1000}, locale='en-US', reduced_motion='reduce')
     page.set_default_timeout(5000)
@@ -82,6 +82,10 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     await page.evaluate("location.hash='#/settings/lan'")
     await expect(page.locator('#lan-listen-address')).to_be_enabled()
     assert await page.evaluate('__lanWrites.length') == 0, 'opening LAN settings changed the listener'
+    for width in (1440, 390):
+        await page.set_viewport_size({'width': width, 'height': 1000})
+        await assert_checkbox_row(page, '#lan-listen-enabled')
+    await page.set_viewport_size({'width': 1440, 'height': 1000})
     await page.locator('#lan-listen-enabled').check()
     await page.locator('#lan-listen-address').fill('192.168.1.23:8877')
     await page.locator('#view .lan-settings-actions .primary-button').click()
@@ -92,6 +96,16 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     await page.get_by_role('button', name='+ Create Room', exact=True).first.click()
     await expect(page.locator('#room-submit')).to_be_enabled()
     await expect(page.locator('#room-host-mode')).to_have_value('native')
+    for theme in ('light', 'dark'):
+        for language in ('en', 'zh-CN'):
+            await page.evaluate('args=>{PairRoomTheme.setTheme(args[0]);PairRoomI18n.setLang(args[1]);}', [theme, language])
+            for width in (1440, 390):
+                await page.set_viewport_size({'width': width, 'height': 1000})
+                await assert_checkbox_row(page, '#room-share-lan')
+                assert not await page.locator('#room-dialog').evaluate('node=>node.scrollWidth>node.clientWidth'), f'LAN choice overflow at {theme}/{language}/{width}'
+                await page.screenshot(path=str(artifacts / f'management-create-lan-choice-{theme}-{language}-{width}.png'))
+    await page.evaluate("PairRoomTheme.setTheme('light');PairRoomI18n.setLang('en')")
+    await page.set_viewport_size({'width': 1440, 'height': 1000})
     setup = page.locator('#room-dialog .native-setup')
     await setup.locator('summary').click()
     await expect(setup.locator('code').filter(has_text='pairroom relay preflight --join')).to_be_visible()
@@ -192,4 +206,5 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
             'lan_receipt_explicit':True, 'lan_evidence_safe_download':True,
             'lan_publication_receipt_recovery':not in_page_fixture, 'lan_responsive':True,
             'lan_direct_client_setup':True, 'lan_membership_without_contact':True,
+            'lan_checkbox_geometry_theme_locale_viewport':True,
             'lan_pending_local_detach':True, 'lan_joined_human_attribution':True}
