@@ -4,6 +4,7 @@ These pages explain decisions and recorded implementation evidence. They do not 
 
 | Record | How to use it |
 |---|---|
+| [Enterprise Native service](enterprise-service.md) | Approved product direction and durable security/storage boundaries; implementation pending, with delivery evidence in PR #151 |
 | [Native host mode](native-host-mode.md) | Architecture rationale and acceptance boundaries; use current guides for setup and supported runtimes |
 | [Native efficiency boundaries](native-efficiency.md) | Dated external research, bounded-history tradeoffs, and limits on efficiency claims; not a fresh benchmark |
 | [Automatic wake](auto-wake.md) | Reservation, budget, and no-retry rationale; current limits are specified by Protocol |
