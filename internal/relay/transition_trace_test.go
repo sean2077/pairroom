@@ -19,11 +19,18 @@ import (
 //
 //   - "Publication acceptance and optional enqueue share one append."
 //   - A delivery claim is persisted before the envelope leaves the engine.
-//   - An acknowledgement appends its receipt fact only after stdout.
+//   - An acknowledgement appends its receipt fact and keeps the original
+//     identity.
 //   - Cancellation removes queued work only.
 //   - A recovered delivering claim keeps its original identity and receipt.
 //   - A stale-generation publication terminates with a body-free receipt and
 //     enqueues nothing for the successor.
+//
+// Scope: these traces speak about durable facts and engine state. They do not
+// prove stdout ordering; that boundary is covered by the real CLI tests
+// TestDeliveryAcknowledgesOnlyAfterCompleteStdout and
+// TestHookKeepsBlockDecisionWhenAcknowledgementIsUncertain in
+// internal/relayclient, which drive an actual collector process.
 //
 // Normalized facts keep only contract-owned fields, so a future backend can be
 // diffed against the same expectations instead of against engine internals.
