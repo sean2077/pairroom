@@ -23,6 +23,9 @@ func (e *Engine) noteLANActivityLocked(a Auth) {
 // receiving its private native session ID or transcript path. The local client
 // validates those details before this request. Inspect remains observational.
 func (e *Engine) ConfirmLAN(a Auth) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)

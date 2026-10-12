@@ -19,6 +19,9 @@ import (
 // anything is published. Removal touches only the attachment directory,
 // never the Event Log.
 func (e *Engine) ReclaimAttachments() (int, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return 0, err
+	}
 	if e.cfg.Media == nil {
 		return 0, nil
 	}

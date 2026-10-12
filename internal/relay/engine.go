@@ -101,6 +101,15 @@ type Engine struct {
 	// derived holds attention transitions applied by the current append only.
 	derived  []Attention
 	delivery *deliveryProjection
+	// enterprise wiring; zero on Local engines. The gate serializes whole
+	// enterprise commands (plan -> SQL -> apply/rebuild) and every legacy
+	// mutator is rejected at its entry when enterprise is set.
+	enterprise         bool
+	enterprisePort     EnterprisePort
+	enterpriseAuth     EnterpriseAuth
+	enterpriseSeq      uint64
+	enterpriseRevision uint64
+	gate               chan struct{}
 }
 
 func Open(cfg Config) (*Engine, error) {
@@ -198,6 +207,11 @@ func (e *Engine) Fatal() error {
 
 func (e *Engine) signal() { close(e.changed); e.changed = make(chan struct{}) }
 func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
+	if e.enterprise {
+		// Last line of defense only: every enterprise mutator is rejected at
+		// its entry; Local entries are rejected by requireLocalMutation.
+		return ErrEnterpriseReadOnly
+	}
 	if e.closed || e.fatal != nil {
 		return ErrClosed
 	}
@@ -474,6 +488,9 @@ func (e *Engine) commitBinding(b bindingFact) error {
 
 // Bind associates a slot. See BindReport for the replaced generation's work.
 func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	b, _, err := e.BindReport(slot, req)
 	return b, err
 }
@@ -520,6 +537,9 @@ type Replaced struct {
 // BindReport is Bind plus, for an explicit replacement of an active binding,
 // what happened to that binding's inbox. Idempotent recovery reports nothing.
 func (e *Engine) BindReport(slot model.ActorID, req BindRequest) (Binding, *Replaced, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var err error
@@ -663,6 +683,9 @@ func (e *Engine) Inspect(a Auth) (Binding, error) {
 // A match opportunistically records the transcript path, which the environment
 // does not carry, keeping `relay peer` references available.
 func (e *Engine) ConfirmSession(a Auth, sessionID, transcript string) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)
@@ -685,6 +708,9 @@ func (e *Engine) ConfirmSession(a Auth, sessionID, transcript string) (Binding, 
 	return b.Binding, nil
 }
 func (e *Engine) Unbind(slot model.ActorID) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -702,6 +728,9 @@ func (e *Engine) Unbind(slot model.ActorID) error {
 	return e.commitBinding(b)
 }
 func (e *Engine) Park(slot model.ActorID, enabled bool) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -768,6 +797,9 @@ func (e *Engine) makeMessage(from, to model.ActorID, text, source string) Messag
 	return m
 }
 func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration ...uint64) (Publication, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Publication{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -847,6 +879,9 @@ func (e *Engine) Publication(a Auth, seq uint64) (Publication, bool, error) {
 	return clonePublication(p), ok, nil
 }
 func (e *Engine) Send(a Auth, req SendRequest) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -865,6 +900,9 @@ func (e *Engine) Send(a Auth, req SendRequest) (Message, error) {
 	return m, err
 }
 func (e *Engine) SendUser(req SendRequest) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -879,25 +917,65 @@ func (e *Engine) SendUser(req SendRequest) (Message, error) {
 	return e.sendLocked(model.ActorUser, req.To, req, "user/"+req.ID)
 }
 func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string) (Message, error) {
-	if !validID(req.ID) {
-		return Message{}, errors.New("client message ID is required")
-	}
-	if err := validateBody(req.Text); err != nil {
+	if err := validateSendRequest(req); err != nil {
 		return Message{}, err
-	}
-	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
-		return Message{}, errors.New("message text or attachments required")
-	}
-	if req.Review != nil {
-		if err := req.Review.Validate(); err != nil {
-			return Message{}, err
-		}
 	}
 	original, retry := e.messages[e.sends[key]]
 	guardPeer := e.cfg.DynamicBindings && from.ValidParticipant() && to.ValidParticipant()
 	if guardPeer && !retry && (req.ExpectedPeerGeneration == 0 || req.ExpectedPeerGeneration != e.generation(to)) {
 		return Message{}, ErrPeerChanged
 	}
+	m := e.newSendCandidateLocked(from, to, req, guardPeer)
+	if len(req.AttachmentIDs) > 0 {
+		values, err := e.resolveSendAttachmentsLocked(req, original, retry)
+		if err != nil {
+			return Message{}, err
+		}
+		m.Attachments = values
+	}
+	if err := e.mergeQuoteAndLimitsLocked(&m, req); err != nil {
+		return Message{}, err
+	}
+	if retry {
+		if !sameMessagePayload(original, m) || guardPeer && original.TargetGeneration != req.ExpectedPeerGeneration {
+			return Message{}, ErrSendPayloadConflict
+		}
+		return cloneMessage(original), nil
+	}
+	if _, err := e.envelope(m); err != nil {
+		return Message{}, err
+	}
+	if err := e.append(EventMessage, from, messageFact{Message: m, ClientKey: key}); err != nil {
+		return Message{}, err
+	}
+	return cloneMessage(m), nil
+}
+
+// validateSendRequest performs the send admission checks in the Local flow's
+// original order; it is shared by sendLocked and the enterprise executor.
+func validateSendRequest(req SendRequest) error {
+	if !validID(req.ID) {
+		return errors.New("client message ID is required")
+	}
+	if err := validateBody(req.Text); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
+		return errors.New("message text or attachments required")
+	}
+	if req.Review != nil {
+		if err := req.Review.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// newSendCandidateLocked builds the candidate message for one send: identity
+// and routing state from makeMessage, the peer-generation stamp when guarded,
+// and the author/review provenance. It is pure — no cache reads, no append,
+// no notification — and shared by the Local path and the enterprise executor.
+func (e *Engine) newSendCandidateLocked(from, to model.ActorID, req SendRequest, guardPeer bool) Message {
 	m := e.makeMessage(from, to, req.Text, "send")
 	if guardPeer {
 		m.TargetGeneration = req.ExpectedPeerGeneration
@@ -907,32 +985,43 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 		v := *req.Review
 		m.Review = &v
 	}
-	if len(req.AttachmentIDs) > 0 {
-		var values []model.Attachment
-		var err error
-		if retry {
-			var resolve func(string) (model.Attachment, error)
-			if e.cfg.Media != nil {
-				resolve = func(id string) (model.Attachment, error) {
-					a, _, err := e.cfg.Media.Resolve(id)
-					return a, err
-				}
+	return m
+}
+
+// resolveSendAttachmentsLocked resolves the requested attachments: accepted
+// identities for a retry, fresh media-store resolution otherwise; the Local
+// flow's error classes are preserved verbatim.
+func (e *Engine) resolveSendAttachmentsLocked(req SendRequest, original Message, retry bool) ([]model.Attachment, error) {
+	var values []model.Attachment
+	var err error
+	if retry {
+		var resolve func(string) (model.Attachment, error)
+		if e.cfg.Media != nil {
+			resolve = func(id string) (model.Attachment, error) {
+				a, _, err := e.cfg.Media.Resolve(id)
+				return a, err
 			}
-			values, err = acceptedAttachments(original, req.AttachmentIDs, resolve)
-		} else if e.cfg.Media == nil {
-			return Message{}, errors.New("attachment store unavailable")
-		} else {
-			values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
 		}
-		if err != nil {
-			return Message{}, unavailableAttachment(err)
-		}
-		m.Attachments = values
+		values, err = acceptedAttachments(original, req.AttachmentIDs, resolve)
+	} else if e.cfg.Media == nil {
+		return nil, errors.New("attachment store unavailable")
+	} else {
+		values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
 	}
+	if err != nil {
+		return nil, unavailableAttachment(err)
+	}
+	return values, nil
+}
+
+// mergeQuoteAndLimitsLocked merges a quoted message's attachment identities
+// into the candidate and enforces the attachment limits; shared by the Local
+// path and the enterprise executor.
+func (e *Engine) mergeQuoteAndLimitsLocked(m *Message, req SendRequest) error {
 	if req.QuoteID != "" {
 		quote, ok := e.messages[req.QuoteID]
 		if !ok {
-			return Message{}, errors.New("quoted message is not in this Room")
+			return errors.New("quoted message is not in this Room")
 		}
 		m.Quote = &model.AgentQuote{FromHandle: e.handle(quote.From), Text: quote.Text}
 		// Like embedded quoted input, preserve image identity without recursively
@@ -949,30 +1038,21 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 		}
 	}
 	if len(m.Attachments) > attachment.MaxImagesPerMessage {
-		return Message{}, errors.New("too many message and quoted attachments")
+		return errors.New("too many message and quoted attachments")
 	}
 	var total int64
 	for _, a := range m.Attachments {
 		total += a.Size
 	}
 	if total > attachment.MaxTotalImageBytes {
-		return Message{}, errors.New("message and quoted attachments exceed total image limit")
+		return errors.New("message and quoted attachments exceed total image limit")
 	}
-	if retry {
-		if !sameMessagePayload(original, m) || guardPeer && original.TargetGeneration != req.ExpectedPeerGeneration {
-			return Message{}, ErrSendPayloadConflict
-		}
-		return cloneMessage(original), nil
-	}
-	if _, err := e.envelope(m); err != nil {
-		return Message{}, err
-	}
-	if err := e.append(EventMessage, from, messageFact{Message: m, ClientKey: key}); err != nil {
-		return Message{}, err
-	}
-	return cloneMessage(m), nil
+	return nil
 }
 func (e *Engine) Failure(a Auth, category string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -1037,6 +1117,9 @@ func (e *Engine) envelope(m Message) (string, error) {
 // A Stop park that releases no envelope is the Service's Turn-end observation:
 // the harness stops without a continuation.
 func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	observed := false
 	for {
 		e.mu.Lock()
@@ -1130,6 +1213,9 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 	}
 }
 func (e *Engine) Ack(a Auth, id, receipt string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Draining blocks new work, not receipts for already released envelopes.
@@ -1171,6 +1257,9 @@ func (e *Engine) Ack(a Auth, id, receipt string) error {
 	return e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt})
 }
 func (e *Engine) Cancel(id string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -1191,6 +1280,9 @@ func (e *Engine) Cancel(id string) error {
 	return e.append(EventMessage, model.ActorUser, messageFact{Message: m})
 }
 func (e *Engine) Retry(id string) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -1254,6 +1346,9 @@ func (e *Engine) reapLocked(all bool) error {
 	return nil
 }
 func (e *Engine) Reap() error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -1262,6 +1357,9 @@ func (e *Engine) Reap() error {
 	return e.reapLocked(false)
 }
 func (e *Engine) SetDraining(value bool) {
+	// Explicit enterprise semantics: draining is safe flow control — it gates
+	// new enterprise commands at enterpriseAdmitted and takes no gate, no
+	// durable work and no external effect.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.draining = value
@@ -1271,6 +1369,12 @@ func (e *Engine) SetDraining(value bool) {
 // TryBeginIdleClose checks delivery admission and closes it under the same
 // lock as Claim. Service wake/HTTP leases are serialized by the caller.
 func (e *Engine) TryBeginIdleClose() bool {
+	if e.enterprise {
+		// Enterprise Rooms never idle-close themselves: Room lifetime and the
+		// ownership lease belong to the deployment owner, and the Local close
+		// path reaps. CloseContext is the explicit enterprise shutdown.
+		return false
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.healthy() != nil || len(e.inFlight) > 0 {
@@ -1291,6 +1395,14 @@ func (e *Engine) Busy() bool {
 	return len(e.inFlight) != 0
 }
 func (e *Engine) Close() error {
+	if e.enterprise {
+		// Enterprise shutdown is the cancellable CloseContext under a bounded
+		// wrapper; a timed-out wait reports the error and does not claim the
+		// engine closed. The shared SQL store is never closed here.
+		ctx, cancel := context.WithTimeout(context.Background(), enterpriseCloseBudget)
+		defer cancel()
+		return e.CloseContext(ctx)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -1393,6 +1505,9 @@ func AuthenticateBindingEvent(ev model.Event, a Auth) error {
 	return nil
 }
 func (e *Engine) UnbindAs(a Auth) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, true)
@@ -1407,6 +1522,9 @@ func (e *Engine) UnbindAs(a Auth) error {
 	return e.commitBinding(b)
 }
 func (e *Engine) ParkAs(a Auth, enabled bool) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)

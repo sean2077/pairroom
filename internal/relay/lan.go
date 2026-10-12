@@ -212,6 +212,9 @@ func (e *Engine) appendLANBinding(b bindingFact) error {
 	return e.append(EventLANMember, model.ActorSystem, m)
 }
 func (e *Engine) CreateLANInvite(owner ...Auth) (LANInvite, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return LANInvite{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.authorizeLANOwnerLocked(owner); err != nil {
@@ -240,6 +243,9 @@ func (e *Engine) CreateLANInvite(owner ...Auth) (LANInvite, error) {
 	return v, e.append(EventLANInvite, model.ActorSystem, v)
 }
 func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return LANJoinRequest{}, "", err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.initLAN()
@@ -326,6 +332,9 @@ func (e *Engine) LANJoinStatus(requestID, key string) (LANJoinRequest, string, e
 	return j, e.joinStatusLocked(j), nil
 }
 func (e *Engine) AcceptLANJoin(requestID, key string, owner ...Auth) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.authorizeLANOwnerLocked(owner); err != nil {
@@ -371,6 +380,9 @@ func (e *Engine) AcceptLANJoin(requestID, key string, owner ...Auth) (Binding, e
 	return b, err
 }
 func (e *Engine) RevokeLANMember(owner ...Auth) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.authorizeLANOwnerLocked(owner); err != nil {
@@ -433,6 +445,9 @@ func (e *Engine) Runtimes() map[model.ActorID]model.RuntimeKind {
 // ClaimPrepared starts the delivery lease. It rechecks the same membership on
 // every wake and never returns a host-local attachment path or native session.
 func (e *Engine) PrepareHead(ctx context.Context, a Auth, park bool) (*Prepared, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	observed := false
 	for {
 		e.mu.Lock()
@@ -497,6 +512,9 @@ func (e *Engine) PrepareHead(ctx context.Context, a Auth, park bool) (*Prepared,
 	}
 }
 func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, park bool) (*StructuredClaim, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)
@@ -539,6 +557,9 @@ func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, p
 // SendLANUser scopes idempotency and provenance to the admitted remote owner.
 // Its authority is a human message in this Room, never host process control.
 func (e *Engine) SendLANUser(a Auth, req SendRequest) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {

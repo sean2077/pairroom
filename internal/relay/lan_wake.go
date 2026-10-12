@@ -27,6 +27,9 @@ func (e *Engine) LANWakeCandidate(a Auth, id string) (*WakeCandidate, error) {
 	return &c, nil
 }
 func (e *Engine) ReserveLANWake(a Auth, id string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -42,6 +45,9 @@ func (e *Engine) ReserveLANWake(a Auth, id string) error {
 	return e.append(EventWakeReserved, model.ActorSystem, WakeReservation{MessageID: id, Target: a.Slot})
 }
 func (e *Engine) RecordLANWake(a Auth, id, outcome, reason string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -79,6 +85,9 @@ func (e *Engine) RecordLANWake(a Auth, id, outcome, reason string) error {
 // AuthorizedLANEffect rechecks a certificate membership under the same lock
 // as a bounded storage effect. It must not call back into the Engine.
 func (e *Engine) AuthorizedLANEffect(a Auth, effect func() error) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {

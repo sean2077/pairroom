@@ -24,6 +24,9 @@ func (e *Engine) WakeEnabled() bool {
 // delivering/unknown deliveries must be reconciled first. The change is
 // idempotent and durable; replay restores the last recorded configuration.
 func (e *Engine) SetWakeEnabled(enabled bool) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -46,6 +49,9 @@ func (e *Engine) SetWakeEnabled(enabled bool) error {
 // A prior WakeCandidate is only an observation, not authorization to run a
 // vendor command after cancel/unbind/replace or collection has won the race.
 func (e *Engine) ReserveWake(messageID string, target model.ActorID) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -71,6 +77,9 @@ func (e *Engine) ReserveWake(messageID string, target model.ActorID) error {
 // rejected so vendor thread identity, message bodies, and command output can
 // never reach the Event Log through this surface.
 func (e *Engine) RecordWake(outcome, reason string, target model.ActorID) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -82,6 +91,9 @@ func (e *Engine) RecordWake(outcome, reason string, target model.ActorID) error 
 // RecordWakeAttempt completes only an already reserved effect. Drain rejects
 // new work, but must not discard an outcome known by its admitted worker.
 func (e *Engine) RecordWakeAttempt(messageID, outcome, reason string, target model.ActorID) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.available(); err != nil {
