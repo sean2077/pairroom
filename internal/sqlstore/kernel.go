@@ -21,9 +21,10 @@ const (
 	// reads. The kernel performs no effect retries; this is the only loop and
 	// it is classified.
 	discoveryRestartLimit = 3
-	// maxOperationBudget bounds every Commit and Resolve — including waiting
-	// for the work connection — even when the caller passes an unbounded
-	// context. The earlier of this budget and the caller's deadline applies.
+	// maxOperationBudget bounds every Commit, Resolve and ReadonlySnapshot —
+	// including waiting for the work connection — even when the caller passes
+	// an unbounded context. The earlier of this budget and the caller's
+	// deadline applies.
 	maxOperationBudget = 60 * time.Second
 	// openBudget bounds Open (and its ownership transaction) when the caller
 	// passes an unbounded context.
@@ -168,14 +169,14 @@ const (
 // readDependencies reads the command's authorization dependencies in the
 // documented global order (users, then room_members) with the requested lock
 // clause.
-func (s *Store) readDependencies(ctx context.Context, q rowQuerier, cmd Command, d *dependencyState, lock string) error {
-	err := q.QueryRow(ctx, `SELECT disabled FROM `+s.table("users")+` WHERE user_id = $1`+lock, cmd.Auth.UserID).Scan(&d.userDisabled)
+func (s *Store) readDependencies(ctx context.Context, q rowQuerier, roomID, userID string, d *dependencyState, lock string) error {
+	err := q.QueryRow(ctx, `SELECT disabled FROM `+s.table("users")+` WHERE user_id = $1`+lock, userID).Scan(&d.userDisabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.userMissing = true
 	} else if err != nil {
 		return err
 	}
-	err = q.QueryRow(ctx, `SELECT role, disabled FROM `+s.table("room_members")+` WHERE room_id = $1 AND user_id = $2`+lock, cmd.Key.RoomID, cmd.Auth.UserID).Scan(&d.memberRole, &d.memberDisabled)
+	err = q.QueryRow(ctx, `SELECT role, disabled FROM `+s.table("room_members")+` WHERE room_id = $1 AND user_id = $2`+lock, roomID, userID).Scan(&d.memberRole, &d.memberDisabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.memberMissing = true
 	} else if err != nil {
@@ -187,8 +188,8 @@ func (s *Store) readDependencies(ctx context.Context, q rowQuerier, cmd Command,
 // readRoom reads the Room consistency row — the sequence and revision truth —
 // with the requested lock clause, in the documented position after the
 // authorization rows.
-func (s *Store) readRoom(ctx context.Context, q rowQuerier, cmd Command, d *dependencyState, lock string) error {
-	err := q.QueryRow(ctx, `SELECT current_seq, revision FROM `+s.table("rooms")+` WHERE room_id = $1`+lock, cmd.Key.RoomID).Scan(&d.currentSeq, &d.revision)
+func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *dependencyState, lock string) error {
+	err := q.QueryRow(ctx, `SELECT current_seq, revision FROM `+s.table("rooms")+` WHERE room_id = $1`+lock, roomID).Scan(&d.currentSeq, &d.revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.roomMissing = true
 	} else if err != nil {
@@ -197,8 +198,19 @@ func (s *Store) readRoom(ctx context.Context, q rowQuerier, cmd Command, d *depe
 	return nil
 }
 
-// Commit runs the transaction state machine for one command and never mutates
-// or notifies anything outside the transaction it reports.
+// opPlan is the operation-specific half of the shared transaction state
+// machine: the append_fact and human_send entries each supply one, and the
+// machine below is the only transition implementation.
+type opPlan struct {
+	key              OpKey
+	userID           string
+	audit            AuditRecord
+	hash             [32]byte
+	expectedRevision uint64
+}
+
+// Commit runs the transaction state machine for one append_fact command and
+// never mutates or notifies anything outside the transaction it reports.
 func (s *Store) Commit(ctx context.Context, cmd Command) (Result, error) {
 	if class := validateCommand(cmd); class != "" {
 		return refused(class, nil)
@@ -206,6 +218,19 @@ func (s *Store) Commit(ctx context.Context, cmd Command) (Result, error) {
 	if cmd.Auth.Deployment != s.cfg.DeploymentID {
 		return refused(ClassInvalidRequest, nil)
 	}
+	plan := opPlan{
+		key:              cmd.Key,
+		userID:           cmd.Auth.UserID,
+		audit:            cmd.Mutation.Audit,
+		hash:             canonicalHash(cmd.Key, cmd.Mutation),
+		expectedRevision: cmd.ExpectedRevision,
+	}
+	return s.commitWithRestarts(ctx, plan, cmd.Mutation.Fact)
+}
+
+// commitWithRestarts serializes one operation and runs the bounded,
+// side-effect-free discovery restart loop.
+func (s *Store) commitWithRestarts(ctx context.Context, plan opPlan, fact model.Event) (Result, error) {
 	opCtx, release, err := s.beginOperation(ctx)
 	if err != nil {
 		return s.acquireFailure(ctx, err)
@@ -217,9 +242,8 @@ func (s *Store) Commit(ctx context.Context, cmd Command) (Result, error) {
 	if s.poisoned != nil {
 		return refused(ClassLeaseLost, s.poisoned)
 	}
-	hash := canonicalHash(cmd.Key, cmd.Mutation)
 	for restarts := 0; ; restarts++ {
-		result, err, restart := s.commitOnce(opCtx, cmd, hash)
+		result, err, restart := s.commitPlanned(opCtx, plan, fact)
 		if !restart {
 			return result, err
 		}
@@ -229,24 +253,25 @@ func (s *Store) Commit(ctx context.Context, cmd Command) (Result, error) {
 	}
 }
 
-// refused3 adapts the two-value refusal constructor to commitOnce's
+// refused3 adapts the two-value refusal constructor to commitPlanned's
 // three-value contract (no restart requested).
 func refused3(class string, cause error) (Result, error, bool) {
 	result, err := refused(class, cause)
 	return result, err, false
 }
 
-// commitOnce performs one discovery/lock/verify/commit attempt. The third
-// return requests a side-effect-free restart of the discovery phase.
-func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Result, error, bool) {
+// commitPlanned performs one discovery/lock/verify/commit attempt for one
+// operation plan. The third return requests a side-effect-free restart of the
+// discovery phase.
+func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event) (Result, error, bool) {
 	var discovered dependencyState
 	// No transaction of this operation has started while reading, so a failure
 	// here is a definite non-commit.
-	if err := s.readDependencies(ctx, s.work, cmd, &discovered, lockNone); err != nil {
+	if err := s.readDependencies(ctx, s.work, plan.key.RoomID, plan.userID, &discovered, lockNone); err != nil {
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
-	if err := s.readRoom(ctx, s.work, cmd, &discovered, lockNone); err != nil {
+	if err := s.readRoom(ctx, s.work, plan.key.RoomID, &discovered, lockNone); err != nil {
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
@@ -270,10 +295,10 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 		return s.postBeginFailure(ctx, err)
 	}
 	var locked dependencyState
-	if err := s.readDependencies(ctx, tx, cmd, &locked, lockShare); err != nil {
+	if err := s.readDependencies(ctx, tx, plan.key.RoomID, plan.userID, &locked, lockShare); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
-	if err := s.readRoom(ctx, tx, cmd, &locked, lockExclusive); err != nil {
+	if err := s.readRoom(ctx, tx, plan.key.RoomID, &locked, lockExclusive); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 
@@ -313,15 +338,15 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 	err = tx.QueryRow(ctx, `
 		SELECT intent_hash, result_seq, result_revision FROM `+s.table("operations")+`
 		 WHERE op_namespace = $1 AND deployment_id = $2 AND room_id = $3
-		   AND binding_id = '' AND generation = 0 AND op_kind = $4 AND identifier = $5 AND principal = $6`,
-		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
+		   AND binding_id = $4 AND generation = $5 AND op_kind = $6 AND identifier = $7 AND principal = $8`,
+		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
 	switch {
 	case err == nil:
-		if !bytes.Equal(storedHash, hash[:]) {
+		if !bytes.Equal(storedHash, plan.hash[:]) {
 			kerr := &KernelError{Outcome: OutcomeConflict, Class: ClassPayloadConflict}
 			return Result{Outcome: OutcomeConflict, Class: ClassPayloadConflict, Err: kerr, Revision: uint64(resultRevision)}, kerr, false
 		}
-		original, err := s.loadFact(ctx, tx, cmd.Key.RoomID, uint64(resultSeq))
+		original, err := s.loadFact(ctx, tx, plan.key.RoomID, uint64(resultSeq))
 		if err != nil {
 			return refused3(ClassStoredFactUnreadable, err)
 		}
@@ -335,7 +360,7 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 		return s.postBeginFailure(ctx, err)
 	}
 
-	// A new append additionally requires a writer role.
+	// A new operation additionally requires a writer role.
 	if !locked.writeAllowed() {
 		return refused3(ClassAuthorization, nil)
 	}
@@ -343,7 +368,7 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 	// Strict compare-and-swap against the locked revision. Zero is a legal
 	// initial revision; there is no bypass. A mismatch never appends the stale
 	// fact — the caller rebuilds its plan.
-	if cmd.ExpectedRevision != locked.revision {
+	if plan.expectedRevision != locked.revision {
 		kerr := &KernelError{Outcome: OutcomeRefused, Class: ClassRevisionConflict}
 		return Result{Outcome: OutcomeRefused, Class: ClassRevisionConflict, Err: kerr, Revision: locked.revision}, kerr, false
 	}
@@ -354,7 +379,7 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 		return refused3(ClassRangeExceeded, nil)
 	}
 
-	stored := cmd.Mutation.Fact
+	stored := fact
 	stored.Seq = locked.currentSeq + 1
 	encoding, err := json.Marshal(stored)
 	if err != nil || len(encoding) > maxEncodingBytes {
@@ -362,19 +387,19 @@ func (s *Store) commitOnce(ctx context.Context, cmd Command, hash [32]byte) (Res
 	}
 	now := time.Now().UTC()
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("room_events")+` (room_id, seq, event_id, fact_version, event_encoding, kind, actor, created_at, origin_user) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		cmd.Key.RoomID, int64(stored.Seq), stored.ID, factCodecVersion, encoding, stored.Kind, string(stored.Actor), stored.CreatedAt, cmd.Auth.UserID); err != nil {
+		plan.key.RoomID, int64(stored.Seq), stored.ID, factCodecVersion, encoding, stored.Kind, string(stored.Actor), stored.CreatedAt, plan.userID); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("operations")+` (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal, intent_hash, expected_revision, result_seq, result_revision, committed_at) VALUES ($1, $2, $3, '', 0, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal, hash[:], int64(cmd.ExpectedRevision), int64(stored.Seq), int64(locked.revision+1), now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("operations")+` (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal, intent_hash, expected_revision, result_seq, result_revision, committed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal, plan.hash[:], int64(plan.expectedRevision), int64(stored.Seq), int64(locked.revision+1), now); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("audit")+` (deployment_id, room_id, user_id, kind, outcome, detail, at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		cmd.Key.Deployment, cmd.Key.RoomID, cmd.Auth.UserID, cmd.Mutation.Audit.Kind, cmd.Mutation.Audit.Outcome, cmd.Mutation.Audit.Detail, now); err != nil {
+		plan.key.Deployment, plan.key.RoomID, plan.userID, plan.audit.Kind, plan.audit.Outcome, plan.audit.Detail, now); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE `+s.table("rooms")+` SET current_seq = $2, revision = $3 WHERE room_id = $1`,
-		cmd.Key.RoomID, int64(stored.Seq), int64(locked.revision+1)); err != nil {
+		plan.key.RoomID, int64(stored.Seq), int64(locked.revision+1)); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -444,9 +469,9 @@ func (s *Store) commitFailure(err error) (Result, error, bool) {
 	return result, err, false
 }
 
-// loadFact decodes the authoritative stored encoding and cross-checks the
-// index columns (event id, version, kind, actor, room, sequence) against it;
-// the index columns are a derived projection and are never the replay source.
+// loadFact decodes the authoritative stored encoding for one sequence and
+// cross-checks the index columns; the index columns are a derived projection
+// and are never the replay source.
 func (s *Store) loadFact(ctx context.Context, q rowQuerier, roomID string, seq uint64) (model.Event, error) {
 	var eventID, kind, actor string
 	var factVersion int
@@ -456,6 +481,13 @@ func (s *Store) loadFact(ctx context.Context, q rowQuerier, roomID string, seq u
 	if err != nil {
 		return model.Event{}, err
 	}
+	return decodeStoredFact(roomID, seq, eventID, factVersion, kind, actor, encoding)
+}
+
+// decodeStoredFact is the one stored-fact decoder: it validates the fact
+// codec version and the index-column/encoding agreement, so replay, resolution
+// and snapshots all read durable facts through the same checks.
+func decodeStoredFact(roomID string, seq uint64, eventID string, factVersion int, kind, actor string, encoding []byte) (model.Event, error) {
 	if factVersion != factCodecVersion {
 		return model.Event{}, fmt.Errorf("stored fact version %d is not supported by this build", factVersion)
 	}

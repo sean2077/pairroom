@@ -87,7 +87,7 @@ func newRawFixture(t *testing.T) *fixture {
 	for _, seed := range []string{
 		`INSERT INTO deployment (deployment_id, org_id) VALUES ('dep-test', 'org-test')`,
 		`INSERT INTO users (user_id) VALUES ('u-owner'), ('u-viewer')`,
-		`INSERT INTO rooms (room_id) VALUES ('room-1')`,
+		`INSERT INTO rooms (room_id, host_mode) VALUES ('room-1', 'native')`,
 		`INSERT INTO room_members (room_id, user_id, role) VALUES ('room-1', 'u-owner', 'owner'), ('room-1', 'u-viewer', 'viewer')`,
 	} {
 		if _, err := conn.Exec(ctx, seed); err != nil {

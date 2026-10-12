@@ -29,6 +29,7 @@ CREATE TABLE users (
 
 CREATE TABLE rooms (
   room_id     text PRIMARY KEY CHECK (room_id <> ''),
+  host_mode   text NOT NULL DEFAULT 'native' CHECK (host_mode = 'native'),
   current_seq bigint NOT NULL DEFAULT 0 CHECK (current_seq >= 0),
   revision    bigint NOT NULL DEFAULT 0 CHECK (revision >= 0)
 );
@@ -61,7 +62,7 @@ CREATE TABLE operations (
   room_id           text NOT NULL,
   binding_id        text NOT NULL DEFAULT '' CHECK (binding_id = ''),
   generation        bigint NOT NULL DEFAULT 0 CHECK (generation = 0),
-  op_kind           text NOT NULL CHECK (op_kind = 'append_fact'),
+  op_kind           text NOT NULL CHECK (op_kind IN ('append_fact', 'human_send')),
   identifier        text NOT NULL CHECK (identifier <> ''),
   principal         text NOT NULL CHECK (principal <> ''),
   intent_hash       bytea NOT NULL CHECK (octet_length(intent_hash) = 32),

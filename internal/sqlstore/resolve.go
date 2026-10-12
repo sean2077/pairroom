@@ -9,13 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Resolve verifies the final state of an operation under the same fence and
-// live authorization the commit path uses. It executes no effect and no
-// retry: any valid membership role — including a viewer — may recover its own
-// accepted operation, while a disabled or removed principal is refused before
-// any stored result is disclosed. When the commit signal was lost and the
-// work connection is unusable, Resolve may open one bounded replacement
-// connection for this read-only verification; it never commits on it.
+// Resolve verifies the final state of an append_fact operation under the same
+// fence and live authorization the commit path uses.
 func (s *Store) Resolve(ctx context.Context, auth AuthContext, key OpKey, mutation Mutation) (Result, error) {
 	cmd := Command{Auth: auth, Key: key, Mutation: mutation}
 	if class := validateCommand(cmd); class != "" {
@@ -24,6 +19,17 @@ func (s *Store) Resolve(ctx context.Context, auth AuthContext, key OpKey, mutati
 	if auth.Deployment != s.cfg.DeploymentID {
 		return refused(ClassInvalidRequest, nil)
 	}
+	plan := opPlan{key: key, userID: auth.UserID, hash: canonicalHash(key, mutation)}
+	return s.resolveWithFallback(ctx, plan)
+}
+
+// resolveWithFallback executes one read-only verification with the shared
+// semantics: no effect, no retry, and — when the commit signal was lost and
+// the work connection is unusable — one bounded replacement connection used
+// for verification only. Any valid membership role, including a viewer, may
+// recover its own accepted operation; a disabled or removed principal is
+// refused before any stored result is disclosed.
+func (s *Store) resolveWithFallback(ctx context.Context, plan opPlan) (Result, error) {
 	opCtx, release, err := s.beginOperation(ctx)
 	if err != nil {
 		return s.resolveEntryFailure(ctx, err)
@@ -35,8 +41,7 @@ func (s *Store) Resolve(ctx context.Context, auth AuthContext, key OpKey, mutati
 	if s.poisoned != nil {
 		return refused(ClassLeaseLost, s.poisoned)
 	}
-	hash := canonicalHash(key, mutation)
-	result, err := s.resolveOnce(opCtx, cmd, hash, s.work)
+	result, err := s.resolvePlanned(opCtx, plan, s.work)
 	if result.Outcome != OutcomeUnknown {
 		return result, err
 	}
@@ -51,7 +56,7 @@ func (s *Store) Resolve(ctx context.Context, auth AuthContext, key OpKey, mutati
 		defer cancel()
 		_ = replacement.Close(rctx)
 	}()
-	return s.resolveOnce(opCtx, cmd, hash, replacement)
+	return s.resolvePlanned(opCtx, plan, replacement)
 }
 
 // resolveEntryFailure classifies a Resolve that never started a check: nothing
@@ -85,10 +90,10 @@ func (s *Store) openVerificationConn(ctx context.Context) (*pgx.Conn, error) {
 	return conn, nil
 }
 
-// resolveOnce performs one read-only verification attempt on the given
+// resolvePlanned performs one read-only verification attempt on the given
 // connection. An incomplete check is unknown; a complete check that proves
 // absence is NotCommitted.
-func (s *Store) resolveOnce(ctx context.Context, cmd Command, hash [32]byte, conn *pgx.Conn) (Result, error) {
+func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn) (Result, error) {
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return resolveIncomplete(ctx, err)
@@ -113,10 +118,10 @@ func (s *Store) resolveOnce(ctx context.Context, cmd Command, hash [32]byte, con
 		return resolveIncomplete(ctx, err)
 	}
 	var locked dependencyState
-	if err := s.readDependencies(ctx, tx, cmd, &locked, lockShare); err != nil {
+	if err := s.readDependencies(ctx, tx, plan.key.RoomID, plan.userID, &locked, lockShare); err != nil {
 		return resolveIncomplete(ctx, err)
 	}
-	if err := s.readRoom(ctx, tx, cmd, &locked, lockShare); err != nil {
+	if err := s.readRoom(ctx, tx, plan.key.RoomID, &locked, lockShare); err != nil {
 		return resolveIncomplete(ctx, err)
 	}
 	if err := s.fenceHoldsLocked(ctx, tx, ownerEpoch, ownerPID, ownerStart); err != nil {
@@ -140,17 +145,17 @@ func (s *Store) resolveOnce(ctx context.Context, cmd Command, hash [32]byte, con
 	err = tx.QueryRow(ctx, `
 		SELECT intent_hash, result_seq, result_revision FROM `+s.table("operations")+`
 		 WHERE op_namespace = $1 AND deployment_id = $2 AND room_id = $3
-		   AND binding_id = '' AND generation = 0 AND op_kind = $4 AND identifier = $5 AND principal = $6`,
-		cmd.Key.Namespace, cmd.Key.Deployment, cmd.Key.RoomID, cmd.Key.OpKind, cmd.Key.Identifier, cmd.Key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
+		   AND binding_id = $4 AND generation = $5 AND op_kind = $6 AND identifier = $7 AND principal = $8`,
+		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
 	switch {
 	case err == nil:
-		if !bytes.Equal(storedHash, hash[:]) {
+		if !bytes.Equal(storedHash, plan.hash[:]) {
 			// The stored payload hash is authoritative; a differing mutation
 			// under the same key is a definite conflict.
 			kerr := &KernelError{Outcome: OutcomeConflict, Class: ClassPayloadConflict}
 			return Result{Outcome: OutcomeConflict, Class: ClassPayloadConflict, Err: kerr, Revision: uint64(resultRevision)}, kerr
 		}
-		original, err := s.loadFact(ctx, tx, cmd.Key.RoomID, uint64(resultSeq))
+		original, err := s.loadFact(ctx, tx, plan.key.RoomID, uint64(resultSeq))
 		if err != nil {
 			return resolveIncomplete(ctx, err)
 		}

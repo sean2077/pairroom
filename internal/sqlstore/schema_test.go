@@ -48,7 +48,9 @@ func TestOpenRefusesUnappliedSchemaAndWrongDeployment(t *testing.T) {
 	if _, err := Open(ctx, wrong); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("wrong deployment: %v", err)
 	}
-	if _, err := Open(ctx, cfg); err != nil {
+	if store, err := Open(ctx, cfg); err != nil {
 		t.Fatalf("matching deployment refused: %v", err)
+	} else if err := store.Close(); err != nil {
+		t.Fatalf("close matching store: %v", err)
 	}
 }
