@@ -40,7 +40,7 @@ func TestManagementCreatesImmutablePerRoomAgentSelections(t *testing.T) {
 		model.ActorSlot1: {Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), Model: "grok-custom-a", PermissionMode: "default"},
 		model.ActorSlot2: {Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), Model: "grok-custom-b", PermissionMode: "always-approve", Sandbox: "workspace"},
 	}
-	body, _ := json.Marshal(map[string]any{"name": "two grok slots", "bindings": specs(BindingNew, BindingNew, ""), "agents": agents})
+	body, _ := json.Marshal(map[string]any{"host_mode": "embedded", "name": "two grok slots", "bindings": specs(BindingNew, BindingNew, ""), "agents": agents})
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", string(body), true))
 	if response.Code != http.StatusCreated {
@@ -66,14 +66,14 @@ func TestManagementCreatesImmutablePerRoomAgentSelections(t *testing.T) {
 		t.Fatalf("replayed Room = %#v ok=%v", replayed, ok)
 	}
 
-	partial, _ := json.Marshal(map[string]any{"name": "partial", "bindings": specs(BindingNew, BindingNew, ""), "agents": map[model.ActorID]model.AgentSelection{model.ActorSlot1: agents[model.ActorSlot1]}})
+	partial, _ := json.Marshal(map[string]any{"host_mode": "embedded", "name": "partial", "bindings": specs(BindingNew, BindingNew, ""), "agents": map[model.ActorID]model.AgentSelection{model.ActorSlot1: agents[model.ActorSlot1]}})
 	rejected := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rejected, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", string(partial), true))
 	if rejected.Code != http.StatusBadRequest {
 		t.Fatalf("partial status=%d body=%s", rejected.Code, rejected.Body.String())
 	}
 	empty := httptest.NewRecorder()
-	server.Handler().ServeHTTP(empty, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"name":"empty agents","bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}},"agents":{}}`, true))
+	server.Handler().ServeHTTP(empty, managementRequest(http.MethodPost, "/api/v1/projects/"+project.ID+"/rooms", `{"host_mode":"embedded","name":"empty agents","bindings":{"slot1":{"mode":"new"},"slot2":{"mode":"new"}},"agents":{}}`, true))
 	if empty.Code != http.StatusBadRequest {
 		t.Fatalf("empty agents status=%d body=%s", empty.Code, empty.Body.String())
 	}

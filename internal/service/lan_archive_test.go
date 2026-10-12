@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	"github.com/sean2077/pairroom/internal/lanshare"
+	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/protocol"
+	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/relayclient"
 )
 
@@ -17,6 +20,13 @@ func TestLANArchiveUnavailableProjectDoesNotRestoreGuestAdmission(t *testing.T) 
 	client, pending, _ := f.join(t)
 	f.accept(t, client, pending)
 	ctx := context.Background()
+	if _, err := f.native.engine.Bind(model.ActorSlot1, relay.BindRequest{Runtime: model.RuntimeGrok, BindID: "replacement-owner", SessionID: "replacement-owner-session", CredentialHash: relay.Digest("replacement-owner-secret"), Replace: true}); err != nil {
+		t.Fatal(err)
+	}
+	var publication relay.Publication
+	if err := lanshare.Call(ctx, client, f.invite, "report", map[string]any{"report_seq": 1, "text": "@agent1 reply for the previous owner", "expected_peer_generation": 1}, &publication); err != nil || publication.Outcome != relay.PeerChangedCode || publication.Message != nil {
+		t.Fatalf("fixture did not persist a v9 stale-peer receipt: %+v %v", publication, err)
+	}
 	if err := f.management.runtimes.Suspend(ctx, f.room.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +66,13 @@ func TestLANArchiveUnavailableProjectDoesNotRestoreGuestAdmission(t *testing.T) 
 	var old lanshare.JoinResponse
 	if err := lanshare.Call(ctx, client, f.invite, "join-status", lanshare.JoinStatusRequest{RequestID: "remote-request"}, &old); err != nil || old.Status != "revoked" {
 		t.Fatalf("archive did not durably revoke the old admission: %+v %v", old, err)
+	}
+	native, err := f.management.sharedNativeRuntime(ctx, f.room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if native.engine.ProtocolVersion() != protocol.NativeDynamicVersion {
+		t.Fatal("offline archive or restore downgraded a dynamic Native Room")
 	}
 }
 

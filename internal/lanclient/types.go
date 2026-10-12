@@ -47,47 +47,52 @@ type JoinOptions struct {
 }
 
 type JoinResult struct {
-	ID             string         `json:"room_id"`
-	Status         string         `json:"status"`
-	Receipt        string         `json:"receipt"`
-	Binding        *relay.Binding `json:"binding,omitempty"`
-	Bootstrap      string         `json:"bootstrap,omitempty"`
-	Collaboration  string         `json:"collaboration,omitempty"`
-	PreviousBindID string         `json:"previous_bind_id,omitempty"`
+	DynamicBindings bool           `json:"dynamic_bindings,omitempty"`
+	PeerGeneration  uint64         `json:"peer_generation,omitempty"`
+	ID              string         `json:"room_id"`
+	Status          string         `json:"status"`
+	Receipt         string         `json:"receipt"`
+	Binding         *relay.Binding `json:"binding,omitempty"`
+	Bootstrap       string         `json:"bootstrap,omitempty"`
+	Collaboration   string         `json:"collaboration,omitempty"`
+	PreviousBindID  string         `json:"previous_bind_id,omitempty"`
 }
 
 // Metadata is private local binding information for CLI routing and optional
 // local observers. It contains no TLS key or local credential digest. Never
 // serialize it into a remote request or a public Management projection.
 type Metadata struct {
-	ID             string
-	Invite         lanshare.Invite
-	Workspace      string
-	Runtime        model.RuntimeKind
-	SessionID      string
-	BindID         string
-	Generation     uint64
-	Slot           model.ActorID
-	Status         string
-	Binding        relay.Binding
-	PreviousBindID string
+	DynamicBindings bool
+	PeerGeneration  uint64
+	ID              string
+	Invite          lanshare.Invite
+	Workspace       string
+	Runtime         model.RuntimeKind
+	SessionID       string
+	BindID          string
+	Generation      uint64
+	Slot            model.ActorID
+	Status          string
+	Binding         relay.Binding
+	PreviousBindID  string
 }
 
 // Snapshot is the optional local UI projection. Native session identity,
 // transcript paths, local credentials and original receipts are private.
 type Snapshot struct {
-	ID           string            `json:"id"`
-	RemoteRoomID string            `json:"remote_room_id"`
-	Name         string            `json:"name"`
-	Workspace    string            `json:"workspace"`
-	Slot         model.ActorID     `json:"slot,omitempty"`
-	Runtime      model.RuntimeKind `json:"runtime"`
-	Status       string            `json:"status"`
-	Connected    bool              `json:"connected"`
-	LastSeen     time.Time         `json:"last_seen,omitempty"`
-	HostPin      string            `json:"host_pin"`
-	Endpoint     string            `json:"endpoint"`
-	Generation   uint64            `json:"generation,omitempty"`
+	DynamicBindings bool              `json:"dynamic_bindings,omitempty"`
+	ID              string            `json:"id"`
+	RemoteRoomID    string            `json:"remote_room_id"`
+	Name            string            `json:"name"`
+	Workspace       string            `json:"workspace"`
+	Slot            model.ActorID     `json:"slot,omitempty"`
+	Runtime         model.RuntimeKind `json:"runtime"`
+	Status          string            `json:"status"`
+	Connected       bool              `json:"connected"`
+	LastSeen        time.Time         `json:"last_seen,omitempty"`
+	HostPin         string            `json:"host_pin"`
+	Endpoint        string            `json:"endpoint"`
+	Generation      uint64            `json:"generation,omitempty"`
 	// OwnerKey is this client's own public certificate fingerprint (the key the
 	// host admits and prefixes with "lan:" on this member's human messages). A
 	// joined view needs it to attribute its own human without mislabeling them

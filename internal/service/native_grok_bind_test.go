@@ -58,7 +58,7 @@ func TestGrokHookConfirmsBoundIdentityWithoutImplicitAssociation(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeCodex)
 	a := bindGrok(t, f, model.ActorSlot1)
 	before := f.native.engine.Snapshot()
-	input := map[string]any{"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": "different-session", "cwd": f.project.Root, "workspaceRoot": f.project.Root, "reason": "end_turn", "lastAssistantMessage": "@codex must not publish"}
+	input := map[string]any{"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": "different-session", "cwd": f.project.Root, "workspaceRoot": f.project.Root, "reason": "end_turn", "lastAssistantMessage": "@agent2 must not publish"}
 	out, err := f.runAs(t, model.RuntimeGrok, a.SessionID, []string{"hook", "--runtime", "grok"}, input)
 	if err == nil || !strings.Contains(err.Error(), "different session identity") || len(out) != 0 || !reflect.DeepEqual(before, f.native.engine.Snapshot()) {
 		t.Fatalf("Grok identity mismatch did not fail without effects: %s %v", out, err)
@@ -80,7 +80,7 @@ func TestGrokCreateWithoutSessionHasNoLocalOrDurableEffects(t *testing.T) {
 	if _, err := f.run(t, []string{"install", "--runtime", "grok"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	out, err := f.run(t, []string{"bind", "--create", "--runtime", "grok", "--peer-runtime", "codex", "--service-file", f.endpoint}, nil)
+	out, err := f.run(t, []string{"bind", "--create", "--runtime", "grok", "--service-file", f.endpoint}, nil)
 	if err == nil || !strings.Contains(err.Error(), "GROK_SESSION_ID is missing") || len(out) != 0 || !reflect.DeepEqual(before.Rooms, f.registry.Snapshot(true).Rooms) {
 		t.Fatalf("identity-free Grok create had effects: %s %v", out, err)
 	}
@@ -92,7 +92,7 @@ func TestGrokCreateWithoutSessionHasNoLocalOrDurableEffects(t *testing.T) {
 func TestGrokRejectedReplacePreservesCommittedBinding(t *testing.T) {
 	f := grokNativeHTTP(t, model.RuntimeCodex)
 	a := bindGrok(t, f, model.ActorSlot1)
-	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "other Grok", HostMode: model.HostNative, Agents: f.room.Agents}, SyntheticProvisioner{})
+	other, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: f.project.ID, Name: "other Grok", HostMode: model.HostNative}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,9 @@ import (
 )
 
 type Config struct {
+	// DynamicBindings selects the Native v9 binding-time Runtime contract.
+	// The provisioned Room fixes it; legacy Native Rooms keep their selections.
+	DynamicBindings bool
 	// SharedSlot is the remote participant of a Native LAN Room. It cannot be locally bound.
 	SharedSlot model.ActorID
 	RoomID     string
@@ -110,6 +113,7 @@ func Open(cfg Config) (*Engine, error) {
 	if cfg.Lease <= 0 {
 		cfg.Lease = DeliveryLease
 	}
+	initializeDynamicRuntimes(&cfg)
 	e := &Engine{cfg: cfg, bindings: map[model.ActorID]bindingFact{}, seenBinds: map[string]bool{}, messages: map[string]Message{}, inFlight: map[string]struct{}{}, sends: map[string]string{}, reports: map[string]Publication{}, lastReport: map[string]uint64{}, changed: make(chan struct{}), wakeEnabled: true, wakeReserved: map[string]bool{}, waiters: map[model.ActorID]int{}}
 	events, err := cfg.Store.Load()
 	if err != nil {
@@ -257,6 +261,9 @@ func (e *Engine) apply(ev model.Event) error {
 		if !validID(fact.ID) || !validMessageState(fact.State) {
 			return errors.New("invalid native message fact")
 		}
+		if err := e.validateDynamicMessage(fact.Message); err != nil {
+			return err
+		}
 		fact.Message.Receipt = fact.Receipt
 		e.putMessage(fact.Message)
 		e.observeWakeHandoffLocked(fact.Message)
@@ -270,6 +277,23 @@ func (e *Engine) apply(ev model.Event) error {
 		}
 		if p.ReportSeq == 0 || p.Generation == 0 || !validID(p.BindID) {
 			return errors.New("invalid native publication fact")
+		}
+		if p.Outcome != "" && (!e.cfg.DynamicBindings || p.Outcome != PeerChangedCode || p.Message != nil) {
+			return errors.New("invalid native publication outcome")
+		}
+		if e.cfg.DynamicBindings {
+			b := e.bindings[ev.Actor]
+			if !b.Active || b.BindID != p.BindID || b.Generation != p.Generation {
+				return errors.New("publication does not match its active Native binding")
+			}
+			if p.Message != nil {
+				if p.Message.From != ev.Actor || p.Message.FromGeneration != p.Generation || p.Message.To.ValidParticipant() && p.Message.TargetGeneration != p.ExpectedPeerGeneration {
+					return errors.New("publication source or target generation changed")
+				}
+				if err := e.validateDynamicMessage(*p.Message); err != nil {
+					return err
+				}
+			}
 		}
 		e.reports[reportKey(p.BindID, p.Generation, p.ReportSeq)] = p
 		e.lastReport[bindingKey(p.BindID, p.Generation)] = p.ReportSeq
@@ -378,6 +402,9 @@ func (e *Engine) applyBinding(ev model.Event, b bindingFact) error {
 	if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
 		return errors.New("native binding generation regressed")
 	}
+	if err := e.validateDynamicBinding(b, old); err != nil {
+		return err
+	}
 	if !b.Active || b.Generation != old.Generation || b.SessionID != old.SessionID {
 		// A replaced, unbound or re-associated session cannot consume a
 		// nudge queued for its predecessor, nor end its Turn.
@@ -385,6 +412,12 @@ func (e *Engine) applyBinding(ev model.Event, b bindingFact) error {
 		delete(e.turnEnded, b.Slot)
 	}
 	e.bindings[b.Slot] = b
+	if e.cfg.DynamicBindings {
+		e.cfg.Runtimes[b.Slot] = vacantRuntime(b.Slot, e.cfg.SharedSlot)
+		if b.Active {
+			e.cfg.Runtimes[b.Slot] = b.Runtime
+		}
+	}
 	e.seenBinds[b.BindID] = true
 	// Revocation is atomic with invalidating old-generation inbox work. Work
 	// already handed off cannot be undone, nor does an empty inbox prove idle.
@@ -486,6 +519,11 @@ type Replaced struct {
 func (e *Engine) BindReport(slot model.ActorID, req BindRequest) (Binding, *Replaced, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	var err error
+	slot, err = e.resolveBindSlotLocked(slot, req)
+	if err != nil {
+		return Binding{}, nil, err
+	}
 	old := e.bindings[slot]
 	r := &Replaced{Generation: old.Generation, ScanComplete: true}
 	// Classify the current work set before this bind invalidates it; it is
@@ -538,11 +576,18 @@ func (e *Engine) bindLocked(slot model.ActorID, req BindRequest) (Binding, error
 	if !slot.ValidParticipant() || !validID(req.BindID) || !validHash(req.CredentialHash) || !validID(req.SessionID) {
 		return Binding{}, errors.New("invalid binding request")
 	}
+	if e.cfg.DynamicBindings {
+		if !req.Runtime.Valid() {
+			return Binding{}, errors.New("dynamic Native binding requires its actual runtime")
+		}
+	} else if req.Runtime != "" && (!req.Runtime.Valid() || req.Runtime.Canonical() != e.cfg.Runtimes[slot].Canonical()) {
+		return Binding{}, errors.New("calling runtime does not match this legacy Native slot")
+	}
 	old := e.bindings[slot]
 	if old.Active {
 		// Recovery of an in-flight bind is idempotent without consuming another
 		// generation. The same session must identify itself identically.
-		if old.BindID == req.BindID && same(old.CredentialHash, req.CredentialHash) && old.SessionID == req.SessionID {
+		if old.BindID == req.BindID && same(old.CredentialHash, req.CredentialHash) && old.SessionID == req.SessionID && (!e.cfg.DynamicBindings || old.Runtime == req.Runtime.Canonical()) {
 			return old.Binding, nil
 		}
 		if !req.Replace {
@@ -553,6 +598,12 @@ func (e *Engine) bindLocked(slot model.ActorID, req BindRequest) (Binding, error
 		return Binding{}, errors.New("revoked bind ID cannot be reused")
 	}
 	b := bindingFact{Binding: Binding{Slot: slot, BindID: req.BindID, Generation: old.Generation + 1, Active: true, ParkEnabled: true, LastActivity: e.cfg.Now(), SessionID: req.SessionID}, CredentialHash: req.CredentialHash}
+	if e.cfg.DynamicBindings {
+		b.Runtime = req.Runtime.Canonical()
+		if err := e.validateDynamicBinding(b, old); err != nil {
+			return Binding{}, err
+		}
+	}
 	if err := e.commitBinding(b); err != nil {
 		return Binding{}, err
 	}
@@ -571,6 +622,9 @@ func (e *Engine) authenticate(a Auth, pending bool) (bindingFact, error) {
 	}
 	b, ok := e.bindings[a.Slot]
 	if !ok || !b.Active || a.BindID != b.BindID || a.Generation != b.Generation {
+		return bindingFact{}, ErrAuth
+	}
+	if (e.cfg.DynamicBindings || a.Runtime != "") && (!a.Runtime.Valid() || a.Runtime.Canonical() != e.bindingRuntimeLocked(a.Slot)) {
 		return bindingFact{}, ErrAuth
 	}
 	if b.RemoteKey != "" {
@@ -675,7 +729,11 @@ func (e *Engine) Peer(a Auth) (Binding, error) {
 	if _, err := e.auth(a, false); err != nil {
 		return Binding{}, err
 	}
-	return e.bindings[model.OtherParticipant(a.Slot)].Binding, nil
+	slot := model.OtherParticipant(a.Slot)
+	peer := e.bindings[slot].Binding
+	peer.Slot = slot
+	peer.Runtime = e.cfg.Runtimes[slot].Canonical()
+	return peer, nil
 }
 
 func validateBody(text string) error {
@@ -700,9 +758,13 @@ func (e *Engine) makeMessage(from, to model.ActorID, text, source string) Messag
 	} else {
 		generation = e.generation(to)
 	}
-	return Message{ID: model.NewID("relay"), From: from, To: to, Text: text, State: state, TargetGeneration: generation, CreatedAt: now, UpdatedAt: now, Source: source}
+	m := Message{ID: model.NewID("relay"), From: from, To: to, Text: text, State: state, TargetGeneration: generation, CreatedAt: now, UpdatedAt: now, Source: source}
+	if e.cfg.DynamicBindings && from.ValidParticipant() {
+		m.FromRuntime, m.FromGeneration = e.bindings[from].Runtime, e.bindings[from].Generation
+	}
+	return m
 }
-func (e *Engine) Report(a Auth, seq uint64, text string) (Publication, error) {
+func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration ...uint64) (Publication, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -719,12 +781,25 @@ func (e *Engine) Report(a Auth, seq uint64, text string) (Publication, error) {
 		e.noteLANActivityLocked(a)
 		return clonePublication(existing), nil
 	}
+	// An already accepted report is recovered by its own receipt above, so this
+	// guard never blocks idempotent recovery. A new report must name at most one
+	// expected peer generation: any other arity would be silently treated as "no
+	// expectation" and terminate as peer_changed without reaching a peer.
+	if len(expectedPeerGeneration) > 1 {
+		return Publication{}, errors.New("report accepts at most one expected peer generation")
+	}
 	last := e.lastReport[bindingKey(a.BindID, a.Generation)]
 	if seq <= last {
 		return Publication{}, errors.New("report_seq regressed; reconcile the original publication")
 	}
 	p := Publication{BindID: a.BindID, Generation: a.Generation, ReportSeq: seq}
 	parsed := prompt.ParseMentions(text, a.Slot, e.cfg.Runtimes)
+	if e.cfg.DynamicBindings {
+		if len(expectedPeerGeneration) == 1 {
+			p.ExpectedPeerGeneration = expectedPeerGeneration[0]
+		}
+		parsed = prompt.ParseNativeMentions(text, a.Slot)
+	}
 	var to model.ActorID
 	if len(parsed.Targets) > 0 {
 		to = model.OtherParticipant(a.Slot)
@@ -732,8 +807,18 @@ func (e *Engine) Report(a Auth, seq uint64, text string) (Publication, error) {
 		to = model.ActorUser
 	}
 	if to != "" {
-		m := e.makeMessage(a.Slot, to, text, "stop")
-		p.Message = &m
+		if e.cfg.DynamicBindings && to.ValidParticipant() {
+			if p.ExpectedPeerGeneration == 0 || p.ExpectedPeerGeneration != e.generation(to) {
+				p.Outcome = PeerChangedCode
+			}
+		}
+		if p.Outcome == "" {
+			m := e.makeMessage(a.Slot, to, text, "stop")
+			if e.cfg.DynamicBindings && to.ValidParticipant() {
+				m.TargetGeneration = p.ExpectedPeerGeneration
+			}
+			p.Message = &m
+		}
 	}
 	kind := EventPublication
 	if seq > last+1 {
@@ -806,7 +891,14 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 		}
 	}
 	original, retry := e.messages[e.sends[key]]
+	guardPeer := e.cfg.DynamicBindings && from.ValidParticipant() && to.ValidParticipant()
+	if guardPeer && !retry && (req.ExpectedPeerGeneration == 0 || req.ExpectedPeerGeneration != e.generation(to)) {
+		return Message{}, ErrPeerChanged
+	}
 	m := e.makeMessage(from, to, req.Text, "send")
+	if guardPeer {
+		m.TargetGeneration = req.ExpectedPeerGeneration
+	}
 	m.Author = req.author
 	if req.Review != nil {
 		v := *req.Review
@@ -864,7 +956,7 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 		return Message{}, errors.New("message and quoted attachments exceed total image limit")
 	}
 	if retry {
-		if !sameMessagePayload(original, m) {
+		if !sameMessagePayload(original, m) || guardPeer && original.TargetGeneration != req.ExpectedPeerGeneration {
 			return Message{}, ErrSendPayloadConflict
 		}
 		return cloneMessage(original), nil
@@ -898,10 +990,18 @@ func (e *Engine) handle(actor model.ActorID) string {
 	if actor == model.ActorUser {
 		return "@user"
 	}
+	if e.cfg.DynamicBindings {
+		return model.NativeParticipantIdentityFor(actor).MentionHandle
+	}
 	return model.ParticipantIdentities(e.cfg.Runtimes)[actor].MentionHandle
 }
 func (e *Engine) envelope(m Message) (string, error) {
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: e.handle(m.From), Text: m.Text, Quote: m.Quote}
+	if e.cfg.DynamicBindings {
+		input.FromRuntime, input.FromGeneration = m.FromRuntime, m.FromGeneration
+		input.PeerHandle = e.handle(model.OtherParticipant(m.To))
+		input.PeerGeneration = e.peerGenerationLocked(m.To)
+	}
 	if m.From == model.ActorUser && m.Author != "" {
 		if strings.HasPrefix(m.Author, "lan:") {
 			input.FromHandle = protocol.RemoteRoomOwnerHandle
@@ -993,7 +1093,7 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 				e.mu.Unlock()
 				return nil, err
 			}
-			result := &Claim{ID: next.ID, Receipt: receipt, Envelope: envelope}
+			result := &Claim{ID: next.ID, Receipt: receipt, Envelope: envelope, PeerGeneration: e.peerGenerationLocked(a.Slot)}
 			e.mu.Unlock()
 			return result, nil
 		}
@@ -1100,6 +1200,9 @@ func (e *Engine) Retry(id string) (Message, error) {
 	if !ok || old.State != "unknown" {
 		return Message{}, errors.New("only unknown messages can be explicitly retried")
 	}
+	if e.cfg.DynamicBindings && old.To.ValidParticipant() && old.TargetGeneration != e.generation(old.To) {
+		return Message{}, ErrPeerChanged
+	}
 	for _, key := range e.unresolved {
 		m := e.messages[key]
 		if m.RetryOf == id && (m.State == "queued" || m.State == "delivering") {
@@ -1107,6 +1210,9 @@ func (e *Engine) Retry(id string) (Message, error) {
 		}
 	}
 	m := e.makeMessage(old.From, old.To, old.Text, "retry")
+	if e.cfg.DynamicBindings {
+		m.FromRuntime, m.FromGeneration, m.TargetGeneration = old.FromRuntime, old.FromGeneration, old.TargetGeneration
+	}
 	// Retry publishes for the original author: dropping the authenticated
 	// human-author provenance would downgrade the envelope's @user handle and
 	// its shared-Room permissions notice.
@@ -1273,6 +1379,9 @@ func AuthenticateBindingEvent(ev model.Event, a Auth) error {
 		return ErrAuth
 	}
 	if !fact.Active || fact.Slot != a.Slot || fact.BindID != a.BindID || fact.Generation != a.Generation || !same(Digest(a.Secret), fact.CredentialHash) {
+		return ErrAuth
+	}
+	if fact.Runtime != "" && (!a.Runtime.Valid() || a.Runtime.Canonical() != fact.Runtime) {
 		return ErrAuth
 	}
 	if fact.SessionID != "" && fact.SessionID != a.SessionID {

@@ -365,15 +365,10 @@ func TestRemoveAssociatedNativeRoomDoesNotRequireAdapterBindingIndex(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	agents := defaultAgentSelections()
-	agents[model.ActorSlot2] = model.AgentSelection{
-		Runtime: model.RuntimeGrok, Provider: model.NativeProviderRef(), PermissionMode: "yolo",
-	}
 	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{
 		ProjectID: project.ID,
 		Name:      "测试 cc+grok native 模式",
 		HostMode:  model.HostNative,
-		Agents:    agents,
 	}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)

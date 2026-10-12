@@ -27,12 +27,12 @@ func TestNativeInspectionHistoryPendingReceiptAndDiagnosticHTTP(t *testing.T) {
 	f := nativeHTTP(t)
 	a := f.bind(t, "slot1")
 	f.bind(t, "slot2")
-	first, err := f.native.engine.Send(a, relay.SendRequest{ID: "old", Text: "private long task"})
+	first, err := f.native.engine.Send(a, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "old", Text: "private long task"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 301; i++ {
-		if _, err = f.native.engine.Send(a, relay.SendRequest{ID: fmt.Sprint(i), Text: "human report", To: model.ActorUser}); err != nil {
+		if _, err = f.native.engine.Send(a, relay.SendRequest{ExpectedPeerGeneration: 1, ID: fmt.Sprint(i), Text: "human report", To: model.ActorUser}); err != nil {
 			t.Fatal(err)
 		}
 	}

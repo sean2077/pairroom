@@ -16,24 +16,25 @@ import (
 )
 
 type relayRequest struct {
-	Review         *review.Anchor `json:"review,omitempty"`
-	Cursor         string         `json:"cursor,omitempty"`
-	Limit          int            `json:"limit,omitempty"`
-	Pending        bool           `json:"pending,omitempty"`
-	Since          time.Time      `json:"since,omitempty"`
-	SessionID      string         `json:"session_id,omitempty"`
-	TranscriptPath string         `json:"transcript_path,omitempty"`
-	ReportSeq      uint64         `json:"report_seq,omitempty"`
-	Text           string         `json:"text,omitempty"`
-	ID             string         `json:"id,omitempty"`
-	Receipt        string         `json:"receipt,omitempty"`
-	To             model.ActorID  `json:"to,omitempty"`
-	AttachmentIDs  []string       `json:"attachment_ids,omitempty"`
-	QuoteID        string         `json:"quote_id,omitempty"`
-	Park           bool           `json:"park,omitempty"`
-	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
-	Enabled        bool           `json:"enabled,omitempty"`
-	Error          string         `json:"error,omitempty"`
+	ExpectedPeerGeneration uint64         `json:"expected_peer_generation,omitempty"`
+	Review                 *review.Anchor `json:"review,omitempty"`
+	Cursor                 string         `json:"cursor,omitempty"`
+	Limit                  int            `json:"limit,omitempty"`
+	Pending                bool           `json:"pending,omitempty"`
+	Since                  time.Time      `json:"since,omitempty"`
+	SessionID              string         `json:"session_id,omitempty"`
+	TranscriptPath         string         `json:"transcript_path,omitempty"`
+	ReportSeq              uint64         `json:"report_seq,omitempty"`
+	Text                   string         `json:"text,omitempty"`
+	ID                     string         `json:"id,omitempty"`
+	Receipt                string         `json:"receipt,omitempty"`
+	To                     model.ActorID  `json:"to,omitempty"`
+	AttachmentIDs          []string       `json:"attachment_ids,omitempty"`
+	QuoteID                string         `json:"quote_id,omitempty"`
+	Park                   bool           `json:"park,omitempty"`
+	TimeoutSeconds         int            `json:"timeout_seconds,omitempty"`
+	Enabled                bool           `json:"enabled,omitempty"`
+	Error                  string         `json:"error,omitempty"`
 }
 
 type publicationReceipt struct {
@@ -107,13 +108,14 @@ func (c *Client) Relay(ctx context.Context, auth relay.Auth, action string, payl
 		}
 		return assignResult(result, value)
 	case "send":
-		remotePayload = relay.SendRequest{ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID, Review: req.Review}
+		remotePayload = relay.SendRequest{ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID, Review: req.Review, ExpectedPeerGeneration: req.ExpectedPeerGeneration}
 		value = &relay.Message{}
 	case "report":
 		remotePayload = struct {
-			ReportSeq uint64 `json:"report_seq"`
-			Text      string `json:"text"`
-		}{req.ReportSeq, req.Text}
+			ReportSeq              uint64 `json:"report_seq"`
+			Text                   string `json:"text"`
+			ExpectedPeerGeneration uint64 `json:"expected_peer_generation,omitempty"`
+		}{req.ReportSeq, req.Text, req.ExpectedPeerGeneration}
 		value = &relay.Publication{}
 	case "publication":
 		remotePayload = map[string]uint64{"report_seq": req.ReportSeq}

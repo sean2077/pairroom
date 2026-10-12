@@ -12,14 +12,14 @@
 
 平时让 Claude Code 出方案、再把方案复制给 Codex 审，审完再贴回去……这种来回搬运做多了很累。PairRoom 让两个 Agent 直接对话：一个提方案，另一个挑刺、补充、执行，全程你都看得到，也随时可以插话。
 
-- **两个 Agent，自由组合**：每个槽位都能选任一受支持的 Runtime，两边用同一个也可以。任务拆分、工具和 subagents 仍由各自的 harness 管理。
+- **先建房，任意受支持的 Agent 再加入**：Native 创建两个空槽位，由加入的会话识别自身类型；两边用同一个 Runtime 也可以，始终使用 `@agent1` / `@agent2`。任务拆分、工具和 subagents 仍由各自的 harness 管理。
 - **职责可以自定义**：默认 Agent 1 规划和审核，Agent 2 实现、验证和补充。自定义指令可以让双方都参与审查，也可以分工实现。简单任务可以直接完成；审查结束本身不代表授权实现。
 - **协作过程可见**：已发布的消息在 Room 中可见。Native 下双方的工作仍在各自的终端或客户端中进行，你可以直接叫停或纠正。
 - **同事的 Agent 也能加入**：局域网 Room 只有房主需要 Service。各机器保留自己的工作区、凭据和原生权限；通过不同会话，本地 Room 与已加入的 Room 可以同时使用。
 
 | 宿主模式 | 适合的需求 | 边界 |
 |---|---|---|
-| **Native**（默认并推荐） | 在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端中继续使用已有会话，包括 Codex Desktop | PairRoom 负责绑定、持久中继和审计；配置、权限和执行归原生 harness 管，Room 里的选择只作展示。 |
+| **Native**（默认并推荐） | 在熟悉的终端（如 [WezTerm](https://wezterm.org/)）或客户端中继续使用已有会话，包括 Codex Desktop | PairRoom 负责绑定、持久中继和审计；Runtime 在绑定时记录，模型、凭据、权限和执行归原生 harness 管。 |
 | **Embedded**（可选） | 使用 PairRoom 桌面端或网页端的对话界面和适配器控制，按槽位选择支持的 Provider、模型、effort 和指令 | 适配器由 PairRoom 管理，同一 Room 同一时间只运行一个原生 Turn；未设置的项继承原生配置。 |
 
 PairRoom 沿用仓库现有的指令、worktree 和 PR/MR 流程。中继不引入协调模型或强制阶段，也不会在每条消息里附上累计的 Room 历史。目前没有 token 或费用节省的对照实测。
@@ -30,7 +30,7 @@ Gemini CLI 支持两种模式，同一 Room 也可以绑定两个 Gemini 会话�
 
 ## 界面一览
 
-截图使用合成的演示对话，并非真实模型输出。
+截图使用合成的演示对话，并非真实模型输出。创建界面截图早于 Native 空槽位建房；当前 Native 表单无需选择 Agent 类型。
 
 **Embedded Room**：由 PairRoom 托管两个 Agent，工作检查器中查看 Turn 摘要、Diff 与审批。
 
@@ -40,7 +40,7 @@ Gemini CLI 支持两种模式，同一 Room 也可以绑定两个 Gemini 会话�
 
 ![列出 Embedded 与 Native Room 的项目详情](docs/images/pairroom-management-zh.png)
 
-**创建 Room**：选择宿主模式、协作方式以及每个槽位的运行时。
+**创建 Room**：Native 只需房间与协作设置；Embedded 保留各槽位的 Runtime 与配置选择。
 
 ![创建 Room 对话框](docs/images/pairroom-create-room-zh.png)
 
@@ -100,7 +100,7 @@ pairroom relay install --runtime claude,codex
 
 在每个 harness 中批准 hooks，并按要求重新加载。本地绑定前，在每个会话里运行 `pairroom relay preflight`，检查 PATH、Service 和 hook 安装情况。阅读 `next_steps`，包括版本警告；它看不到你是否已批准 hooks。
 
-在第一个会话中加载已安装的技能并运行 `/pairroom-relay <topic>`。它会创建 Room 并打印加入命令，让第二个会话的 Agent 原样执行。Bind 读取官方工具调用会话元数据；Gemini 需要先批准 BeforeTool hook。双方绑定成功后，后续轮次复用同一个 Room。每个会话首次完成一轮后，`pairroom relay doctor` 中近期的 `last_hook_at` 表明响应 hook 已运行。完整步骤见[第一个 Native Room](docs/GETTING_STARTED.md#first-native-room)。
+在第一个会话中加载已安装的技能并运行 `/pairroom-relay <topic>`。它会创建不预设类型的 Room，在绑定时识别当前会话，再打印通用加入命令，让第二个会话的 Agent 原样执行。Bind 读取官方工具调用会话元数据；Gemini 需要先批准 BeforeTool hook。也可以在 Management 中先创建空 Native Room，再让双方分别加入。双方绑定成功后，后续轮次复用同一个 Room。每个会话首次完成一轮后，`pairroom relay doctor` 中近期的 `last_hook_at` 表明响应 hook 已运行。完整步骤见[第一个 Native Room](docs/GETTING_STARTED.md#first-native-room)。
 
 回复怎么传递：
 
@@ -108,7 +108,7 @@ pairroom relay install --runtime claude,codex
 - **两个 handle 都没点名的 Stop 回复保持私有，不会复制进 Room。**
 - `relay send` / `exchange` 按命令指定的目标投递，不看正文里的点名。同一内容两条路径都走，会产生两条消息。
 
-详见[发布规则](docs/NATIVE_RELAY.md#what-is-published)。
+新 Native Room 使用 v9 协议和固定的 `@agent1` / `@agent2`；已有 Native Room 保留 v8 与原有 handle。显式[更换参与者](docs/NATIVE_RELAY.md#replace-a-participant-deliberately)会推进绑定代次、保留历史发送者身份，并暂停旧会话的自动发布，避免旧回复误发给新同伴。详见[发布规则](docs/NATIVE_RELAY.md#what-is-published)。
 
 响应 hooks 在有限等待窗口内收取消息。窗口结束后，符合条件的 Claude Code/Codex 会话可以收到内容固定、不含消息正文的唤醒；Grok/Gemini 需要其文档规定的收件或人工路径。CLI 等待期间不调用模型，后续模型工作仍消耗额度。PairRoom 从不启动或中断原生会话。依赖无人值守协作前，请查看[各 Runtime 的续聊限制](docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime)。
 

@@ -20,7 +20,7 @@ func TestTemporaryRoomNamesAndRenameSurviveRebuild(t *testing.T) {
 	registry, project := testRegistry(t, testGitRepo(t))
 	var created []Room
 	for _, name := range []string{"", "   "} {
-		room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Name: name, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
+		room, err := registry.ProvisionRoom(ctx, ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: name, Bindings: specs(BindingNew, BindingNew, "")}, SyntheticProvisioner{})
 		if err != nil {
 			t.Fatal(err)
 		}

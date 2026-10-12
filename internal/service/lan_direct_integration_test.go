@@ -128,7 +128,7 @@ func TestLANDirectCLIWithOnlyTheHostService(t *testing.T) {
 	if err := host.native.engine.Ack(host.owner, claim.ID, claim.Receipt); err != nil {
 		t.Fatal(err)
 	}
-	reply, err := host.native.engine.Send(host.owner, relay.SendRequest{ID: "direct-reply", Text: "I reproduced it; please review this artifact.", AttachmentIDs: []string{metadata.ID}})
+	reply, err := host.native.engine.Send(host.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "direct-reply", Text: "I reproduced it; please review this artifact.", AttachmentIDs: []string{metadata.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestLANDirectCLIWithOnlyTheHostService(t *testing.T) {
 	if _, err := f.run(t, true, nil, "park", "--enabled=false"); err != nil {
 		t.Fatal(err)
 	}
-	text := "@claude The direct Stop hook published this result."
+	text := "@agent1 The direct Stop hook published this result."
 	input := map[string]any{"hook_event_name": "Stop", "session_id": f.session, "cwd": f.root, "last_assistant_message": text, "transcript_path": filepath.Join(f.root, "private-transcript.jsonl")}
 	if output, err := f.run(t, true, input, "hook", "--runtime", "codex"); err != nil || strings.TrimSpace(string(output)) != "{}" {
 		t.Fatalf("direct Native hook failed: %s, %v", output, err)
@@ -259,7 +259,7 @@ func TestLANLocalHostingAndMultipleDirectRoomsCoexist(t *testing.T) {
 		if json.Unmarshal(preflight, &check) != nil || check.Mode != "lan_direct" {
 			t.Fatalf("cold preflight followed the local Service: %s", preflight)
 		}
-		if _, err := f.host.native.engine.Send(f.host.owner, relay.SendRequest{ID: "reply-after-local-stop", Text: "reply only for " + f.session}); err != nil {
+		if _, err := f.host.native.engine.Send(f.host.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "reply-after-local-stop", Text: "reply only for " + f.session}); err != nil {
 			t.Fatal(err)
 		}
 		output, err := f.run(t, false, nil, "wait", "--timeout", "1")
@@ -412,7 +412,7 @@ func TestLANDirectShortStdoutPreservesUnknownUntilExplicitRetry(t *testing.T) {
 	host := newLANHostFixture(t)
 	directLANUser(t)
 	f := directLANJoin(t, host, testGitRepo(t), "direct-short-stdout")
-	message, err := host.native.engine.Send(host.owner, relay.SendRequest{ID: "original-short-write", Text: "This input has not been written to the native caller."})
+	message, err := host.native.engine.Send(host.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "original-short-write", Text: "This input has not been written to the native caller."})
 	if err != nil {
 		t.Fatal(err)
 	}

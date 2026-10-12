@@ -44,7 +44,7 @@ Native activity is observational. Inspect the original harness and relay diagnos
 
 Embedded Waiting is expected while another participant owns the Turn. Native `queued` instead needs the bound receiver to collect: check park/foreground wait, capability/inbound policy, and wake observations. A queued message does not prove that a model has been awakened.
 
-Automatic relay needs the exact current peer handle (`@claude`, `@codex`, `@grok`, `@gemini`, or the displayed duplicate-runtime suffix). Role aliases and control markers do not route. A handle may end a sentence (`@codex.`) or touch Chinese/Japanese text (`请@codex审查`), but a directly attached Latin letter, digit or `_`, or a `.`/`-` followed by one (`@codex.dev`), makes a different token; [Protocol](PROTOCOL.md#output-routing) owns the exact rules. A peer handle wins over `@user`; do not include one merely to acknowledge a final answer.
+Automatic relay needs the exact current peer handle: new Native v9 uses `@agent1` / `@agent2`; legacy Native v8 and Embedded use `@claude`, `@codex`, `@grok`, `@gemini`, or the displayed duplicate-runtime suffix. Role aliases and control markers do not route. A handle may end a sentence (`@codex.`) or touch Chinese/Japanese text (`请@codex审查`), but a directly attached Latin letter, digit or `_`, or a `.`/`-` followed by one (`@codex.dev`), makes a different token; [Protocol](PROTOCOL.md#output-routing) owns the exact rules. A peer handle wins over `@user`; do not include one merely to acknowledge a final answer.
 
 An unaddressed Embedded answer remains visible in the Room. An unaddressed **Native Stop** records only a publication receipt, not its private body. Use `@user` for a Native result intended for the Room/human. Explicit `send`/`exchange` uses its command target rather than body mentions; explicit send followed by peer-directed Stop may produce two messages. [Native publication rules](NATIVE_RELAY.md#what-is-published) explain this distinction.
 
@@ -60,13 +60,26 @@ A lost **publication response** is different from retrying execution: retain the
 
 ## Native relay errors
 
+A new Native Room does not need an installed Runtime catalog, pair profile or a
+peer-type choice. Remove `--peer-runtime` and creation-time Agent/Profile fields;
+run bind in the intended harness so official caller metadata supplies its Runtime.
+Legacy Rooms keep their stored type constraints; create a new Room to adopt v9.
+
+`peer_changed` means the original peer generation no longer owns that slot. The
+rejected Stop body remains local; `reconcile --resend` cannot retarget it. Inspect
+`relay peer` and the old work, then use `send` / `exchange --peer-generation N`
+with a new ID for deliberately new content, or explicitly discard the saved
+reply. The old native session's automatic publication remains paused; foreground
+`wait` works. Same-session rebind/replacement cannot reset that context. See
+[participant replacement](NATIVE_RELAY.md#replace-a-participant-deliberately).
+
 CLI failures print on stderr as `pairroom: <message>`, and Stop-hook notes as `PairRoom: <message>`. Below, `<...>` marks variable parts. Pick the check for your stage:
 
 - **Before binding locally**, from any shell in the Project, run `pairroom relay preflight`. It creates no Room, binding or hook configuration, prints JSON, and exits nonzero until `ready`. Read `next_steps` even when `ready` is `true`: a local Service version mismatch, or a `pairroom` on PATH that is a different file, only warns.
 - **Before a LAN join**, run `pairroom relay preflight --join` in the intended Agent session. It checks local readiness without a guest Service. After admission, ordinary preflight checks the saved host's contact/admission; it can activate that Room and does not compare host versions.
 - **After binding**, run `pairroom relay doctor` inside the bound session. It is read-only and shows `local.hook_installation`, `last_hook_at`, and version/protocol matches; while no Stop hook has run since bind, it and `status` add `local.hook_hint`. Use `pairroom relay status --brief` for queue, unknown-delivery, and pending-publication counts. Unlike doctor, `status` may reconcile a pending Stop publication under its original sequence.
 
-[Native relay](NATIVE_RELAY.md) owns the workflow, [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns the flags, and [Protocol](PROTOCOL.md#native-host-protocol-v8) owns delivery semantics.
+[Native relay](NATIVE_RELAY.md) owns the workflow, [CLI reference](CLI_REFERENCE.md#native-relay-commands) owns the flags, and [Protocol](PROTOCOL.md#native-host-protocol-v9) owns delivery semantics.
 
 ### pairroom is not on the PATH hooks use
 
@@ -244,7 +257,7 @@ Keep the original data. Inspect the first identity/schema/replay error:
 pairroom verify --data-dir /absolute/path/to/room --json
 ```
 
-Readers accept existing local Store 12/provisioning 5 and new Store 13/provisioning 6 with explicit host mode. New Rooms write 13/6; new Registry checkpoints use 4 and existing local checkpoint 3 remains readable. Earlier and future formats fail before replay/repair. Never change metadata to make unsupported data appear valid. Missing/empty/gapped/replaced logs are not fresh Rooms. Restore a verified matching backup rather than renumbering history.
+Readers accept existing Store 12/provisioning 5 local Rooms, Store 13/provisioning 6 local/LAN Rooms, and new Store 14/provisioning 7 with explicit host mode. New Rooms write 14/7; new Registry checkpoints use 5 and existing checkpoint 3 and checkpoint 4 remain readable. Earlier and future formats fail before replay/repair. Never change metadata to make unsupported data appear valid. Missing/empty/gapped/replaced logs are not fresh Rooms. Restore a verified matching backup rather than renumbering history.
 
 Backup/diagnostic outputs must stay outside the source Room directory, including symlink aliases. A Room backup excludes the Service root's user configuration, repository, vendor stores, and Native workspace credentials. Archive cannot stop Native work. Follow [Storage](STORAGE.md), [backup procedure](OPERATIONS.md#backup), and [Upgrading](UPGRADING.md).
 

@@ -283,6 +283,8 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 			backlog = fmt.Sprintf(" behind %d unpublished earlier replies (local backlog full)", 1+len(c.State.Held))
 		}
 		_, _ = fmt.Fprintf(diagnostic, "PairRoom: this reply was NOT retained%s. Run pairroom relay reconcile once the Service is available, then publish this reply explicitly with pairroom relay send if it matters.\n", backlog)
+	} else if errors.Is(err, relay.ErrPeerChanged) || errors.Is(err, errResponseContextMissing) || errors.Is(err, errResponseScopeChanged) {
+		_, _ = fmt.Fprintln(diagnostic, "PairRoom:", automaticPauseNotice(c.State.PeerGeneration))
 	} else if err != nil {
 		// Spec §6 decoupling: a failed or uncertain publication retains its
 		// pending state for the next hook's reconciliation and must not
@@ -296,6 +298,12 @@ func runHook(ctx context.Context, o options, in io.Reader, out, diagnostic io.Wr
 	}
 	if kind == model.RuntimeGemini && ambiguousGeminiResponse(geminiCursor) {
 		return errors.New("Gemini empty-response marker is ambiguous; its receipt was retained, but automatic collection is unsafe. Use foreground relay wait in a fresh user turn")
+	}
+	if c.State.DynamicBindings && (c.State.AutomaticPaused || c.State.AutomaticPeerGeneration == 0) {
+		// An uncertain native turn boundary must not continue producing replies
+		// addressed to a successor. Explicit foreground wait/send is available.
+		stopGeminiOnError = false
+		return writeJSON(out, map[string]any{})
 	}
 	if hook.StopHookActive && c.State.Blocks >= hookBlockLimit(kind) {
 		stopGeminiOnError = false
@@ -432,24 +440,15 @@ func deliverOnce(ctx context.Context, c *Client, hook bool, seconds int, out io.
 	if claim.ID == "" || claim.Receipt == "" || claim.Envelope == "" {
 		return false, errors.New("incomplete delivery claim; acknowledgement withheld")
 	}
+	if hook || c.State.DynamicBindings {
+		if err := c.recordPeerContext(ctx, claim.PeerGeneration, hook); err != nil {
+			return false, err
+		}
+	}
+	if c.State.DynamicBindings && c.State.AutomaticPaused {
+		claim.Envelope += "\n\n" + automaticPauseNotice(claim.PeerGeneration)
+	}
 	if hook {
-		release, err := lockSlot(ctx, c.Dir)
-		if err != nil {
-			return false, err
-		}
-		current, err := load(c.Dir)
-		if err == nil && (current.State.BindID != c.State.BindID || current.State.Generation != c.State.Generation) {
-			err = relay.ErrAuth
-		}
-		if err == nil {
-			next := current.State
-			next.Blocks++
-			err = current.persist(next)
-		}
-		release()
-		if err != nil {
-			return false, err
-		}
 		if err := writeJSON(out, map[string]string{"decision": "block", "reason": claim.Envelope}); err != nil {
 			return false, err
 		}

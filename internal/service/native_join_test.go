@@ -105,7 +105,7 @@ func TestNativeJoinGuideNeverGuidesALANGuestSlot(t *testing.T) {
 		t.Error("native LAN provisioning attempted to start a vendor runtime")
 		return Binding{}, nil, errors.New("unexpected native process")
 	})
-	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Name: "Shared work", HostMode: model.HostNative, Sharing: "lan", OwnerSlot: model.ActorSlot1, Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeClaude, Provider: model.NativeProviderRef()}}}, noSpawn)
+	room, err := registry.ProvisionRoom(ctx, ProvisionRequest{ProjectID: project.ID, Name: "Shared work", HostMode: model.HostNative, Sharing: "lan", OwnerSlot: model.ActorSlot1}, noSpawn)
 	if err != nil {
 		t.Fatal(err)
 	}

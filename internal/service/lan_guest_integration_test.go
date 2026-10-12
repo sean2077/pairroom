@@ -34,6 +34,7 @@ func lanLocalRelayCall(t *testing.T, fixture *lanHostFixture, room string, auth 
 	request.Header.Set("X-PairRoom-Bind", auth.BindID)
 	request.Header.Set("X-PairRoom-Generation", strconv.FormatUint(auth.Generation, 10))
 	request.Header.Set("X-PairRoom-Session", auth.SessionID)
+	request.Header.Set("X-PairRoom-Runtime", string(auth.Runtime))
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -95,7 +96,7 @@ func newLANViewFixture(t *testing.T) *lanViewFixture {
 	if err != nil || admitted.Status != "accepted" || admitted.Binding == nil || admitted.Receipt != pending.Receipt {
 		t.Fatalf("direct admission recovery: %+v %v", admitted, err)
 	}
-	auth := relay.Auth{Slot: admitted.Binding.Slot, BindID: admitted.Binding.BindID, Generation: admitted.Binding.Generation, SessionID: "facade-native-session", Secret: "facade-local-secret"}
+	auth := relay.Auth{Runtime: model.RuntimeGrok, Slot: admitted.Binding.Slot, BindID: admitted.Binding.BindID, Generation: admitted.Binding.Generation, SessionID: "facade-native-session", Secret: "facade-local-secret"}
 	if err := client.Relay(context.Background(), auth, "confirm", map[string]string{"session_id": auth.SessionID}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestLANOptionalServiceProjectsTheDirectClientAndSharedOwnerEvidence(t *test
 		t.Fatal(err)
 	}
 	var published relay.Message
-	if err := f.client.Relay(context.Background(), f.auth, "send", relay.SendRequest{ID: "client-evidence", Text: "Please inspect the shared reproduction.", AttachmentIDs: []string{attachment.ID}}, &published); err != nil {
+	if err := f.client.Relay(context.Background(), f.auth, "send", relay.SendRequest{ExpectedPeerGeneration: 1, ID: "client-evidence", Text: "Please inspect the shared reproduction.", AttachmentIDs: []string{attachment.ID}}, &published); err != nil {
 		t.Fatal(err)
 	}
 	var history relay.HistoryPage

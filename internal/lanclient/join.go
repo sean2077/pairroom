@@ -158,7 +158,17 @@ func joinResult(r record) JoinResult {
 	if r.Status == "accepted" && r.Room != nil {
 		b := binding(r)
 		result.Binding = &b
-		result.Bootstrap = protocol.NativeBootstrap(b.Slot, b.Runtime, r.Room.Runtimes[model.OtherParticipant(b.Slot)]) + "\n" + protocol.SharedRoomBootstrapNotice
+		result.DynamicBindings, result.PeerGeneration = r.Room.DynamicBindings, r.Room.PeerGeneration
+		result.Bootstrap = protocol.NativeBootstrap(b.Slot, b.Runtime, r.Room.Runtimes[model.OtherParticipant(b.Slot)])
+		if r.Room.DynamicBindings {
+			result.Bootstrap = protocol.NativeDynamicBootstrap(b.Slot, b.Runtime, r.Room.Runtimes[model.OtherParticipant(b.Slot)], r.Room.PeerGeneration)
+			if r.Room.Bootstrap != "" {
+				// Host bootstrap and generation came from one Engine lock. Do
+				// not reconstruct its runtime display from a later projection.
+				result.Bootstrap = r.Room.Bootstrap
+			}
+		}
+		result.Bootstrap += "\n" + protocol.SharedRoomBootstrapNotice
 		result.Collaboration = protocol.CollaborationInstructions(b.Slot, r.Room.Collaboration)
 	}
 	return result
@@ -237,7 +247,7 @@ func (c *Client) updateAdmission(ctx context.Context, original record, admission
 			return errors.New("accepted LAN membership cannot become a pending expiry")
 		}
 		if admission.Status == "accepted" {
-			if admission.Room == nil || next.Room != nil && (next.Room.Generation != admission.Room.Generation || next.Room.BindID != admission.Room.BindID || next.Room.Slot != admission.Room.Slot) {
+			if admission.Room == nil || next.Room != nil && (next.Room.Generation != admission.Room.Generation || next.Room.BindID != admission.Room.BindID || next.Room.Slot != admission.Room.Slot || next.Room.DynamicBindings != admission.Room.DynamicBindings) {
 				return errors.New("LAN membership generation changed; old local receipts must not be replayed")
 			}
 			next.Room = admission.Room

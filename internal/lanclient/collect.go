@@ -82,7 +82,7 @@ func (c *Client) collect(ctx context.Context, req relayRequest, auth relay.Auth)
 		}
 		// Download and verify every byte before the remote claim lease starts.
 		// Slow or failed evidence retrieval has no inbox consumption effect.
-		envelope, err := c.prepareEnvelope(ctx, r, m)
+		input, err := c.prepareInput(ctx, r, m)
 		if ctx.Err() != nil {
 			// Preparation has no claim lease or output receipt. Ending the
 			// wait during headers, body, or cache verification is an empty
@@ -128,10 +128,16 @@ func (c *Client) collect(ctx context.Context, req relayRequest, auth relay.Auth)
 		if claim.ID != m.ID || !lanshare.ValidID(claim.Receipt) || claim.Message.ID != m.ID || claim.Message.To != auth.Slot || claim.Message.TargetGeneration != auth.Generation || !sameClaimContent(m, claim.Message) {
 			return collectResult{}, errors.New("LAN claim receipt identity mismatch")
 		}
+		if r.Room.DynamicBindings {
+			if claim.PeerGeneration == 0 {
+				return collectResult{}, errors.New("dynamic LAN claim omitted its peer-generation context; acknowledgement withheld")
+			}
+			input.PeerGeneration = claim.PeerGeneration
+		}
 		if err := c.retainDelivery(ctx, auth, claim); err != nil {
 			return collectResult{}, err
 		}
-		return collectResult{Claim: &relay.Claim{ID: claim.ID, Receipt: claim.Receipt, Envelope: envelope}}, nil
+		return collectResult{Claim: &relay.Claim{ID: claim.ID, Receipt: claim.Receipt, Envelope: prompt.Envelope(input), PeerGeneration: claim.PeerGeneration}}, nil
 	}
 }
 
@@ -144,8 +150,18 @@ func sameClaimContent(head, claimed relay.Message) bool {
 }
 
 func (c *Client) prepareEnvelope(ctx context.Context, r record, m relay.Message) (string, error) {
+	input, err := c.prepareInput(ctx, r, m)
+	if err != nil {
+		return "", err
+	}
+	return prompt.Envelope(input), nil
+}
+
+// Evidence is prepared before claiming. Only after the authoritative claim
+// arrives do we insert its peer generation and render the final envelope.
+func (c *Client) prepareInput(ctx context.Context, r record, m relay.Message) (model.AgentInput, error) {
 	if r.Room == nil || len(m.Attachments) > attachment.MaxImagesPerMessage {
-		return "", errors.New("LAN attachment manifest exceeds limit")
+		return model.AgentInput{}, errors.New("LAN attachment manifest exceeds limit")
 	}
 	localKey, _ := r.Identity.Fingerprint()
 	var handle string
@@ -160,15 +176,25 @@ func (c *Client) prepareEnvelope(ctx context.Context, r record, m relay.Message)
 		case "lan:" + localKey:
 			handle = protocol.LocalRoomOwnerHandle
 		default:
-			return "", errors.New("LAN user message has no authenticated author provenance")
+			return model.AgentInput{}, errors.New("LAN user message has no authenticated author provenance")
 		}
+	} else if r.Room.DynamicBindings {
+		if !m.From.ValidParticipant() || !m.FromRuntime.Valid() || m.FromGeneration == 0 {
+			return model.AgentInput{}, errors.New("dynamic LAN sender lacks its original runtime and generation")
+		}
+		handle = model.NativeParticipantIdentityFor(m.From).MentionHandle
 	} else {
 		handle = model.ParticipantIdentities(r.Room.Runtimes)[m.From].MentionHandle
 		if handle == "" {
-			return "", errors.New("LAN sender has no admitted Runtime identity")
+			return model.AgentInput{}, errors.New("LAN sender has no admitted Runtime identity")
 		}
 	}
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: handle, Text: m.Text, Quote: m.Quote}
+	if r.Room.DynamicBindings {
+		input.FromRuntime, input.FromGeneration = m.FromRuntime, m.FromGeneration
+		input.SelfHandle = model.NativeParticipantIdentityFor(m.To).MentionHandle
+		input.PeerHandle = model.NativeParticipantIdentityFor(model.OtherParticipant(m.To)).MentionHandle
+	}
 	if m.From == model.ActorUser && m.Author == "host_owner" {
 		input.Text += "\n" + protocol.SharedRoomEnvelopeNotice
 	}
@@ -178,17 +204,17 @@ func (c *Client) prepareEnvelope(ctx context.Context, r record, m relay.Message)
 	var total int64
 	for _, expected := range m.Attachments {
 		if err := validateAttachment(expected); err != nil {
-			return "", err
+			return model.AgentInput{}, err
 		}
 		total += expected.Size
 		if total > attachment.MaxTotalImageBytes {
-			return "", errors.New("LAN attachment manifest exceeds total limit")
+			return model.AgentInput{}, errors.New("LAN attachment manifest exceeds total limit")
 		}
 		metadata, path, err := c.cachedEvidence(ctx, r, expected)
 		if err != nil {
-			return "", err
+			return model.AgentInput{}, err
 		}
 		input.Attachments = append(input.Attachments, model.AgentAttachment{Attachment: metadata, Path: path})
 	}
-	return prompt.Envelope(input), nil
+	return input, nil
 }

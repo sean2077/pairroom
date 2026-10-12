@@ -327,6 +327,64 @@ async function main() {
     assert.equal(page.sends.length, 2, 'read failure replayed an accepted original');
   }
   const textTree = node => [node.textContent, ...node.children.map(textTree)].join(' ');
+  const descendants = node => [node, ...node.children.flatMap(descendants)];
+  {
+    // New Native Rooms identify empty seats before any Runtime is known. Two
+    // equal Runtimes and a later replacement must not rename those seats or
+    // rewrite the publisher shown on a previously accepted message.
+    const page = await fixture({draft:false});
+    Object.assign(page.snapshot.room, {dynamic_bindings:true, agents:{slot1:{runtime:'awaiting_binding',awaiting_binding:true},slot2:{runtime:'awaiting_binding',awaiting_binding:true}}});
+    page.snapshot.join = {slot1:'pairroom relay bind --room room --slot 1',slot2:'pairroom relay bind --room room --slot 2'};
+    page.poll(); await tick();
+    let bindingText = textTree(page.$('bindings'));
+    assert.match(bindingText, /@agent1.*awaitingBinding.*@agent2.*awaitingBinding/);
+    assert.doesNotMatch(bindingText, /Claude|Codex|nativeDefault|rawSelection/);
+    assert.equal(page.$('join-guide').hidden, false);
+    assert.match(textTree(page.$('join-slots')), /@agent1.*@agent2/);
+    assert.doesNotMatch(textTree(page.$('join-slots')), /--runtime|--peer-runtime/);
+    for (const slot of ['slot1', 'slot2']) {
+      page.snapshot.room.agents[slot] = {runtime:'codex'};
+      page.snapshot.relay.bindings[slot] = {active:true,runtime:'codex',generation:1,session_id:`session-${slot}`};
+    }
+    page.snapshot.relay.messages = [{id:'last',state:'human',from:'slot2',to:'user',from_runtime:'codex',from_generation:1,text:'Original Codex publication'}];
+    page.snapshot.relay.sequence++;
+    page.poll(); await tick();
+    bindingText = textTree(page.$('bindings'));
+    assert.match(bindingText, /@agent1.*Codex.*@agent2.*Codex/);
+    assert.doesNotMatch(bindingText, /@codex0|@codex1/);
+    assert.equal(page.$('join-guide').hidden, true);
+    const copied = [];
+    page.navigator.clipboard = {writeText: async command => { copied.push(command); }};
+    const replace = descendants(page.$('bindings')).find(node=>node.dataset.nativeFocus==='slot2-replace-copy');
+    assert.ok(replace, 'a bound local seat has an explicit replacement command');
+    replace.events.click(); await tick();
+    assert.deepEqual(copied, ['pairroom relay bind --room room --slot 2 --replace']);
+    assert.equal(page.sends.length, 0, 'copying replacement guidance performed a mutation');
+    page.snapshot.room.agents.slot2 = {runtime:'gemini'};
+    page.snapshot.relay.bindings.slot2 = {active:true,runtime:'gemini',generation:2,session_id:'replacement-session'};
+    page.poll(); await tick();
+    assert.match(textTree(page.$('bindings')), /@agent2.*Gemini CLI/);
+    assert.match(textTree(page.$('messages')), /@agent2 · Codex · room.native.generation 1/);
+    assert.doesNotMatch(textTree(page.$('messages')), /Gemini|generation 2/);
+
+    // The guest seat is managed by invitation/admission. It never receives a
+    // local bind command even if a malformed projection accidentally has one.
+    Object.assign(page.snapshot.room, {sharing:'lan',owner_slot:'slot1'});
+    page.snapshot.room.agents.slot2 = {runtime:'awaiting_peer',awaiting_peer:true};
+    delete page.snapshot.relay.bindings.slot2;
+    page.poll(); await tick();
+    const remote = page.$('bindings').children.find(node=>node.dataset.slot==='slot2');
+    assert.match(textTree(remote), /@agent2.*awaitingPeer/);
+    assert.doesNotMatch(textTree(remote), /pairroom relay bind|--replace|Codex|Gemini/);
+    assert.equal(page.$('join-guide').hidden, true, 'a remote-only empty seat requested a local bind');
+  }
+  {
+    const page = await fixture({draft:false});
+    page.snapshot.identities = {slot1:{mention_handle:'@codex'},slot2:{mention_handle:'@claude'}};
+    page.poll(); await tick();
+    assert.match(textTree(page.$('bindings')), /@codex.*@claude/s);
+    assert.doesNotMatch(textTree(page.$('bindings')), /@agent1|@agent2/);
+  }
   {
     const page = await fixture({draft:false,transport:{messages:[{id:'last',state:'human',from:'slot1',to:'user',text:'large-evidence-'.repeat(16000)}]}});
     const message = page.$('messages').querySelector('.message');

@@ -16,6 +16,7 @@ import (
 )
 
 func (s *ManagementServer) mountNativeRelay(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/rooms/{room}/native-bindings", s.bindNative)
 	mux.HandleFunc("POST /api/v1/rooms/{room}/native-bindings/{slot}", s.bindNative)
 	mux.HandleFunc("DELETE /api/v1/rooms/{room}/native-bindings/{slot}", s.unbindNative)
 	mux.HandleFunc("POST /api/v1/relay/{room}/{slot}/{action}", s.nativeRelay)
@@ -44,7 +45,7 @@ func (s *ManagementServer) bindNative(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slot := canonicalInputSlot(model.ActorID(r.PathValue("slot")))
-	if !slot.ValidParticipant() {
+	if slot != "" && !slot.ValidParticipant() {
 		writeManagementError(w, 400, "invalid slot")
 		return
 	}
@@ -60,12 +61,20 @@ func (s *ManagementServer) bindNative(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, nil, err)
 		return
 	}
-	kinds := runtime.engine.Runtimes()
-	bootstrap := protocol.NativeBootstrap(slot, kinds[slot], kinds[model.OtherParticipant(slot)])
+	slot = binding.Slot
+	bootstrap, peerGeneration, err := runtime.engine.BootstrapContextForBinding(binding)
+	if err != nil {
+		nativeResult(w, nil, err)
+		return
+	}
+	kind := binding.Runtime
+	if !runtime.room.DynamicBindings {
+		kind = runtime.room.Agents[slot].Runtime.CanonicalForSlot(slot)
+	}
 	if runtime.room.Sharing == "lan" {
 		bootstrap += "\n" + protocol.SharedRoomBootstrapNotice
 	}
-	nativeResult(w, map[string]any{"binding": binding, "replaced": replaced, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": runtime.room.Agents[slot].Runtime, "notice": "Native settings are display-only. Hooks recheck identity. Replace cannot stop native work."}, nil)
+	nativeResult(w, map[string]any{"binding": binding, "replaced": replaced, "dynamic_bindings": runtime.room.DynamicBindings, "peer_generation": peerGeneration, "bootstrap": bootstrap, "collaboration": protocol.CollaborationInstructions(slot, runtime.room.Collaboration), "workspace": runtime.project.Root, "runtime": kind, "notice": "Runtime belongs to this binding generation. Hooks recheck identity. Replace revokes old relay credentials but cannot stop native work."}, nil)
 }
 func (s *ManagementServer) unbindNative(w http.ResponseWriter, r *http.Request) {
 	runtime, err := s.nativeRuntime(r.Context(), r.PathValue("room"))
@@ -163,24 +172,25 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Review         *review.Anchor `json:"review,omitempty"`
-		Cursor         string         `json:"cursor,omitempty"`
-		Limit          int            `json:"limit,omitempty"`
-		Pending        bool           `json:"pending,omitempty"`
-		Since          time.Time      `json:"since,omitempty"`
-		SessionID      string         `json:"session_id,omitempty"`
-		TranscriptPath string         `json:"transcript_path,omitempty"`
-		ReportSeq      uint64         `json:"report_seq,omitempty"`
-		Text           string         `json:"text,omitempty"`
-		ID             string         `json:"id,omitempty"`
-		Receipt        string         `json:"receipt,omitempty"`
-		To             model.ActorID  `json:"to,omitempty"`
-		AttachmentIDs  []string       `json:"attachment_ids,omitempty"`
-		QuoteID        string         `json:"quote_id,omitempty"`
-		Park           bool           `json:"park,omitempty"`
-		TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
-		Enabled        bool           `json:"enabled,omitempty"`
-		Error          string         `json:"error,omitempty"`
+		ExpectedPeerGeneration uint64         `json:"expected_peer_generation,omitempty"`
+		Review                 *review.Anchor `json:"review,omitempty"`
+		Cursor                 string         `json:"cursor,omitempty"`
+		Limit                  int            `json:"limit,omitempty"`
+		Pending                bool           `json:"pending,omitempty"`
+		Since                  time.Time      `json:"since,omitempty"`
+		SessionID              string         `json:"session_id,omitempty"`
+		TranscriptPath         string         `json:"transcript_path,omitempty"`
+		ReportSeq              uint64         `json:"report_seq,omitempty"`
+		Text                   string         `json:"text,omitempty"`
+		ID                     string         `json:"id,omitempty"`
+		Receipt                string         `json:"receipt,omitempty"`
+		To                     model.ActorID  `json:"to,omitempty"`
+		AttachmentIDs          []string       `json:"attachment_ids,omitempty"`
+		QuoteID                string         `json:"quote_id,omitempty"`
+		Park                   bool           `json:"park,omitempty"`
+		TimeoutSeconds         int            `json:"timeout_seconds,omitempty"`
+		Enabled                bool           `json:"enabled,omitempty"`
+		Error                  string         `json:"error,omitempty"`
 	}
 	if decodeNativeJSON(w, r, &req) != nil {
 		return
@@ -193,7 +203,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		b, err := runtime.engine.ConfirmSession(auth, req.SessionID, req.TranscriptPath)
 		nativeResult(w, b, err)
 	case "report":
-		p, err := runtime.engine.Report(auth, req.ReportSeq, req.Text)
+		p, err := runtime.engine.Report(auth, req.ReportSeq, req.Text, req.ExpectedPeerGeneration)
 		if err == nil && p.Message != nil {
 			runtime.scheduleWake(p.Message.ID)
 		}
@@ -202,7 +212,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		p, accepted, err := runtime.engine.Publication(auth, req.ReportSeq)
 		nativeResult(w, map[string]any{"accepted": accepted, "publication": p}, err)
 	case "send":
-		m, err := runtime.engine.Send(auth, relay.SendRequest{Review: req.Review, ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID})
+		m, err := runtime.engine.Send(auth, relay.SendRequest{ExpectedPeerGeneration: req.ExpectedPeerGeneration, Review: req.Review, ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID})
 		if err == nil {
 			runtime.scheduleWake(m.ID)
 		}
@@ -218,7 +228,7 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(seconds)*time.Second)
 		defer cancel()
-		if req.Park && runtime.room.Agents[auth.Slot].Runtime == model.RuntimeGrok {
+		if req.Park && runtime.engine.Runtimes()[auth.Slot] == model.RuntimeGrok {
 			// Grok clips Stop feedback. Readiness must not claim/ack a body
 			// that the native harness could truncate before the model reads it.
 			ready, err := runtime.engine.WaitForPending(ctx, auth)
@@ -252,10 +262,6 @@ func (s *ManagementServer) nativeRelay(w http.ResponseWriter, r *http.Request) {
 		nativeResult(w, runtime.nativeDiagnostics(), nil)
 	case "peer":
 		peer, err := runtime.engine.Peer(auth)
-		if err == nil {
-			peer.Slot = model.OtherParticipant(auth.Slot)
-			peer.Runtime = runtime.engine.Runtimes()[peer.Slot]
-		}
 		nativeResult(w, peer, err)
 	case "failure":
 		nativeResult(w, map[string]bool{"recorded": true}, runtime.engine.Failure(auth, req.Error))

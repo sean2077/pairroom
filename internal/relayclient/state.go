@@ -26,10 +26,12 @@ import (
 )
 
 type Pending struct {
-	Seq     uint64    `json:"seq"`
-	Text    string    `json:"text"`
-	At      time.Time `json:"at"`
-	Unknown bool      `json:"unknown,omitempty"`
+	Seq                    uint64    `json:"seq"`
+	Text                   string    `json:"text"`
+	At                     time.Time `json:"at"`
+	Unknown                bool      `json:"unknown,omitempty"`
+	ExpectedPeerGeneration uint64    `json:"expected_peer_generation,omitempty"`
+	Outcome                string    `json:"outcome,omitempty"`
 }
 
 // maxPublicationBacklog bounds the Stop replies saved locally while the
@@ -51,19 +53,27 @@ var errReplyTooLarge = errors.New("final reply exceeds bounded publication size;
 var errPublicationBacklogFull = errors.New("local publication backlog is full; reply not retained")
 
 type State struct {
-	Schema           int               `json:"schema"`
-	Room             string            `json:"room"`
-	Slot             model.ActorID     `json:"slot"`
-	Runtime          model.RuntimeKind `json:"runtime"`
-	Workspace        string            `json:"workspace"`
-	EndpointPath     string            `json:"endpoint_path,omitempty"`
-	LAN              *LANTransport     `json:"lan,omitempty"`
-	BindID           string            `json:"bind_id"`
-	Generation       uint64            `json:"generation"`
-	SessionID        string            `json:"session_id,omitempty"`
-	LastSeq          uint64            `json:"last_seq"`
-	LastConfirmedSeq uint64            `json:"last_confirmed_seq"`
-	Pending          *Pending          `json:"pending,omitempty"`
+	Schema          int               `json:"schema"`
+	Room            string            `json:"room"`
+	Slot            model.ActorID     `json:"slot"`
+	Runtime         model.RuntimeKind `json:"runtime"`
+	Workspace       string            `json:"workspace"`
+	EndpointPath    string            `json:"endpoint_path,omitempty"`
+	LAN             *LANTransport     `json:"lan,omitempty"`
+	BindID          string            `json:"bind_id"`
+	Generation      uint64            `json:"generation"`
+	DynamicBindings bool              `json:"dynamic_bindings,omitempty"`
+	// The automatic target is captured before bootstrap/inbound output and
+	// stays fixed for this binding. A later observed peer is diagnostic only:
+	// without reliable native turn provenance it cannot retarget a late Stop.
+	AutomaticPeerGeneration uint64   `json:"automatic_peer_generation,omitempty"`
+	PeerGeneration          uint64   `json:"peer_generation,omitempty"`
+	AutomaticPaused         bool     `json:"automatic_paused,omitempty"`
+	AutomaticScopeChanged   bool     `json:"automatic_scope_changed,omitempty"`
+	SessionID               string   `json:"session_id,omitempty"`
+	LastSeq                 uint64   `json:"last_seq"`
+	LastConfirmedSeq        uint64   `json:"last_confirmed_seq"`
+	Pending                 *Pending `json:"pending,omitempty"`
 	// Held are Stop replies saved behind an unresolved Pending head, in
 	// sequence order. None has been sent: each is reported under its original
 	// sequence only after every earlier one settles.
@@ -309,6 +319,7 @@ func (c *Client) authHeaders(req *http.Request) {
 	req.Header.Set("X-PairRoom-Bind", c.State.BindID)
 	req.Header.Set("X-PairRoom-Generation", fmt.Sprint(c.State.Generation))
 	req.Header.Set("X-PairRoom-Session", c.State.SessionID)
+	req.Header.Set("X-PairRoom-Runtime", string(c.State.Runtime))
 }
 func (c *Client) call(ctx context.Context, action string, payload any, result any) error {
 	if c.State.LAN != nil {
@@ -373,6 +384,9 @@ func relayErrorCode(err error) string {
 	if errors.Is(err, relay.ErrSendPayloadConflict) {
 		return relay.SendPayloadConflictCode
 	}
+	if errors.Is(err, relay.ErrPeerChanged) {
+		return relay.PeerChangedCode
+	}
 	var failure *relayError
 	if errors.As(err, &failure) {
 		return failure.code
@@ -404,27 +418,57 @@ func (c *Client) Reconcile(ctx context.Context, force bool) error {
 	}
 	for c.State.Pending != nil {
 		p := *c.State.Pending
+		if p.Outcome == relay.PeerChangedCode {
+			return relay.ErrPeerChanged
+		}
+		if p.Outcome == "context_changed" {
+			return errResponseScopeChanged
+		}
+		if c.State.DynamicBindings && p.ExpectedPeerGeneration == 0 {
+			return errResponseContextMissing
+		}
 		accepted := false
+		var result relay.Publication
 		if p.Seq != c.unsent {
 			var receipt struct {
-				Accepted *bool `json:"accepted"`
+				Accepted    *bool             `json:"accepted"`
+				Publication relay.Publication `json:"publication"`
 			}
 			err := c.call(ctx, "publication", map[string]any{"report_seq": p.Seq}, &receipt)
 			if (err != nil || receipt.Accepted == nil) && !force {
 				return c.markUnknown(p)
 			}
 			accepted = receipt.Accepted != nil && *receipt.Accepted
+			if accepted {
+				result = receipt.Publication
+			}
 		}
 		if !accepted {
 			// From here an attempt may exist; only a receipt query settles it.
 			c.unsent = 0
-			var result relay.Publication
-			if err := c.call(ctx, "report", map[string]any{"report_seq": p.Seq, "text": p.Text}, &result); err != nil {
+			if err := c.call(ctx, "report", map[string]any{"report_seq": p.Seq, "text": p.Text, "expected_peer_generation": p.ExpectedPeerGeneration}, &result); err != nil {
 				return c.markUnknown(p)
 			}
-			if result.ReportSeq != p.Seq || result.BindID != c.State.BindID || result.Generation != c.State.Generation {
-				return relay.ErrUnknown
+		}
+		if !accepted || c.State.DynamicBindings {
+			if result.ReportSeq != p.Seq || result.BindID != c.State.BindID || result.Generation != c.State.Generation || c.State.DynamicBindings && result.ExpectedPeerGeneration != p.ExpectedPeerGeneration {
+				return c.markUnknown(p)
 			}
+		}
+		if result.Outcome == relay.PeerChangedCode {
+			if result.Message != nil {
+				return c.markUnknown(p)
+			}
+			p.Outcome, p.Unknown = relay.PeerChangedCode, false
+			next := c.State
+			next.Pending, next.AutomaticPaused = &p, true
+			if err := c.persist(next); err != nil {
+				return err
+			}
+			return relay.ErrPeerChanged
+		}
+		if result.Outcome != "" {
+			return c.markUnknown(p)
 		}
 		next := c.State.advance()
 		next.LastConfirmedSeq = p.Seq
@@ -483,6 +527,14 @@ func (c *Client) reservePublication(text string, cursor *GeminiResponseCursor) e
 	}
 	next.LastSeq++
 	p := Pending{Seq: next.LastSeq, Text: text, At: time.Now().UTC()}
+	if next.DynamicBindings {
+		p.ExpectedPeerGeneration = next.AutomaticPeerGeneration
+		if p.ExpectedPeerGeneration == 0 {
+			p.Outcome = "context_missing"
+		} else if next.AutomaticScopeChanged {
+			p.Outcome = "context_changed"
+		}
+	}
 	if next.Pending == nil {
 		next.Pending = &p
 	} else {

@@ -155,7 +155,11 @@
         memberSection, notice, actionButton(t('ui.refresh'), () => openRoom(room), 'secondary-button'));
     }
     function messageAuthor(room, message) {
-      if (message.from !== 'user') return message.from === 'slot1' ? t('agent.agent1') : t('agent.agent2');
+      if (message.from !== 'user') {
+        const label = message.from === 'slot1' ? t('agent.agent1') : t('agent.agent2');
+        const runtime = ({claude:'Claude Code', codex:'Codex', grok:'Grok Build', gemini:'Gemini CLI'})[message.from_runtime] || message.from_runtime;
+        return [label, runtime, Number.isSafeInteger(message.from_generation) && message.from_generation > 0 ? `${t('room.native.generation')} ${message.from_generation}` : ''].filter(Boolean).join(' · ');
+      }
       if (message.author === 'host_owner') return t('room.lan.hostHuman');
       // This dialog is the joined member's own view: a "lan:" author names this
       // member's identity, so compare the pinned key instead of assuming the

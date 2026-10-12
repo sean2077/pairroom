@@ -19,6 +19,8 @@
   const outboxCodes = new Set(['invalid_room', 'outbox_invalid', 'outbox_conflict', 'outbox_unavailable']);
   const failureText = error => error?.message === 'outbox_busy' ? tr('outboxBusy') : outboxCodes.has(error?.message) ? tr('storageFailed') : error?.message || '';
   const language = () => window.PairRoomI18n?.lang || 'en';
+  const dynamicRoom = value => Boolean(value?.room?.dynamic_bindings || value?.relay?.dynamic_bindings);
+  const runtimeName = kind => ({claude: 'Claude Code', codex: 'Codex', grok: 'Grok Build', gemini: 'Gemini CLI'}[kind] || kind || '');
   const element = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
   const time = value => value ? new Intl.DateTimeFormat(language(), {dateStyle:'short',timeStyle:'medium'}).format(new Date(value)) : tr('never');
   // Wake outcomes/reasons are a fixed server vocabulary; unknown future values
@@ -49,6 +51,7 @@
     } finally { clearTimeout(timeout); readControllers.delete(controller); }
   }
   function handle(slot) {
+    if (dynamicRoom(snapshot) && ['slot1', 'slot2'].includes(slot)) return slot === 'slot1' ? '@agent1' : '@agent2';
     if (snapshot?.room.agents?.[slot]?.awaiting_peer) return `${tr(slot === 'slot1' ? 'agent1' : 'agent2')} · ${window.PairRoomI18n.t('room.lan.awaitingPeer')}`;
     return (snapshot?.identities?.[slot]?.MentionHandle || snapshot?.identities?.[slot]?.mention_handle) || (slot === 'user' ? tr('user') : slot);
   }
@@ -119,7 +122,7 @@
   // invitation, so it must never be offered a local bind or command.
   const remoteSlot = (value, slot, binding) => Boolean(binding.remote_key) || (value.room.sharing === 'lan' && value.room.owner_slot !== slot);
   function renderBindings(value) {
-    const key=JSON.stringify([value.relay.bindings,value.room.agents,value.identities,language()]);if(key===bindingsKey)return;bindingsKey=key;
+    const key=JSON.stringify([value.relay.bindings,value.room.agents,value.identities,value.join,dynamicRoom(value),language()]);if(key===bindingsKey)return;bindingsKey=key;
     // Activity refreshes must not collapse a binding's open command/config detail.
     const disclosures = new Set([...$('bindings').querySelectorAll('details[open]')].map(node => node.dataset.disclosure));
     const focused = document.activeElement?.dataset.nativeFocus;
@@ -151,8 +154,9 @@
         card.append(element('p', window.PairRoomI18n.t(selection.awaiting_peer ? 'room.lan.awaitingPeerHelp' : 'room.lan.remoteBindingHelp'), 'muted'));
         if (!selection.awaiting_peer) {
           const remoteMeta = element('dl', undefined, 'binding-meta');
-          [[window.PairRoomI18n.t('agent.runtime'), selection.runtime], [tr('generation'), b.generation || '—'], [tr('last'), time(b.last_activity)]].forEach(([key, text]) => remoteMeta.append(element('dt', key), element('dd', String(text))));
+          [[window.PairRoomI18n.t('agent.runtime'), runtimeName(b.runtime || selection.runtime)], [tr('generation'), b.generation || '—'], [tr('last'), time(b.last_activity)]].forEach(([key, text]) => remoteMeta.append(element('dt', key), element('dd', String(text))));
           card.append(remoteMeta);
+          if (b.active) card.append(element('p', tr('replaceRemoteHelp'), 'muted'));
         }
         return card;
       }
@@ -160,10 +164,13 @@
       const provider = selection.provider?.source === 'cc-switch'
         ? `CC Switch · ${selection.provider.app_type}/${selection.provider.profile_id}` : label('agent.nativeProvider');
       const configMeta = element('dl', undefined, 'binding-meta agent-config'); configMeta.title = tr('metadata');
-      [[label('agent.runtime'), selection.runtime || inherited], [label('agent.provider'), provider],
+      const configuration = dynamicRoom(value)
+        ? [[label('agent.runtime'), b.active ? runtimeName(b.runtime || selection.runtime) || tr('never') : tr('awaitingBinding')], [tr('last'), time(b.last_activity)]]
+        : [[label('agent.runtime'), selection.runtime || inherited], [label('agent.provider'), provider],
         [label('agent.model'), selection.model || inherited], [label('agent.effort'), selection.effort || inherited],
         [label('agent.permissionMode'), [selection.permission_mode, selection.approval_policy, selection.sandbox].filter(Boolean).join(' · ') || inherited],
-        [tr('last'), time(b.last_activity)]].forEach(([key, text]) => configMeta.append(element('dt', key), element('dd', text)));
+        [tr('last'), time(b.last_activity)]];
+      configuration.forEach(([key, text]) => configMeta.append(element('dt', key), element('dd', text)));
       card.append(configMeta);
       const identity = element('details'); identity.dataset.disclosure = `${slot}-identity`;
       identity.open = disclosures.has(identity.dataset.disclosure);
@@ -173,8 +180,29 @@
       identity.append(meta); card.append(identity);
       const instructions=element('details');instructions.dataset.disclosure=`${slot}-commands`;instructions.open=disclosures.has(instructions.dataset.disclosure);instructions.append(element('summary',tr('commands')),element('p',tr('setup.intro'),'muted'));
       instructions.firstElementChild.dataset.nativeFocus=`${slot}-commands`;
-      instructions.append(element('pre',`pairroom relay install --runtime ${selection.runtime}\npairroom relay bind --room ${value.room.id} --slot ${index+1}\npairroom relay wait --room ${value.room.id} --slot ${index+1}`));card.append(instructions);
-      const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('rawSelection')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);return card;
+      instructions.append(element('pre', 'pairroom relay install'));
+      const command = value.join?.[slot];
+      if (command) instructions.append(element('pre', command));
+      else instructions.append(element('p', tr('join.unavailable'), 'muted'));
+      instructions.append(element('pre', 'pairroom relay wait')); card.append(instructions);
+      if (b.active) {
+        const replacement = element('details'); replacement.dataset.disclosure = `${slot}-replace`;
+        replacement.open = disclosures.has(replacement.dataset.disclosure);
+        replacement.append(element('summary', tr('replaceSession')), element('p', tr('replaceHelp'), 'muted'));
+        replacement.firstElementChild.dataset.nativeFocus = `${slot}-replace`;
+        if (command) {
+          const replaceCommand = `${command} --replace`, pre = element('pre'), code = element('code', replaceCommand);
+          pre.append(code);
+          const copy = element('button', tr('replaceCopy'), 'join-copy'); copy.type = 'button'; copy.dataset.nativeFocus = `${slot}-replace-copy`;
+          copy.addEventListener('click', () => { void copyJoinCommand(copy, code, replaceCommand); });
+          replacement.append(pre, copy);
+        } else replacement.append(element('p', tr('join.unavailable'), 'muted'));
+        card.append(replacement);
+      }
+      if (!dynamicRoom(value)) {
+        const config=element('details');config.dataset.disclosure=`${slot}-config`;config.open=disclosures.has(config.dataset.disclosure);config.append(element('summary',tr('rawSelection')),element('pre',JSON.stringify(selection,null,2)));config.firstElementChild.dataset.nativeFocus=`${slot}-config`;card.append(config);
+      }
+      return card;
     });$('bindings').replaceChildren(...nodes);
     $('participant-summary').replaceChildren(...chips);
     for(const option of $('target').options) option.textContent=handle(option.value);
@@ -197,7 +225,7 @@
     // can copy it by hand instead of losing the instruction.
     const range = document.createRange(); range.selectNodeContents(code);
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-    status(tr('joinManual'), true);
+    status(tr('join.manual'), true);
   }
   function legacyCopy(command) {
     // execCommand is deprecated and can throw or be refused outright; the
@@ -220,13 +248,13 @@
     finally {
       button.disabled = false;
       // A refused copy still leaves the command selected for manual copying.
-      if (copied) status(tr('joinCopied')); else selectCommandText(code);
+      if (copied) status(tr('join.copied')); else selectCommandText(code);
     }
   }
   function renderJoin(value) {
     // Visibility is derived from durable binding state, never from a dismissal:
     // a replaced binding must bring the guidance back on the next refresh.
-    const key = JSON.stringify([value.join, value.relay.bindings, value.room.agents, value.room.sharing, value.room.owner_slot, language()]);
+    const key = JSON.stringify([value.join, value.relay.bindings, value.room.agents, value.room.sharing, value.room.owner_slot, dynamicRoom(value), language()]);
     if (key === joinKey) return;
     joinKey = key;
     const focused = document.activeElement?.dataset.joinFocus;
@@ -236,11 +264,11 @@
       const row = element('li', undefined, `join-slot ${slot}`);
       const meta = element('div', undefined, 'join-slot-meta');
       meta.append(element('span', String(index + 1), 'participant-avatar'), element('strong', window.PairRoomI18n.t(`room.native.agent${index + 1}`)));
-      if (!selection.awaiting_peer) {
+      if (dynamicRoom(value) || !selection.awaiting_peer) {
         const mention = handle(slot);
         if (mention && mention !== slot) meta.append(element('span', mention, 'join-handle'));
-        const runtime = selection.runtime || window.PairRoomI18n.t('room.nativeDefault');
-        meta.append(element('span', `${window.PairRoomI18n.t('agent.runtime')} ${runtime}`, 'muted'));
+        const runtime = dynamicRoom(value) ? (b.active ? runtimeName(b.runtime || selection.runtime) : '') : selection.runtime || window.PairRoomI18n.t('room.nativeDefault');
+        if (runtime) meta.append(element('span', `${window.PairRoomI18n.t('agent.runtime')} ${runtime}`, 'muted'));
       }
       const state = remote
         ? window.PairRoomI18n.t(selection.awaiting_peer ? 'room.lan.awaitingPeer' : 'room.lan.member')
@@ -252,14 +280,14 @@
         if (command) {
           const pre = element('pre'), code = element('code', command);
           pre.append(code);
-          const copy = element('button', tr('joinCopy'), 'join-copy');
+          const copy = element('button', tr('join.copy'), 'join-copy');
           copy.type = 'button'; copy.dataset.joinFocus = `${slot}-copy`;
           copy.addEventListener('click', () => { void copyJoinCommand(copy, code, command); });
           const line = element('div', undefined, 'join-command');
           line.append(pre, copy);
           row.append(line);
         } else {
-          row.append(element('p', tr('joinUnavailable'), 'muted'));
+          row.append(element('p', tr('join.unavailable'), 'muted'));
         }
       }
       rows.push(row);
@@ -330,7 +358,11 @@
     const chat=view==='chat', actor=['user','slot1','slot2'].includes(m.from)?m.from:'other';
     const head=element('div',undefined,chat?'message-meta':'message-heading');
     const stamp=element('time',time(m.created_at));stamp.dateTime=m.created_at;
-    const author = m.from === 'user' && m.author ? `${handle(m.from)} · ${window.PairRoomI18n.t(m.author.startsWith('lan:') ? 'room.lan.remoteHuman' : 'room.lan.hostHuman')}` : handle(m.from);
+    let author = m.from === 'user' && m.author ? `${handle(m.from)} · ${window.PairRoomI18n.t(m.author.startsWith('lan:') ? 'room.lan.remoteHuman' : 'room.lan.hostHuman')}` : handle(m.from);
+    // Historical authorship belongs to the publishing binding, never to the
+    // different Runtime that happens to occupy the same stable slot today.
+    if (m.from_runtime) author += ` · ${runtimeName(m.from_runtime)}`;
+    if (Number.isSafeInteger(m.from_generation) && m.from_generation > 0) author += ` · ${tr('generation')} ${m.from_generation}`;
     head.append(element('strong',author,'message-author'),element('span',`${tr('target')} ${handle(m.to)}`,'message-target'),stamp);
     const bubble=element('div',undefined,chat?'message-bubble':'message-evidence');
     if(m.quote)bubble.append(element('blockquote',`${m.quote.from_handle || ''}\n${m.quote.text || ''}`,'reply-quote'));

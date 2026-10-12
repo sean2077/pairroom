@@ -7,7 +7,9 @@ import (
 
 const (
 	Current     = "5.15.0"
-	StoreSchema = 13
+	StoreSchema = 14
+	// LANStoreSchema preserves Native v8 Rooms with runtime-derived handles.
+	LANStoreSchema = 13
 	// LocalStoreSchema is the supported pre-LAN format. Its explicit local
 	// permissions and bindings are read unchanged; LAN facts require schema 13.
 	LocalStoreSchema = 12
@@ -67,5 +69,5 @@ func Describe() string {
 // SupportsStoreSchema is an explicit bounded compatibility window. Pre-5.0
 // stores remain retired and future formats fail closed before replay/repair.
 func SupportsStoreSchema(schema int) bool {
-	return schema == LocalStoreSchema || schema == StoreSchema
+	return schema == LocalStoreSchema || schema == LANStoreSchema || schema == StoreSchema
 }

@@ -73,7 +73,7 @@ func TestRegistryRejectsFutureFormatsBeforeRecovery(t *testing.T) {
 }
 
 func TestRegistryRejectsIncompatibleProvisioningBeforeRecovery(t *testing.T) {
-	for _, schema := range []int{1, 2, 7} {
+	for _, schema := range []int{1, 2, 8} {
 		for _, location := range []string{"published", "staged", "quarantined"} {
 			t.Run(fmt.Sprintf("%s-schema-%d", location, schema), func(t *testing.T) {
 				registry, project := testRegistry(t, testGitRepo(t))

@@ -25,8 +25,8 @@ func TestDescribeBuildMetadata(t *testing.T) {
 }
 
 func TestStoreSchemaHasExplicitLocalAndLANCompatibilityWindow(t *testing.T) {
-	for _, schema := range []int{0, 11, 12, 13, 14} {
-		if got := SupportsStoreSchema(schema); got != (schema == 12 || schema == 13) {
+	for _, schema := range []int{0, 11, 12, 13, 14, 15} {
+		if got := SupportsStoreSchema(schema); got != (schema == 12 || schema == 13 || schema == 14) {
 			t.Fatalf("schema %d accepted=%v", schema, got)
 		}
 	}

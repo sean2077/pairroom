@@ -236,11 +236,15 @@ func TestSessionCommandsAcceptDocumentedRuntimeAlias(t *testing.T) {
 	if err := f.run(context.Background(), "status", strings.NewReader(""), io.Discard, io.Discard, "--runtime", "cc"); err != nil {
 		t.Fatal(err)
 	}
-	for _, flag := range []string{"--runtime", "--peer-runtime"} {
+	for _, flag := range []string{"--runtime"} {
 		err := Run(context.Background(), []string{"bind", "--create", "--repo", "missing", flag, "unknown"}, strings.NewReader(""), io.Discard, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "invalid "+flag) {
 			t.Fatalf("runtime validation followed workspace I/O: %v", err)
 		}
+	}
+	err := Run(context.Background(), []string{"bind", "--create", "--repo", "missing", "--peer-runtime", "cc"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "omit --peer-runtime") {
+		t.Fatalf("retired peer runtime reached workspace I/O: %v", err)
 	}
 }
 

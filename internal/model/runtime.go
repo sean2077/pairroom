@@ -18,6 +18,9 @@ const (
 	// RuntimeAwaitingPeer is a presentation/protocol sentinel for an explicit
 	// unselected LAN peer. It is not a supported executable Runtime.
 	RuntimeAwaitingPeer RuntimeKind = "awaiting_peer"
+	// RuntimeAwaitingBinding identifies an empty dynamic Native local slot.
+	// It cannot execute or inherit a default Runtime.
+	RuntimeAwaitingBinding RuntimeKind = "awaiting_binding"
 )
 
 func ParseRuntimeKind(value string) RuntimeKind {
@@ -64,7 +67,7 @@ func (k RuntimeKind) CanonicalForSlot(actor ActorID) RuntimeKind {
 
 func (k RuntimeKind) DefaultCommand() string {
 	switch k.Canonical() {
-	case RuntimeAwaitingPeer:
+	case RuntimeAwaitingPeer, RuntimeAwaitingBinding:
 		return ""
 	case RuntimeCodex:
 		return "codex"
@@ -81,6 +84,8 @@ func (k RuntimeKind) DisplayName() string {
 	switch k.Canonical() {
 	case RuntimeAwaitingPeer:
 		return "Awaiting peer"
+	case RuntimeAwaitingBinding:
+		return "Awaiting binding"
 	case RuntimeCodex:
 		return "Codex"
 	case RuntimeGemini:
@@ -94,7 +99,7 @@ func (k RuntimeKind) DisplayName() string {
 
 func (k RuntimeKind) ProviderAgentType() string {
 	switch k.Canonical() {
-	case RuntimeAwaitingPeer:
+	case RuntimeAwaitingPeer, RuntimeAwaitingBinding:
 		return ""
 	case RuntimeCodex:
 		return "codex"
@@ -141,8 +146,8 @@ func ParticipantIdentities(runtimes map[ActorID]RuntimeKind) map[ActorID]Partici
 	identities := make(map[ActorID]ParticipantIdentity, len(SlotActors()))
 	for index, actor := range SlotActors() {
 		kind := resolved[actor]
-		if kind == RuntimeAwaitingPeer {
-			identities[actor] = ParticipantIdentity{DisplayName: "Awaiting peer"}
+		if kind == RuntimeAwaitingPeer || kind == RuntimeAwaitingBinding {
+			identities[actor] = ParticipantIdentity{DisplayName: kind.DisplayName()}
 			continue
 		}
 		suffix := ""
@@ -157,6 +162,18 @@ func ParticipantIdentities(runtimes map[ActorID]RuntimeKind) map[ActorID]Partici
 		}
 	}
 	return identities
+}
+
+// NativeParticipantIdentityFor is the stable public identity used only by
+// dynamic Native protocol Rooms. Runtime remains binding metadata.
+func NativeParticipantIdentityFor(actor ActorID) ParticipantIdentity {
+	if actor == ActorSlot1 {
+		return ParticipantIdentity{DisplayName: "Agent 1", MentionHandle: "@agent1"}
+	}
+	if actor == ActorSlot2 {
+		return ParticipantIdentity{DisplayName: "Agent 2", MentionHandle: "@agent2"}
+	}
+	return ParticipantIdentity{DisplayName: actor.DisplayName(), MentionHandle: "@" + string(actor)}
 }
 
 func ParticipantIdentityFor(actor ActorID, runtimes map[ActorID]RuntimeKind) ParticipantIdentity {

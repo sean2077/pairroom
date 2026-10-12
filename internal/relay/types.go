@@ -34,6 +34,7 @@ var (
 	ErrUnknown      = errors.New("publication result unknown; inspect status before explicitly deciding recovery")
 	ErrWakeReserved = errors.New("wake is already reserved for this message; no automatic retry")
 	ErrWakeRoomBusy = errors.New("resolve delivering or unknown deliveries before changing wake configuration")
+	ErrPeerChanged  = errors.New("peer binding changed; inspect the current peer before explicitly publishing new work")
 )
 
 // WakeReservedCode and WakeIneligibleCode are the stable wire codes of the two
@@ -42,6 +43,7 @@ var (
 const (
 	WakeReservedCode   = "wake_reserved"
 	WakeIneligibleCode = "wake_ineligible"
+	PeerChangedCode    = "peer_changed"
 )
 
 // Wake outcomes and reasons are a fixed redaction vocabulary. They never carry
@@ -132,14 +134,16 @@ type bindingFact struct {
 // round-trip is required. SessionID is mandatory and participates in the global
 // (runtime, session) uniqueness check.
 type BindRequest struct {
-	BindID         string `json:"bind_id"`
-	CredentialHash string `json:"credential_hash"`
-	SessionID      string `json:"session_id"`
-	Replace        bool   `json:"replace,omitempty"`
+	Runtime        model.RuntimeKind `json:"runtime,omitempty"`
+	BindID         string            `json:"bind_id"`
+	CredentialHash string            `json:"credential_hash"`
+	SessionID      string            `json:"session_id"`
+	Replace        bool              `json:"replace,omitempty"`
 }
 
 // Auth is transport-only. Never marshal it into an event, error, or response.
 type Auth struct {
+	Runtime    model.RuntimeKind
 	MemberKey  string
 	Slot       model.ActorID
 	BindID     string
@@ -149,6 +153,8 @@ type Auth struct {
 }
 
 type Message struct {
+	FromRuntime      model.RuntimeKind  `json:"from_runtime,omitempty"`
+	FromGeneration   uint64             `json:"from_generation,omitempty"`
 	Author           string             `json:"author,omitempty"`
 	Review           *review.Anchor     `json:"review,omitempty"`
 	ID               string             `json:"id"`
@@ -174,6 +180,10 @@ type messageFact struct {
 }
 
 type Publication struct {
+	ExpectedPeerGeneration uint64 `json:"expected_peer_generation,omitempty"`
+	// A peer_changed receipt terminates this publication without exposing its
+	// body or enqueueing it for the successor binding.
+	Outcome    string   `json:"outcome,omitempty"`
 	BindID     string   `json:"bind_id"`
 	Generation uint64   `json:"generation"`
 	ReportSeq  uint64   `json:"report_seq"`
@@ -183,19 +193,21 @@ type Publication struct {
 }
 
 type SendRequest struct {
-	author        string
-	Review        *review.Anchor `json:"review,omitempty"`
-	ID            string         `json:"id"`
-	Text          string         `json:"text"`
-	To            model.ActorID  `json:"to,omitempty"`
-	AttachmentIDs []string       `json:"attachment_ids,omitempty"`
-	QuoteID       string         `json:"quote_id,omitempty"`
+	ExpectedPeerGeneration uint64 `json:"expected_peer_generation,omitempty"`
+	author                 string
+	Review                 *review.Anchor `json:"review,omitempty"`
+	ID                     string         `json:"id"`
+	Text                   string         `json:"text"`
+	To                     model.ActorID  `json:"to,omitempty"`
+	AttachmentIDs          []string       `json:"attachment_ids,omitempty"`
+	QuoteID                string         `json:"quote_id,omitempty"`
 }
 
 type Claim struct {
-	ID       string `json:"id"`
-	Receipt  string `json:"receipt"`
-	Envelope string `json:"envelope"`
+	PeerGeneration uint64 `json:"peer_generation,omitempty"`
+	ID             string `json:"id"`
+	Receipt        string `json:"receipt"`
+	Envelope       string `json:"envelope"`
 }
 
 type Audit struct {
@@ -207,12 +219,15 @@ type Audit struct {
 }
 
 type Snapshot struct {
-	Delivery map[string]MessageDelivery `json:"delivery,omitempty"`
-	HostMode model.HostMode             `json:"host_mode"`
-	RoomID   string                     `json:"room_id"`
-	Bindings map[model.ActorID]Binding  `json:"bindings"`
-	Messages []Message                  `json:"messages"`
-	Audit    []Audit                    `json:"audit"`
-	Sequence uint64                     `json:"sequence"`
-	Notice   string                     `json:"notice"`
+	DynamicBindings   bool                       `json:"dynamic_bindings,omitempty"`
+	Protocol          string                     `json:"protocol,omitempty"`
+	TargetGenerations map[model.ActorID]uint64   `json:"target_generations,omitempty"`
+	Delivery          map[string]MessageDelivery `json:"delivery,omitempty"`
+	HostMode          model.HostMode             `json:"host_mode"`
+	RoomID            string                     `json:"room_id"`
+	Bindings          map[model.ActorID]Binding  `json:"bindings"`
+	Messages          []Message                  `json:"messages"`
+	Audit             []Audit                    `json:"audit"`
+	Sequence          uint64                     `json:"sequence"`
+	Notice            string                     `json:"notice"`
 }

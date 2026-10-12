@@ -44,7 +44,9 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
         if (path==='/api/v1/projects/p1/rooms' && method==='POST') {
           __lanWrites.push({path,input});
           const peer=input.owner_slot==='slot1'?'slot2':'slot1';
-          const room={...input,id:'shared-r',project_id:'p1',lifecycle:'active',agents:{...input.agents,[peer]:{awaiting_peer:true}}};
+          const room={...input,id:'shared-r',project_id:'p1',lifecycle:'active',dynamic_bindings:true,
+            bindings:{slot1:{agent:'slot1',mode:'new',pending:true},slot2:{agent:'slot2',mode:'new',pending:true}},
+            agents:{[input.owner_slot]:{runtime:'awaiting_binding',awaiting_binding:true},[peer]:{runtime:'awaiting_peer',awaiting_peer:true}}};
           __snapshot.rooms.push(room);
           __snapshot.runtimes.push({room_id:room.id,phase:'active',host_mode:'native',occupies_capacity:false});
           return Response.json(room);
@@ -102,7 +104,11 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     await page.locator('#room-share-lan').check()
     await page.locator('#room-lan-owner-slot').select_option('slot2')
     await expect(page.locator('fieldset[data-actor="slot1"]')).to_be_hidden()
-    await expect(page.locator('fieldset[data-actor="slot2"]')).to_be_visible()
+    await expect(page.locator('fieldset[data-actor="slot2"]')).to_be_hidden()
+    await expect(page.locator('#slot1-runtime')).to_be_disabled()
+    await expect(page.locator('#slot2-runtime')).to_be_disabled()
+    await expect(page.locator('#room-native-slot1-state')).to_contain_text('Awaiting the other side')
+    await expect(page.locator('#room-native-slot2-state')).to_contain_text('Waiting for a native session')
     await expect(page.locator('#room-pair-profile-controls')).to_be_hidden()
     await expect(page.locator('#room-lan-peer')).to_contain_text('awaiting the other side')
     await page.locator('#room-name').fill('LAN bug reproduction')
@@ -110,7 +116,7 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     await expect(page.locator('#lan-accept-receipt')).to_be_visible()
     created = await page.evaluate("__lanWrites.find(w=>w.path==='/api/v1/projects/p1/rooms').input")
     assert created['host_mode'] == 'native' and created['sharing'] == 'lan' and created['owner_slot'] == 'slot2'
-    assert set(created['agents']) == {'slot2'}, 'creation selected an invented runtime for the other side'
+    assert 'agents' not in created and 'agent_pair_profile_id' not in created and 'bindings' not in created, 'Native creation submitted Runtime or session selections'
     assert await page.locator('#lan-accept-receipt').input_value() == '', 'untrusted pending identity prefilled approval'
     await page.get_by_role('button', name='Create or copy current invitation', exact=True).click()
     await expect(page.locator('#lan-invite-output')).to_have_value("pairroom relay join 'pairroom://join/aW52aXRlLWZpeHR1cmU'")
@@ -182,7 +188,7 @@ async def verify_lan(browser, artifacts: Path, in_page_fixture: bool = False) ->
     assert await page.evaluate("__lanWrites.filter(w=>w.path.endsWith('/leave')).length") == 0, 'local detach attempted a remote leave'
     assert not errors, errors
     await page.close()
-    return {'lan_owner_explicit_configuration':True, 'lan_native_owner_slot_only':True,
+    return {'lan_owner_explicit_configuration':True, 'lan_native_runtime_free_creation':True,
             'lan_receipt_explicit':True, 'lan_evidence_safe_download':True,
             'lan_publication_receipt_recovery':not in_page_fixture, 'lan_responsive':True,
             'lan_direct_client_setup':True, 'lan_membership_without_contact':True,

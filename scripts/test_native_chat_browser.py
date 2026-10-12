@@ -62,11 +62,17 @@ def fixture_html(isolated: bool = False) -> str:
       remoteBindingHelp:'The other side uses CLI/hooks directly from their native session. They need no local Service. Native session paths, permissions and credentials remain on their machine.', member:'LAN member',
       remoteHuman:'Other side', hostHuman:'Host owner',
       agent1:'Agent 1', agent2:'Agent 2', runtime:'Runtime', nativeDefault:'native default',
+      awaitingBinding:'Waiting for a native session to join', generation:'Generation',
+      replaceSession:'Replace this session', replaceCopy:'Copy replacement command',
+      replaceHelp:'Run this command inside the replacement session. The slot stays the same and receives a new binding generation. Old relay credentials lose access; previous journals and history are retained. Old queued work is cancelled, claimed work stays uncertain, and already delivered work cannot be undone. Ordinary bind resumes the original session; use --replace only for an intentional change.',
+      replaceRemoteHelp:'To replace this remote session, revoke its membership in LAN access, create a new invitation, then ask the replacement session to run join with --replace. Accept its exact new receipt. Old credentials lose access and earlier work remains available for inspection.',
       join:'Join this Room', setup:'Setup guide', help:'Run the command inside the matching Agent session.',
-      joinCopy:'Copy command', joinCopied:'Command copied', joinManual:'The browser could not copy. The command is selected; copy it manually.',
-      joinUnavailable:'This Service cannot name its own endpoint here.'
+      'join.copy':'Copy command', 'join.copied':'Command copied', 'join.manual':'The browser could not copy. The command is selected; copy it manually.',
+      'join.unavailable':'This Service cannot name its own endpoint here.'
     };
-    window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.split('.').pop()]||key;}};
+    // Native keys include nested suffixes such as join.copied. Keep that
+    // suffix intact; other fixture namespaces still use their short labels.
+    window.PairRoomI18n={lang:'en',apply(){},t(key){return labels[key.replace(/^room\.native\./,'')]||labels[key.split('.').pop()]||key;}};
     window.__message = (id,from='slot1',state='handed_off',text='Review '+id) => ({
       id,from,to:from==='slot1'?'slot2':'slot1',state,text,created_at:'2026-09-22T10:00:00Z'
     });

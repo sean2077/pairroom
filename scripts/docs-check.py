@@ -166,11 +166,12 @@ def generated_values(path: Path, marker: str, prefix: str = "") -> list[str]:
     return sorted(set(re.findall(r'`' + re.escape(prefix) + r'([^`]+)`', match.group(1))))
 
 
-def storage_format_window(root: Path) -> tuple[tuple[int, int], tuple[int, int], int, int]:
-    """Read the actual writer and explicit pre-LAN compatibility declarations."""
+def storage_format_window(root: Path) -> tuple[tuple[int, int], list[tuple[int, int]], int, list[int]]:
+    """Read the writer and the explicit, bounded Native format window."""
     version = (root / "internal/version/version.go").read_text(encoding="utf-8")
     registry = (root / "internal/service/registry.go").read_text(encoding="utf-8")
     provision = (root / "internal/service/provision.go").read_text(encoding="utf-8")
+    formats = (root / "internal/service/native_selections.go").read_text(encoding="utf-8")
 
     def number(source: str, pattern: str, label: str) -> int:
         matches = set(re.findall(pattern, source, re.M))
@@ -180,17 +181,23 @@ def storage_format_window(root: Path) -> tuple[tuple[int, int], tuple[int, int],
 
     current = number(version, r'^\s*StoreSchema\s*=\s*(\d+)\b', "Store writer schema")
     local = number(version, r'^\s*LocalStoreSchema\s*=\s*(\d+)\b', "existing local Store schema")
+    lan = number(version, r'^\s*LANStoreSchema\s*=\s*(\d+)\b', "existing LAN Store schema")
     written = number(provision, r'roomProvisionedPayload\s*\{\s*Schema:\s*(\d+)\b', "provisioning writer schema")
-    # The replay guard rejects mismatched pairs, so matching a reader lower
-    # bound alone would wrongly document unsupported combinations such as 12/6.
-    pairs = {(int(store), int(schema)) for schema, store in re.findall(
-        r'payload\.Schema\s*==\s*(\d+)\s*&&\s*storeSchema\s*!=\s*(\d+)', registry)}
-    if len(pairs) != 2 or {store for store, _ in pairs} != {current, local} or (current, written) not in pairs:
+    # The shared replay/preflight guard owns exact accepted pairs, not a lower
+    # bound that would also admit mismatched historical formats such as 12/6.
+    pairs = {(int(store), int(schema)) for store, schema in re.findall(
+        r'storeSchema\s*==\s*(\d+)\s*&&\s*provisionSchema\s*==\s*(\d+)', formats)}
+    if len(pairs) != 3 or {store for store, _ in pairs} != {current, local, lan} or (current, written) not in pairs:
         raise ValueError("Store/provisioning writer and explicit reader declarations disagree; inspect their format window")
-    existing = next(pair for pair in pairs if pair[0] == local)
+    if "!validRoomFormat(storeSchema, payload.Schema)" not in registry or "!validRoomFormat(schema, header.Schema)" not in registry:
+        raise ValueError("Room replay and startup preflight must both enforce the explicit format window")
+    existing = sorted(pair for pair in pairs if pair[0] != current)
     checkpoint = number(registry, r'^const registryCheckpointSchema\s*=\s*(\d+)\b', "Registry checkpoint writer")
     old_checkpoint = number(registry, r'^const localRegistryCheckpointSchema\s*=\s*(\d+)\b', "existing local Registry checkpoint")
-    return (current, written), existing, checkpoint, old_checkpoint
+    lan_checkpoint = number(registry, r'^const lanRegistryCheckpointSchema\s*=\s*(\d+)\b', "existing LAN Registry checkpoint")
+    if len({checkpoint, old_checkpoint, lan_checkpoint}) != 3:
+        raise ValueError("Registry checkpoint writer and historical reader declarations overlap")
+    return (current, written), existing, checkpoint, sorted([old_checkpoint, lan_checkpoint])
 
 
 def check_storage_formats(root: Path) -> list[str]:
@@ -200,8 +207,8 @@ def check_storage_formats(root: Path) -> list[str]:
         current, existing, checkpoint, old_checkpoint = storage_format_window(root)
     except (OSError, ValueError) as exc:
         return [f"storage format declarations: {exc}"]
-    required_pairs = {current, existing}
-    required_checkpoints = {checkpoint, old_checkpoint}
+    required_pairs = {current, *existing}
+    required_checkpoints = {checkpoint, *old_checkpoint}
     for name in ("STORAGE.md", "ARCHITECTURE.md", "TROUBLESHOOTING.md", "UPGRADING.md"):
         path = root / "docs" / name
         # Inline formatting is immaterial, while fenced examples and comments
@@ -210,20 +217,20 @@ def check_storage_formats(root: Path) -> list[str]:
         pairs = {(int(store), int(schema)) for store, schema in re.findall(
             r'\bStore(?:\s+schema)?\s+(\d+)\s*/\s*provisioning\s+(\d+)\b', text)}
         if pairs != required_pairs:
-            failures.append(f"docs/{name}: document current Store/provisioning {current[0]}/{current[1]} and existing local {existing[0]}/{existing[1]} only; found {sorted(pairs)}")
+            failures.append(f"docs/{name}: document current Store/provisioning {current[0]}/{current[1]} and existing reads {existing} only; found {sorted(pairs)}")
         checkpoints = {int(value) for value in re.findall(
             r'\bcheckpoints?(?:\s+schema)?(?:\s+use)?\s+(\d+)\b', text)}
         if checkpoints != required_checkpoints:
-            failures.append(f"docs/{name}: document new checkpoint {checkpoint} and readable existing local checkpoint {old_checkpoint}; found {sorted(checkpoints)}")
+            failures.append(f"docs/{name}: document new checkpoint {checkpoint} and readable existing checkpoints {old_checkpoint}; found {sorted(checkpoints)}")
         if name == "STORAGE.md":
             # The owning table labels writer versus existing-reader authority;
             # merely mentioning both numbers would not catch swapped columns.
-            rows = re.findall(r'^\|\s*Room Store / provisioning\s*\|\s*(\d+)\s*/\s*(\d+)\s*\|\s*(\d+)\s*/\s*(\d+)\s*\|\s*$', text, re.M)
-            if rows != [tuple(map(str, (*current, *existing)))]:
-                failures.append("docs/STORAGE.md: Store/provisioning table must distinguish current writes from existing local reads")
-            rows = re.findall(r'^\|\s*Registry checkpoint\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*$', text, re.M)
-            if rows != [(str(checkpoint), str(old_checkpoint))]:
-                failures.append("docs/STORAGE.md: checkpoint table must distinguish current writes from existing local reads")
+            rows = re.findall(r'^\|\s*Room Store / provisioning\s*\|\s*(\d+)\s*/\s*(\d+)\s*\|([^|]+)\|\s*$', text, re.M)
+            if len(rows) != 1 or tuple(map(int, rows[0][:2])) != current or sorted((int(a), int(b)) for a, b in re.findall(r'(\d+)\s*/\s*(\d+)', rows[0][2])) != existing:
+                failures.append("docs/STORAGE.md: Store/provisioning table must distinguish current writes from all existing reads")
+            rows = re.findall(r'^\|\s*Registry checkpoint\s*\|\s*(\d+)\s*\|([^|]+)\|\s*$', text, re.M)
+            if len(rows) != 1 or int(rows[0][0]) != checkpoint or sorted(map(int, re.findall(r'\d+', rows[0][1]))) != old_checkpoint:
+                failures.append("docs/STORAGE.md: checkpoint table must distinguish current writes from all existing reads")
     return failures
 
 

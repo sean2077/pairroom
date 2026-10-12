@@ -98,8 +98,14 @@ func safeError(err error) error {
 	if errors.Is(err, relay.ErrSendPayloadConflict) {
 		return relay.ErrSendPayloadConflict
 	}
+	if errors.Is(err, relay.ErrPeerChanged) {
+		return relay.ErrPeerChanged
+	}
 	var failure *lanshare.Error
 	if errors.As(err, &failure) {
+		if failure.Code == relay.PeerChangedCode {
+			return relay.ErrPeerChanged
+		}
 		if failure.Code == relay.SendPayloadConflictCode {
 			return relay.ErrSendPayloadConflict
 		}

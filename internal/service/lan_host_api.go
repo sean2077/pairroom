@@ -12,33 +12,33 @@ import (
 	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/review"
 	"github.com/sean2077/pairroom/internal/version"
 )
 
 type lanMemberRequest struct {
-	Review         *review.Anchor `json:"review,omitempty"`
-	Cursor         string         `json:"cursor,omitempty"`
-	Limit          int            `json:"limit,omitempty"`
-	Pending        bool           `json:"pending,omitempty"`
-	Since          time.Time      `json:"since,omitempty"`
-	ReportSeq      uint64         `json:"report_seq,omitempty"`
-	Text           string         `json:"text,omitempty"`
-	ID             string         `json:"id,omitempty"`
-	Receipt        string         `json:"receipt,omitempty"`
-	To             model.ActorID  `json:"to,omitempty"`
-	AttachmentIDs  []string       `json:"attachment_ids,omitempty"`
-	QuoteID        string         `json:"quote_id,omitempty"`
-	Park           bool           `json:"park,omitempty"`
-	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
-	Enabled        bool           `json:"enabled,omitempty"`
-	Error          string         `json:"error,omitempty"`
-	Digest         string         `json:"digest,omitempty"`
-	Generation     uint64         `json:"generation,omitempty"`
-	Outcome        string         `json:"outcome,omitempty"`
-	Reason         string         `json:"reason,omitempty"`
+	ExpectedPeerGeneration uint64         `json:"expected_peer_generation,omitempty"`
+	Review                 *review.Anchor `json:"review,omitempty"`
+	Cursor                 string         `json:"cursor,omitempty"`
+	Limit                  int            `json:"limit,omitempty"`
+	Pending                bool           `json:"pending,omitempty"`
+	Since                  time.Time      `json:"since,omitempty"`
+	ReportSeq              uint64         `json:"report_seq,omitempty"`
+	Text                   string         `json:"text,omitempty"`
+	ID                     string         `json:"id,omitempty"`
+	Receipt                string         `json:"receipt,omitempty"`
+	To                     model.ActorID  `json:"to,omitempty"`
+	AttachmentIDs          []string       `json:"attachment_ids,omitempty"`
+	QuoteID                string         `json:"quote_id,omitempty"`
+	Park                   bool           `json:"park,omitempty"`
+	TimeoutSeconds         int            `json:"timeout_seconds,omitempty"`
+	Enabled                bool           `json:"enabled,omitempty"`
+	Error                  string         `json:"error,omitempty"`
+	Digest                 string         `json:"digest,omitempty"`
+	Generation             uint64         `json:"generation,omitempty"`
+	Outcome                string         `json:"outcome,omitempty"`
+	Reason                 string         `json:"reason,omitempty"`
 }
 
 func publicLANBinding(b relay.Binding) relay.Binding {
@@ -55,7 +55,7 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 	if decodeNativeJSON(w, r, &req) != nil {
 		return
 	}
-	send := relay.SendRequest{Review: req.Review, ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID}
+	send := relay.SendRequest{ExpectedPeerGeneration: req.ExpectedPeerGeneration, Review: req.Review, ID: req.ID, Text: req.Text, To: req.To, AttachmentIDs: req.AttachmentIDs, QuoteID: req.QuoteID}
 	switch action {
 	case "inspect":
 		b, err := n.engine.Inspect(a)
@@ -69,9 +69,10 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 			lanMemberResult(w, nil, err)
 			return
 		}
-		lanMemberResult(w, h.owner.lanRoomInfo(n, b), nil)
+		room, err := h.owner.lanRoomInfo(n, b)
+		lanMemberResult(w, room, err)
 	case "report":
-		p, err := n.engine.Report(a, req.ReportSeq, req.Text)
+		p, err := n.engine.Report(a, req.ReportSeq, req.Text, req.ExpectedPeerGeneration)
 		if err == nil && p.Message != nil {
 			n.scheduleWake(p.Message.ID)
 		}
@@ -124,7 +125,7 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 		lanMemberResult(w, snapshot, err)
 	case "doctor":
 		summary, err := n.engine.AuthSummary(a)
-		lanMemberResult(w, map[string]any{"relay": summary, "protocol": protocol.NativeVersion, "service_version": version.Current}, err)
+		lanMemberResult(w, map[string]any{"relay": summary, "protocol": n.engine.ProtocolVersion(), "service_version": version.Current}, err)
 	case "summary":
 		summary, err := n.engine.AuthSummary(a)
 		lanMemberResult(w, summary, err)
@@ -133,7 +134,6 @@ func (h *lanHostServer) serveMember(w http.ResponseWriter, r *http.Request, n *n
 		lanMemberResult(w, page, err)
 	case "peer":
 		b, err := n.engine.Peer(a)
-		b.Runtime = n.engine.Runtimes()[model.OtherParticipant(a.Slot)]
 		lanMemberResult(w, publicLANBinding(b), err)
 	case "failure":
 		lanMemberResult(w, map[string]bool{"recorded": true}, n.engine.Failure(a, req.Error))

@@ -45,8 +45,22 @@ func TestWriteProtocolDefaultsToNative(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &contract); err != nil {
 		t.Fatalf("decode JSON: %v\n%s", err, stdout.String())
 	}
-	if contract.Version != protocol.NativeVersion || contract.Actor != model.ActorSlot1 || len(contract.Rules) == 0 {
+	if contract.Version != protocol.NativeDynamicVersion || contract.Actor != model.ActorSlot1 || len(contract.Rules) == 0 {
 		t.Fatalf("unexpected contract: %+v", contract)
+	}
+}
+
+func TestWriteLegacyNativeProtocolIsExplicit(t *testing.T) {
+	var out, diagnostic bytes.Buffer
+	if err := writeProtocol([]string{"--legacy-native", "--json"}, &out, &diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	var contract protocol.Contract
+	if err := json.Unmarshal(out.Bytes(), &contract); err != nil || contract.Version != protocol.NativeVersion {
+		t.Fatalf("legacy contract changed: %+v %v", contract, err)
+	}
+	if err := writeProtocol([]string{"--host-mode", "embedded", "--legacy-native"}, &out, &diagnostic); err == nil {
+		t.Fatal("legacy Native option applied to Embedded")
 	}
 }
 

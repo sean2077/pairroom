@@ -95,13 +95,13 @@ func TestNativeRoomFactsRaiseNotifications(t *testing.T) {
 	f := nativeHTTPWithNotifier(t, notifier)
 	sender := f.bind(t, model.ActorSlot1)
 	f.bind(t, model.ActorSlot2)
-	if _, err := f.native.engine.Send(sender, relay.SendRequest{ID: "peer", Text: "please review"}); err != nil {
+	if _, err := f.native.engine.Send(sender, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "peer", Text: "please review"}); err != nil {
 		t.Fatal(err)
 	}
 	if items, _ := notifier.Since(0); len(items) != 0 {
 		t.Fatalf("peer message raised a notification: %+v", items)
 	}
-	if _, err := f.native.engine.Send(sender, relay.SendRequest{ID: "human", Text: "need a decision", To: model.ActorUser}); err != nil {
+	if _, err := f.native.engine.Send(sender, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "human", Text: "need a decision", To: model.ActorUser}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.native.engine.RecordWake("failed", "socket_failed", model.ActorSlot2); err != nil {

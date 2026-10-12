@@ -134,7 +134,7 @@ The current PairRoom behavior on this page was checked on **2026-10-11** against
 | Flexible responsibilities, not a phase compiler | [Protocol](PROTOCOL.md), [collaboration regressions](../internal/room/collaboration_test.go) |
 | Exact-handle relay and byte budgets | [Versioned protocol](../internal/protocol/contract.go), [Room Engine](../internal/room/engine.go) |
 | Independent Embedded selections | [Selection model](../internal/model/agent_selection.go), [CC Switch boundary](../internal/ccswitch/) |
-| Native process/configuration boundary and bounded continuation | [Native protocol](PROTOCOL.md#native-host-protocol-v8), [relay client](../internal/relayclient/) |
+| Native process/configuration boundary and bounded continuation | [Native protocol](PROTOCOL.md#native-host-protocol-v9), [relay client](../internal/relayclient/) |
 | Native default, four Runtimes and actual LAN peer selection | [Host modes](../internal/model/host.go), [Runtime identities](../internal/model/runtime.go), [LAN membership](../internal/relay/lan.go) |
 | Service-free LAN guest and coexistence with local Rooms | [Direct transport](../internal/relayclient/lan_transport.go), [native identity reservations](../internal/nativeidentity/identity.go), [optional guest wake](../internal/service/lan_guest_wake.go) |
 | Persistent state and explicit recovery | [Engine regressions](../internal/room/engine_test.go), [Storage](STORAGE.md) |

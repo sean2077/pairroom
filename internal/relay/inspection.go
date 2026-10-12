@@ -24,11 +24,13 @@ func (e *Engine) Sequence() uint64 {
 }
 
 type BindingSummary struct {
-	Active          bool      `json:"active"`
-	Associated      bool      `json:"associated"`
-	ParkEnabled     bool      `json:"park_enabled"`
-	CollectorActive bool      `json:"collector_active"`
-	LastActivity    time.Time `json:"last_activity,omitempty"`
+	Runtime         model.RuntimeKind `json:"runtime,omitempty"`
+	Generation      uint64            `json:"generation,omitempty"`
+	Active          bool              `json:"active"`
+	Associated      bool              `json:"associated"`
+	ParkEnabled     bool              `json:"park_enabled"`
+	CollectorActive bool              `json:"collector_active"`
+	LastActivity    time.Time         `json:"last_activity,omitempty"`
 }
 
 type InboxSummary struct {
@@ -47,16 +49,19 @@ type RecoveryReference struct {
 // transcript paths, native session IDs or historical audit entries. It reports
 // transport facts, never whether the native model is working or finished.
 type Summary struct {
-	LastUserMessage string                            `json:"last_user_message,omitempty"`
-	HostMode        model.HostMode                    `json:"host_mode"`
-	RoomID          string                            `json:"room_id"`
-	Sequence        uint64                            `json:"sequence"`
-	WakeEnabled     bool                              `json:"wake_enabled"`
-	Bindings        map[model.ActorID]BindingSummary  `json:"bindings"`
-	Inboxes         map[model.ActorID]InboxSummary    `json:"inboxes"`
-	Recovery        []RecoveryReference               `json:"recovery,omitempty"`
-	LastWake        map[model.ActorID]WakeObservation `json:"last_wake"`
-	Notice          string                            `json:"notice"`
+	DynamicBindings   bool                              `json:"dynamic_bindings,omitempty"`
+	Protocol          string                            `json:"protocol,omitempty"`
+	TargetGenerations map[model.ActorID]uint64          `json:"target_generations,omitempty"`
+	LastUserMessage   string                            `json:"last_user_message,omitempty"`
+	HostMode          model.HostMode                    `json:"host_mode"`
+	RoomID            string                            `json:"room_id"`
+	Sequence          uint64                            `json:"sequence"`
+	WakeEnabled       bool                              `json:"wake_enabled"`
+	Bindings          map[model.ActorID]BindingSummary  `json:"bindings"`
+	Inboxes           map[model.ActorID]InboxSummary    `json:"inboxes"`
+	Recovery          []RecoveryReference               `json:"recovery,omitempty"`
+	LastWake          map[model.ActorID]WakeObservation `json:"last_wake"`
+	Notice            string                            `json:"notice"`
 }
 
 type WakeObservation struct {
@@ -95,9 +100,20 @@ func (e *Engine) summaryLocked() Summary {
 	s := Summary{LastUserMessage: e.lastUserMessage, HostMode: model.HostNative, RoomID: e.cfg.RoomID, Sequence: e.sequence, WakeEnabled: e.wakeEnabled,
 		Bindings: map[model.ActorID]BindingSummary{}, Inboxes: map[model.ActorID]InboxSummary{}, LastWake: map[model.ActorID]WakeObservation{},
 		Notice: "handed_off = CLI stdout, not model acceptance. Inspect history --id or --pending; never auto-replay."}
+	s.DynamicBindings, s.Protocol, s.TargetGenerations = e.cfg.DynamicBindings, e.ProtocolVersion(), e.targetGenerationsLocked()
+	if e.cfg.DynamicBindings {
+		for _, slot := range model.SlotActors() {
+			s.Bindings[slot] = BindingSummary{Runtime: e.cfg.Runtimes[slot]}
+		}
+	}
 
 	for slot, b := range e.bindings {
 		s.Bindings[slot] = BindingSummary{Active: b.Active, Associated: b.SessionID != "" || b.RemoteKey != "", ParkEnabled: b.ParkEnabled, CollectorActive: e.waiters[slot] > 0, LastActivity: b.LastActivity}
+		if e.cfg.DynamicBindings {
+			v := s.Bindings[slot]
+			v.Runtime, v.Generation = b.Runtime, b.Generation
+			s.Bindings[slot] = v
+		}
 	}
 	for _, slot := range model.SlotActors() {
 		counts := e.counts[slot]

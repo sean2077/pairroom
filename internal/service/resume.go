@@ -74,7 +74,7 @@ func roomHasResumableWork(durable Room) (bool, error) {
 		if durable.Sharing == "lan" {
 			sharedSlot = model.OtherParticipant(durable.OwnerSlot)
 		}
-		return relay.HasWakeWorkWithSharedSlot(durable.ID, events, kinds, sharedSlot)
+		return relay.HasWakeWorkWithSharedSlot(durable.ID, events, kinds, sharedSlot, durable.DynamicBindings)
 	}
 	return room.HasRecoverableWork(events)
 }

@@ -38,7 +38,8 @@ func (s *ManagementServer) revokeLANMemberOffline(ctx context.Context, roomID st
 		return err
 	}
 	engine, err := relay.Open(relay.Config{
-		RoomID: room.ID, Store: log, SharedSlot: model.OtherParticipant(room.OwnerSlot),
+		DynamicBindings: room.DynamicBindings,
+		RoomID:          room.ID, Store: log, SharedSlot: model.OtherParticipant(room.OwnerSlot),
 		Runtimes: selectionsRuntimeKinds(room.Agents), OnAppend: s.registry.observeLANAuthorization,
 		CommitBinding: func(binding relay.Binding, appendFact func() error) error {
 			return s.registry.commitNativeBinding(room.ID, binding, appendFact)

@@ -1,0 +1,113 @@
+{
+  "schema": 4,
+  "generated_at": "2026-10-12T03:15:59.119004691Z",
+  "projects": [
+    {
+      "id": "__PROJECT_ID__",
+      "root": "__WORKSPACE__",
+      "available": true,
+      "created_at": "2026-10-12T03:15:59.110274665Z"
+    }
+  ],
+  "rooms": [
+    {
+      "host_mode": "native",
+      "runtime_names": {
+        "slot1": "Legacy Native local · @claude · 53e11658ebc1",
+        "slot2": "Legacy Native local · @codex · 53e11658ebc1"
+      },
+      "collaboration": {
+        "version": 2,
+        "mode": "default",
+        "instructions": "Resolve the human's request accurately with the least necessary coordination. For simple, low-risk tasks, the addressed Agent executes, verifies, and answers directly, without delegation or peer review. Otherwise, Agent 1 (Lead) focuses on planning, decisions, and review; Agent 2 (Executor) implements, verifies, and contributes technical feedback. Involve the peer when complexity, uncertainty, or risk warrants it, not to complete a fixed sequence. These are defaults, not tool permissions. Follow newer human instructions."
+      },
+      "id": "room-f562063c802353e11658ebc1",
+      "project_id": "__PROJECT_ID__",
+      "name": "Legacy Native local",
+      "data_dir": "__DATA_ROOT__/rooms/room-f562063c802353e11658ebc1",
+      "lifecycle": "active",
+      "bindings": {
+        "slot1": {
+          "agent": "slot1",
+          "mode": "new",
+          "session_id": "legacy-session-native-local",
+          "bound_at": "2026-10-12T03:15:59.116999165Z"
+        },
+        "slot2": {
+          "agent": "slot2",
+          "mode": "new",
+          "pending": true,
+          "bound_at": "2026-10-12T03:15:59.111652681Z"
+        }
+      },
+      "agents": {
+        "slot1": {
+          "runtime": "claude",
+          "provider": {
+            "source": "native"
+          }
+        },
+        "slot2": {
+          "runtime": "codex",
+          "provider": {
+            "source": "native"
+          }
+        }
+      },
+      "transcript_boundary_notice": "This PairRoom timeline starts at the binding boundary. Existing native Runtime context may be resumed, but earlier native conversation history is not imported, copied, summarized, searched, or displayed.",
+      "created_at": "2026-10-12T03:15:59.111653632Z",
+      "updated_at": "2026-10-12T03:15:59.117725789Z"
+    },
+    {
+      "sharing": "lan",
+      "owner_slot": "slot1",
+      "host_mode": "native",
+      "runtime_names": {
+        "slot1": "Legacy Native LAN · @grok · 3e1395a0d54b",
+        "slot2": ""
+      },
+      "collaboration": {
+        "version": 2,
+        "mode": "default",
+        "instructions": "Resolve the human's request accurately with the least necessary coordination. For simple, low-risk tasks, the addressed Agent executes, verifies, and answers directly, without delegation or peer review. Otherwise, Agent 1 (Lead) focuses on planning, decisions, and review; Agent 2 (Executor) implements, verifies, and contributes technical feedback. Involve the peer when complexity, uncertainty, or risk warrants it, not to complete a fixed sequence. These are defaults, not tool permissions. Follow newer human instructions."
+      },
+      "id": "room-8714d2976deb3e1395a0d54b",
+      "project_id": "__PROJECT_ID__",
+      "name": "Legacy Native LAN",
+      "data_dir": "__DATA_ROOT__/rooms/room-8714d2976deb3e1395a0d54b",
+      "lifecycle": "active",
+      "bindings": {
+        "slot1": {
+          "agent": "slot1",
+          "mode": "new",
+          "session_id": "legacy-session-native-lan",
+          "bound_at": "2026-10-12T03:15:59.118785142Z"
+        },
+        "slot2": {
+          "agent": "slot2",
+          "mode": "new",
+          "pending": true,
+          "bound_at": "2026-10-12T03:15:59.115429503Z"
+        }
+      },
+      "agents": {
+        "slot1": {
+          "runtime": "grok",
+          "provider": {
+            "source": "native"
+          }
+        },
+        "slot2": {
+          "awaiting_peer": true,
+          "runtime": "",
+          "provider": {
+            "source": ""
+          }
+        }
+      },
+      "transcript_boundary_notice": "This PairRoom timeline starts at the binding boundary. Existing native Runtime context may be resumed, but earlier native conversation history is not imported, copied, summarized, searched, or displayed.",
+      "created_at": "2026-10-12T03:15:59.115430284Z",
+      "updated_at": "2026-10-12T03:15:59.119004441Z"
+    }
+  ]
+}

@@ -47,11 +47,11 @@ func TestLANPeerSelectionTracksRevocationAndSuccessorAcrossRestart(t *testing.T)
 			t.Fatalf("peer handle = %q, want %q", identities[model.ActorSlot2].MentionHandle, handle)
 		}
 	}
-	assertSelection(n, model.RuntimeCodex, "@codex")
+	assertSelection(n, model.RuntimeCodex, "@agent2")
 	if err := n.engine.RevokeLANMember(); err != nil {
 		t.Fatal(err)
 	}
-	assertSelection(n, model.RuntimeAwaitingPeer, "")
+	assertSelection(n, model.RuntimeAwaitingPeer, "@agent2")
 	invite, err := n.engine.CreateLANInvite()
 	if err != nil {
 		t.Fatal(err)
@@ -63,15 +63,15 @@ func TestLANPeerSelectionTracksRevocationAndSuccessorAcrossRestart(t *testing.T)
 	if _, err := n.engine.AcceptLANJoin("gemini-successor", key); err != nil {
 		t.Fatal(err)
 	}
-	assertSelection(n, model.RuntimeGemini, "@gemini")
+	assertSelection(n, model.RuntimeGemini, "@agent2")
 	if err := n.engine.RevokeLANMember(); err != nil {
 		t.Fatal(err)
 	}
-	assertSelection(n, model.RuntimeAwaitingPeer, "")
+	assertSelection(n, model.RuntimeAwaitingPeer, "@agent2")
 	f = restartLANAuthorizationFixture(t, f)
 	n, err = f.management.sharedNativeRuntime(ctx, f.room.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertSelection(n, model.RuntimeAwaitingPeer, "")
+	assertSelection(n, model.RuntimeAwaitingPeer, "@agent2")
 }

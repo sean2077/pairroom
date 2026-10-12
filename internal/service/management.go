@@ -475,57 +475,49 @@ func (s *ManagementServer) provisionRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var agents map[model.ActorID]model.AgentSelection
-	if request.Agents == nil {
-		var err error
-		agents, err = s.registry.agentPairProfileSelections(request.AgentPairProfileID)
-		if err != nil {
-			s.writeAgentPairProfiles(w, 0, AgentPairProfileCatalog{}, err)
+	if request.HostMode.ForCreation() == model.HostNative {
+		if request.Agents != nil || request.AgentPairProfileID != "" {
+			writeManagementError(w, 400, "Native creation does not select runtimes: omit agents and agent_pair_profile_id; runtime is detected when each agent binds")
 			return
 		}
-		if agents == nil && s.agentResolver != nil {
-			agents = s.agentResolver.DefaultSelections()
-		}
-	} else {
-		if request.AgentPairProfileID != "" {
-			writeManagementError(w, http.StatusBadRequest, "provide agents or agent_pair_profile_id, not both")
-			return
-		}
-		if value := strings.TrimSpace(string(request.Agents)); value == "" || value == "null" {
-			writeManagementError(w, http.StatusBadRequest, "agents must contain both Agent selections when provided")
-			return
-		}
-		if err := decodeStrictJSONBytes(request.Agents, &agents); err != nil {
-			writeManagementError(w, http.StatusBadRequest, "agents must be an object containing both Agent selections: "+err.Error())
-			return
-		}
-	}
-	if request.Sharing == "lan" {
-		if request.AgentPairProfileID != "" {
-			writeManagementError(w, 400, "LAN creation selects only its local owner runtime")
-			return
-		}
-		if s.lanHost.status().Endpoint == "" {
+		if request.Sharing == "lan" && s.lanHost.status().Endpoint == "" {
 			writeManagementError(w, 409, "Enable LAN sharing in Service Settings first")
 			return
 		}
-		var err error
-		agents, err = prepareLANSelections(request.OwnerSlot, agents)
-		if err != nil {
-			writeManagementError(w, 400, err.Error())
-			return
+	} else {
+		if request.Agents == nil {
+			var err error
+			agents, err = s.registry.agentPairProfileSelections(request.AgentPairProfileID)
+			if err != nil {
+				s.writeAgentPairProfiles(w, 0, AgentPairProfileCatalog{}, err)
+				return
+			}
+			if agents == nil && s.agentResolver != nil {
+				agents = s.agentResolver.DefaultSelections()
+			}
+		} else {
+			if request.AgentPairProfileID != "" {
+				writeManagementError(w, http.StatusBadRequest, "provide agents or agent_pair_profile_id, not both")
+				return
+			}
+			if value := strings.TrimSpace(string(request.Agents)); value == "" || value == "null" {
+				writeManagementError(w, http.StatusBadRequest, "agents must contain both Agent selections when provided")
+				return
+			}
+			if err := decodeStrictJSONBytes(request.Agents, &agents); err != nil {
+				writeManagementError(w, http.StatusBadRequest, "agents must be an object containing both Agent selections: "+err.Error())
+				return
+			}
 		}
-	}
-	// Native rooms revalidate selections at creation like embedded rooms: the
-	// persisted AgentSelection is a durable fact and a CC Switch ProviderRef
-	// must be re-read at creation validation. Display-only native semantics
-	// cover activation/injection, not the creation-time read-only validation.
-	if s.agentResolver != nil {
-		validated, err := s.agentResolver.ValidateSelections(r.Context(), agents)
-		if err != nil {
-			s.writeError(w, err)
-			return
+		// Embedded creation still validates its selected execution configuration.
+		if s.agentResolver != nil {
+			validated, err := s.agentResolver.ValidateSelections(r.Context(), agents)
+			if err != nil {
+				s.writeError(w, err)
+				return
+			}
+			agents = validated
 		}
-		agents = validated
 	}
 	room, err := s.registry.ProvisionRoom(r.Context(), ProvisionRequest{
 		HostMode: request.HostMode, Sharing: request.Sharing, OwnerSlot: request.OwnerSlot,
@@ -1051,6 +1043,9 @@ func scopedRelaySetupRoute(method, path string) bool {
 		return strings.HasSuffix(rest, "/rooms") && strings.Count(rest, "/") == 1
 	}
 	if rest, ok := strings.CutPrefix(path, "/api/v1/rooms/"); ok && method == http.MethodPost {
+		if room, found := strings.CutSuffix(rest, "/native-bindings"); found {
+			return room != "" && !strings.Contains(room, "/")
+		}
 		if _, slot, found := strings.Cut(rest, "/native-bindings/"); found {
 			return slot == "slot1" || slot == "slot2"
 		}

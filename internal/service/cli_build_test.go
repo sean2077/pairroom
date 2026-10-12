@@ -115,6 +115,7 @@ func TestRelayBuildObservationRequiresCurrentBinding(t *testing.T) {
 		req.Header.Set("X-PairRoom-Bind", a.BindID)
 		req.Header.Set("X-PairRoom-Generation", "1")
 		req.Header.Set("X-PairRoom-Session", a.SessionID)
+		req.Header.Set("X-PairRoom-Runtime", string(a.Runtime))
 		req.Header.Set(relay.CLIBuildHeader, "v5.8.0+1234567")
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, req)

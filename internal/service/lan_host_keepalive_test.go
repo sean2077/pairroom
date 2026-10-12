@@ -75,7 +75,7 @@ func TestLANSuccessfulDownloadPreservesKeepAliveForConditionalClaim(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := f.native.engine.Send(f.owner, relay.SendRequest{ID: "keepalive-evidence", Text: "inspect this evidence", AttachmentIDs: []string{object.ID}})
+	message, err := f.native.engine.Send(f.owner, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "keepalive-evidence", Text: "inspect this evidence", AttachmentIDs: []string{object.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}

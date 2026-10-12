@@ -2,6 +2,7 @@ package relayclient
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -76,10 +77,6 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if o.create {
 		o, slot, err = prepareNativeCreation(ctx, endpoint, root, o, slot)
 		if err != nil {
-			var mismatch *defaultPairRuntimeMismatchError
-			if errors.As(err, &mismatch) {
-				return fmt.Errorf("%w; no Room was created. Choose the intended peer runtime and retry once: %s", err, createRetryCommand(root, endpointPath, o))
-			}
 			return err
 		}
 		o.room, err = createNativeRoom(ctx, endpoint, root, o, slot)
@@ -108,6 +105,12 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	}
 	o.slot = string(slot)
 	kind := target.Agents[slot].Runtime
+	if target.DynamicBindings {
+		kind = callerRuntime(o)
+		if slot == "" && o.replace {
+			return errors.New("--replace requires --slot 1|2; an omitted slot only claims a vacant seat")
+		}
+	}
 	if own := callerRuntime(o); own != "" && own != kind {
 		return errors.New("this session's runtime does not match the selected Room slot")
 	}
@@ -128,7 +131,15 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 	if err := installed(root, kind); err != nil {
 		return err
 	}
-	dir, err := secureDir(root, ".pairroom", "rooms", o.room, "slots", o.slot)
+	autoSlot := slot == ""
+	var dir string
+	if autoSlot {
+		// An unassigned attempt has its own private journal and lock. Only the
+		// Service chooses a vacancy; this directory is invisible to hooks.
+		dir, err = secureDir(root, ".pairroom", "rooms", o.room, "bind-attempts", autoBindKey(kind, session))
+	} else {
+		dir, err = secureDir(root, ".pairroom", "rooms", o.room, "slots", o.slot)
+	}
 	if err != nil {
 		return err
 	}
@@ -137,6 +148,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		return err
 	}
 	defer release()
+	attemptDir := dir
 	cleanupAtomicTemps(dir)
 	var previous State
 	_ = readPrivate(filepath.Join(dir, "state.json"), &previous)
@@ -149,6 +161,10 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		attempt.State.HarnessPID, attempt.State.HarnessName = pid, name
 	}
 	attempt.State.EndpointPath = endpointPath
+	attempt.State.DynamicBindings = target.DynamicBindings
+	if staged && previous.BindID != "" && previous.BindID != attempt.State.BindID {
+		attempt.State.inheritResponseContext(previous)
+	}
 	ignoreChanged, err := ignoreWorkspace(root)
 	if err != nil {
 		return err
@@ -162,18 +178,67 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		Binding                          relay.Binding   `json:"binding"`
 		Replaced                         *relay.Replaced `json:"replaced"`
 		Bootstrap, Collaboration, Notice string
+		DynamicBindings                  bool   `json:"dynamic_bindings"`
+		PeerGeneration                   uint64 `json:"peer_generation"`
 	}
-	request := relay.BindRequest{BindID: attempt.State.BindID, CredentialHash: relay.Digest(attempt.Credentials.Secret), SessionID: session, Replace: attempt.Replace}
-	if err := management(ctx, endpoint, http.MethodPost, "/api/v1/rooms/"+o.room+"/native-bindings/"+o.slot, request, &result); err != nil {
+	request := relay.BindRequest{BindID: attempt.State.BindID, CredentialHash: relay.Digest(attempt.Credentials.Secret), SessionID: session, Runtime: kind, Replace: attempt.Replace}
+	path := "/api/v1/rooms/" + o.room + "/native-bindings"
+	if slot != "" {
+		path += "/" + string(slot)
+	}
+	if err := management(ctx, endpoint, http.MethodPost, path, request, &result); err != nil {
 		// Never infer rollback from an HTTP failure: a store append may have
 		// succeeded. The committed local files remain untouched; retry the same
 		// attempt explicitly to reconcile its original ID and replacement intent.
 		return fmt.Errorf("%w; binding not confirmed locally; retry bind for this Room and slot without --create or --replace before using relay", err)
 	}
-	if result.Binding.BindID != attempt.State.BindID || result.Binding.Generation == 0 || result.Binding.SessionID != session || result.Binding.Slot != slot || !result.Binding.Active {
+	if result.Binding.BindID != attempt.State.BindID || result.Binding.Generation == 0 || result.Binding.SessionID != session || !result.Binding.Slot.ValidParticipant() || slot != "" && result.Binding.Slot != slot || !result.Binding.Active || target.DynamicBindings && (result.Binding.Runtime != kind || !result.DynamicBindings || result.PeerGeneration == 0) {
 		return errors.New("binding response identity mismatch; retry the same bind to reconcile")
 	}
+	if autoSlot {
+		slot = result.Binding.Slot
+		o.slot = string(slot)
+		attempt.State.Slot = slot
+		dir, err = secureDir(root, ".pairroom", "rooms", o.room, "slots", o.slot)
+		if err != nil {
+			return err
+		}
+		releaseSlot, err := lockSlot(ctx, dir)
+		if err != nil {
+			return err
+		}
+		defer releaseSlot()
+		cleanupAtomicTemps(dir)
+		if err := readPrivate(filepath.Join(dir, "state.json"), &previous); err == nil {
+			if previous.Generation > result.Binding.Generation {
+				return errors.New("a newer local binding already occupies the selected slot; the original bind attempt is retained")
+			}
+			if previous.BindID == attempt.State.BindID {
+				var cred credentials
+				if previous.Runtime != kind || previous.SessionID != session || previous.Room != o.room || previous.Slot != slot || !sameWorkspace(previous.Workspace, root) || readPrivate(filepath.Join(dir, "credentials"), &cred) != nil || cred != attempt.Credentials {
+					return errors.New("previous automatic bind promotion does not match its journal; inspect before rebind")
+				}
+				// A retry must retain any publications saved after promotion.
+				attempt.State = previous
+			} else if err := archiveLocalBinding(root, dir, previous); err != nil {
+				return err
+			} else {
+				attempt.State.inheritResponseContext(previous)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		attempt.State.Slot = slot
+	}
 	attempt.State.Generation = result.Binding.Generation
+	if !autoSlot && previous.BindID != "" && previous.BindID != attempt.State.BindID {
+		if err := archiveLocalBinding(root, dir, previous); err != nil {
+			return err
+		}
+	}
+	if err := retainResponseContext(ctx, &attempt.State, result.PeerGeneration); err != nil {
+		return err
+	}
 	// Cache only what the Service reports now, so a restored or reset Service
 	// gets the transcript reference again at the next Stop.
 	attempt.State.TranscriptPath = result.Binding.TranscriptPath
@@ -196,7 +261,7 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		_ = forgetSession(previous)
 	}
 	if staged {
-		if err := os.Remove(filepath.Join(dir, bindAttemptFile)); err != nil {
+		if err := os.Remove(filepath.Join(attemptDir, bindAttemptFile)); err != nil {
 			return err
 		}
 	}
@@ -206,6 +271,13 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		notice += " Added .pairroom/ to .gitignore."
 	}
 	payload := map[string]any{"binding": result.Binding, "bootstrap": result.Bootstrap, "collaboration": result.Collaboration, "notice": notice}
+	if target.DynamicBindings {
+		payload["dynamic_bindings"] = true
+		payload["peer_generation"] = result.PeerGeneration
+		if attempt.State.AutomaticPaused {
+			payload["automatic_publication_notice"] = automaticPauseNotice(result.PeerGeneration)
+		}
+	}
 	if result.Replaced != nil {
 		// Body-free IDs only; the new session decides whether any matter.
 		payload["replaced"] = result.Replaced
@@ -245,6 +317,36 @@ func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr
 		}
 	}
 	return writeJSON(out, payload)
+}
+
+func autoBindKey(kind model.RuntimeKind, session string) string {
+	return fmt.Sprintf("%s-%x", kind, sha256.Sum256([]byte(session)))
+}
+
+// A Service-vacant seat may still have private state from a revoked binding.
+// Preserve that entire journal before promoting its replacement. This is
+// evidence only: retirement directories are never binding discovery inputs.
+func archiveLocalBinding(root, slotDir string, state State) error {
+	if !validStateFormat(state) || state.LAN != nil || !safePart(state.BindID) || !sameWorkspace(state.Workspace, root) {
+		return errors.New("invalid previous local binding; automatic bind journal retained")
+	}
+	dir, err := secureDir(root, ".pairroom", "retired", state.BindID)
+	if err != nil {
+		return err
+	}
+	var prior State
+	if err := readPrivate(filepath.Join(dir, "state.json"), &prior); err == nil {
+		if prior.BindID != state.BindID || prior.Generation != state.Generation || prior.SessionID != state.SessionID || prior.Runtime != state.Runtime {
+			return errors.New("retired local binding archive belongs to another identity")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := relay.AtomicJSON(filepath.Join(dir, "state.json"), state); err != nil {
+		return err
+	}
+	// Revoked local secrets cannot recover publications and are not copied.
+	return nil
 }
 
 // boundInboxQueued is one short, read-only summary read with the binding just

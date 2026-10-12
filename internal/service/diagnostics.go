@@ -92,6 +92,10 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 			return
 		}
 		report.Scope, selections = "room", room.Agents
+		if room.DynamicBindings && request.Mode == "runtime" && !selections[request.Actor].Runtime.Valid() {
+			writeManagementError(w, http.StatusConflict, "this Native seat is unbound; bind an actual native session before selecting its Runtime for a diagnostic")
+			return
+		}
 		// Never diagnose with guessed settings or resume bound sessions.
 		if len(selections) != 2 && request.Mode == "runtime" {
 			writeManagementError(w, http.StatusConflict, "this Room has no valid Agent selections; create a new Room")
@@ -207,7 +211,7 @@ func (s *ManagementServer) runDiagnostics(w http.ResponseWriter, r *http.Request
 				check := agent.CheckInstallation(probeCtx, agent.Config{Runtime: kind, Command: template.Command, CommandArgs: template.Args})
 				selected := false
 				for _, selection := range selections {
-					selected = selected || selection.Runtime.Canonical() == kind
+					selected = selected || selection.Runtime.Valid() && selection.Runtime.Canonical() == kind
 				}
 				if !selected && check.Status == "fail" {
 					check.Status = "warn"

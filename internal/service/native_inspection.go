@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
-	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/review"
 	"github.com/sean2077/pairroom/internal/version"
@@ -175,5 +174,5 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 		}
 		slots[slot] = d
 	}
-	return map[string]any{"schema": 1, "scope": "native_room", "service_version": version.Current, "protocol": protocol.NativeVersion, "generated_at": time.Now().UTC(), "relay": summary, "participants": slots, "notice": "Transport only. Capability is not live presence or model acceptance; hook approval is unknown. Check local hooks with relay doctor."}
+	return map[string]any{"schema": 1, "scope": "native_room", "service_version": version.Current, "protocol": n.engine.ProtocolVersion(), "generated_at": time.Now().UTC(), "relay": summary, "participants": slots, "notice": "Transport only. Capability is not live presence or model acceptance; hook approval is unknown. Check local hooks with relay doctor."}
 }

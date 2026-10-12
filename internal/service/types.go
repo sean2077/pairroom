@@ -71,12 +71,13 @@ func (s BindingSpec) Validate() error {
 }
 
 type Binding struct {
-	RemoteKey string        `json:"remote_key,omitempty"`
-	Agent     model.ActorID `json:"agent"`
-	Mode      BindingMode   `json:"mode"`
-	SessionID string        `json:"session_id,omitempty"`
-	Pending   bool          `json:"pending,omitempty"`
-	BoundAt   time.Time     `json:"bound_at"`
+	Runtime   model.RuntimeKind `json:"runtime,omitempty"`
+	RemoteKey string            `json:"remote_key,omitempty"`
+	Agent     model.ActorID     `json:"agent"`
+	Mode      BindingMode       `json:"mode"`
+	SessionID string            `json:"session_id,omitempty"`
+	Pending   bool              `json:"pending,omitempty"`
+	BoundAt   time.Time         `json:"bound_at"`
 }
 
 func (b Binding) Key() BindingKey {
@@ -153,6 +154,7 @@ type Project struct {
 }
 
 type Room struct {
+	DynamicBindings          bool                                   `json:"dynamic_bindings,omitempty"`
 	Sharing                  string                                 `json:"sharing,omitempty"`
 	OwnerSlot                model.ActorID                          `json:"owner_slot,omitempty"`
 	HostMode                 model.HostMode                         `json:"host_mode,omitempty"`
@@ -231,8 +233,17 @@ func (r Room) Validate() error {
 		if err := binding.Validate(); err != nil {
 			return fmt.Errorf("%s binding: %w", actor, err)
 		}
+		if r.DynamicBindings {
+			selection := r.Agents[actor]
+			if binding.Runtime != "" && (!binding.Runtime.Valid() || binding.Runtime != binding.Runtime.Canonical()) {
+				return fmt.Errorf("%s Native binding requires a canonical runtime identity", actor)
+			}
+			if binding.Pending != (selection.AwaitingBinding || selection.AwaitingPeer) || !binding.Pending && (!binding.Runtime.Valid() || binding.Runtime != selection.Runtime) {
+				return fmt.Errorf("%s Native binding runtime does not match its derived selection", actor)
+			}
+		}
 	}
-	if err := validateLANSelections(r.HostMode, r.Sharing, r.OwnerSlot, r.Agents); err != nil {
+	if err := validateRoomSelections(r.HostMode, r.Sharing, r.OwnerSlot, r.Agents, r.DynamicBindings); err != nil {
 		return err
 	}
 	if _, err := validateAgentSelections(r.Agents); err != nil {
@@ -240,7 +251,7 @@ func (r Room) Validate() error {
 	}
 	if r.HostMode == model.HostNative {
 		for actor, selection := range r.Agents {
-			if !selection.Runtime.Valid() && !selection.AwaitingPeer {
+			if !selection.Runtime.Valid() && !selection.AwaitingPeer && !(r.DynamicBindings && selection.AwaitingBinding) {
 				return errors.New("native hosting supports Claude Code, Codex, Grok Build and Gemini CLI")
 			}
 			if r.Bindings[actor].Mode != BindingNew {
@@ -252,6 +263,8 @@ func (r Room) Validate() error {
 }
 
 type ProvisionRequest struct {
+	// DynamicBindings is assigned by creation, never selected by API callers.
+	DynamicBindings    bool                                   `json:"-"`
 	Sharing            string                                 `json:"sharing,omitempty"`
 	OwnerSlot          model.ActorID                          `json:"owner_slot,omitempty"`
 	HostMode           model.HostMode                         `json:"host_mode,omitempty"`
@@ -314,7 +327,7 @@ func normalizeAgentSelectionsInput(input map[model.ActorID]model.AgentSelection)
 }
 
 func (r ProvisionRequest) Validate() error {
-	if err := validateLANSelections(r.HostMode.ForCreation(), r.Sharing, r.OwnerSlot, r.Agents); err != nil {
+	if err := validateRoomSelections(r.HostMode.ForCreation(), r.Sharing, r.OwnerSlot, r.Agents, r.DynamicBindings); err != nil {
 		return err
 	}
 	if !r.HostMode.ForCreation().Valid() {
@@ -327,7 +340,7 @@ func (r ProvisionRequest) Validate() error {
 			}
 		}
 		for _, selection := range r.Agents {
-			if !selection.Runtime.Valid() && !selection.AwaitingPeer {
+			if !selection.Runtime.Valid() && !selection.AwaitingPeer && !(r.DynamicBindings && selection.AwaitingBinding) {
 				return errors.New("native hosting supports Claude Code, Codex, Grok Build and Gemini CLI")
 			}
 		}
@@ -370,6 +383,7 @@ func (r ProvisionRequest) Validate() error {
 }
 
 type roomProvisionedPayload struct {
+	DynamicBindings          bool                                   `json:"dynamic_bindings,omitempty"`
 	Sharing                  string                                 `json:"sharing,omitempty"`
 	OwnerSlot                model.ActorID                          `json:"owner_slot,omitempty"`
 	HostMode                 model.HostMode                         `json:"host_mode,omitempty"`

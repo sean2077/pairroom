@@ -11,7 +11,7 @@ PairRoom's browser UI uses a local HTTP API and SSE. CLI / UI is the preferred e
 
 ## Resource families
 
-The Management API owns Project and Room registration, immutable per-Room Agent selection, Binding, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, independent permissions, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
+The Management API owns Project and Room registration, immutable Embedded Agent selection, Native slot/binding identity, archive, backup, and Service diagnostics. The Room API owns message, Turn, participant, independent permissions, approval, retry, cancel, attachment, and the event stream. In-app Room tabs use the Management same-origin surface: `/api/v1/rooms/{room}/surface/…` uses the Management Session, and the server injects the Runtime bearer. `PATCH /api/v1/runtime-policy` only adjusts the concurrent Runtime cap. `POST /api/v1/rooms/{room}/open-browser` opens the system browser after the Runtime is ready. An archived Room has no surface and cannot be opened externally.
 
 Room Turn, approval, steering, pagination and retry contracts below describe embedded hosting. Native hosting has its own [relay contracts](#native-host-mode); do not apply embedded `intent`, pagination or process controls to a native Room.
 
@@ -19,11 +19,11 @@ Room Turn, approval, steering, pagination and retry contracts below describe emb
 
 Management Runtime status includes `cleanup_retryable:true` only when retained cleanup has a safe retry path. `failed` retains the error and ownership; `stopping` identifies the reserved cleanup attempt. `suspend`, lifecycle operations, and activation can retry such cleanup, while terminal persistence or unclassified close failures still return `runtime_close_uncertain`. Cleanup retries do not submit input or imply model acceptance. See [Operations](OPERATIONS.md#capacity-and-idle-reclaim) for recovery and backoff.
 
-`GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all four Runtime entries (Claude Code, Codex, Grok Build and Gemini CLI) with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, the current two Service defaults, and canonical `collaboration_default` instructions for the creation preview. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Room creation still re-resolves the selected Profile server-side instead of trusting the catalog returned to the browser.
+`GET /api/v1/agent-catalog` and `POST /api/v1/agent-catalog/refresh` return all four Runtime entries (Claude Code, Codex, Grok Build and Gemini CLI) with availability diagnostics, sanitized CC Switch Profile summaries, local model suggestions, disabled reasons, the current two Service defaults, and canonical `collaboration_default` instructions for the creation preview. The response never contains raw Profile configuration, endpoints, headers, tokens, API keys, or Runtime arguments. Refresh is explicit, and Embedded Room creation re-resolves the selected Profile server-side instead of trusting the browser catalog. Native creation has no catalog dependency.
 
-`POST /api/v1/projects/{project}/rooms` accepts an optional `name` and Agent selections keyed by canonical ActorIDs `slot1` and `slot2`. Native is the creation default; send `host_mode:"embedded"` for adapter-owned sessions. Embedded requires the complete two-slot `bindings` map. Native may omit it and later associate existing harness sessions through `relay bind`; creation does not accept an adapter-session resume request. HTTP accepts numeric `1`/`2` input aliases only at request parsing; legacy runtime-named strings are rejected.
+`POST /api/v1/projects/{project}/rooms` accepts an optional `name`. Native is the default and creates two empty slots, returning `dynamic_bindings:true`; omit `agents` and `agent_pair_profile_id`, which are rejected in Native creation. Native also accepts no existing-session resume request; bind later from the intended harness. Send `host_mode:"embedded"` for adapter-owned sessions, with the complete two-slot `bindings` map and optional Agent selections keyed by `slot1` / `slot2`. HTTP accepts numeric `1`/`2` input aliases only at request parsing; legacy runtime-named strings are rejected.
 
-For a local Room, omitting `agents` snapshots the saved default Agent pair profile, falling back to both current Service defaults only when no default profile exists. An optional `agent_pair_profile_id` explicitly selects a saved pair. Supplying both a non-empty profile ID and `agents` is rejected, as are unknown profile IDs and partial/null `agents`. A complete explicit `agents` map bypasses the saved default; this is how the browser sends temporary overrides. Shared Native creation has the explicit one-owner selection contract described under [Native LAN collaboration](#native-lan-collaboration). A selection has this shape:
+For an Embedded Room, omitting `agents` snapshots the saved default Agent pair profile, falling back to current Service defaults only when no default profile exists. An optional `agent_pair_profile_id` explicitly selects a saved pair. Supplying both a non-empty profile ID and `agents` is rejected, as are unknown profile IDs and partial/null `agents`. A complete explicit `agents` map bypasses the saved default; this is how the browser sends temporary overrides. New Native Rooms never read this preference file or resolve Providers. An Embedded selection has this shape:
 
 ```json
 {
@@ -38,7 +38,7 @@ For a local Room, omitting `agents` snapshots the saved default Agent pair profi
 }
 ```
 
-The created Room returns the immutable `agents` map. There is no Agent-reconfiguration endpoint.
+An Embedded Room returns its immutable `agents` map. New Native provisioning instead retains empty selections; Service snapshots project actual Runtime from the active binding generation, or `awaiting_binding` / LAN `awaiting_peer` while unbound. There is no general Agent-configuration mutation endpoint; Native session replacement is an explicit binding operation.
 
 ## Project and Room display order
 
@@ -167,7 +167,6 @@ PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's can
 The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.
 
 <!-- generated:routes -->
-
 - `/api/v1/rooms/{room}/surface`
 - `/api/v1/rooms/{room}/surface/{path...}`
 - `DELETE /api/v1/agent-pair-profiles/{profile}`
@@ -219,6 +218,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/rooms/{room}/activate`
 - `POST /api/v1/rooms/{room}/archive`
 - `POST /api/v1/rooms/{room}/lan/{action}`
+- `POST /api/v1/rooms/{room}/native-bindings`
 - `POST /api/v1/rooms/{room}/native-bindings/{slot}`
 - `POST /api/v1/rooms/{room}/open-browser`
 - `POST /api/v1/rooms/{room}/restore`
@@ -229,7 +229,6 @@ The following method/path patterns are extracted from production HTTP registrati
 - `PUT /api/v1/lan`
 - `PUT /api/v1/participants/{actor}/permissions`
 - `PUT /api/v1/settings`
-
 <!-- /generated:routes -->
 
 ## Client compatibility principles
@@ -272,15 +271,15 @@ Diagnostics create no durable Room events, do not activate/suspend/resume existi
 
 ## Native host mode
 
-`POST /api/v1/projects/{project}/rooms` accepts immutable `host_mode: "embedded" | "native"` (default native; choose embedded explicitly). New Rooms use Store 13/provisioning 6 in both modes; existing local Room modes remain unchanged. Local Native creation retains two Agent selections but does not apply providers/models/effort/permissions or spawn adapters; Claude Code, Codex, Grok Build and Gemini CLI are supported. Existing adapter-session Binding requests are rejected. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
+`POST /api/v1/projects/{project}/rooms` accepts immutable `host_mode: "embedded" | "native"` (default native). New Rooms use Store 14/provisioning 7 in both modes. Native creation selects no Runtime, Provider, model, effort or permissions and spawns no adapter. Both empty local slots carry `awaiting_binding`; a LAN guest carries `awaiting_peer`. Binding records the actual Claude Code, Codex, Grok Build or Gemini CLI Runtime. Existing typed Native Rooms retain their selections and v8 protocol. The native surface uses the same scoped Management gateway but a relay-specific snapshot/UI.
 
-Management-authenticated `POST /api/v1/rooms/{room}/native-bindings/{slot}` accepts a public bind ID, credential hash, the official session ID captured from the harness environment, and explicit replacement intent; association is immediate. `DELETE` revokes the binding without claiming to stop native work. The response contains public metadata and bootstrap instructions, never credentials; a replacement of an active generation with inbox work adds `replaced` (body-free message IDs, see [CLI reference](CLI_REFERENCE.md)). Model-facing long-lived secrets are not part of this API.
+Management-authenticated `POST /api/v1/rooms/{room}/native-bindings/{slot}` accepts `bind_id`, `credential_hash`, the official `session_id`, actual `runtime` for a dynamic Room, and optional `replace:true`. Association is immediate. New Native Rooms also accept `POST /api/v1/rooms/{room}/native-bindings` to atomically choose a vacant locally owned slot; retries resolve their original bind ID first. Replacement requires an explicit slot. Same-session resume keeps the generation; replacement commits a new generation and invalidates old credentials. `DELETE` on the explicit-slot path revokes the binding without stopping native work. The response contains public `binding`, `dynamic_bindings`, `peer_generation`, `bootstrap`, collaboration and workspace metadata, never credentials; `replaced` describes affected old-generation messages without bodies. Long-lived relay secrets are not model-facing fields.
 
 `POST /api/v1/relay/{room}/{slot}/{action}` has separate relay authentication, not browser-cookie or management-token authority. It requires `Authorization: Relay <secret>` and the CLI's binding/generation/official-session headers; credentials are loaded from an owner-only file, not command arguments. Actions are `inspect`, `confirm`, `report`, `publication`, `send`, `wait`, `ack`, `status`, `summary`, `history`, `doctor`, `peer`, `failure`, `park`, `unbind`, and `upload`. A shared Room's bound local owner additionally has `invite`, `accept`, and `revoke`; the admitted remote member cannot use those owner actions.
 
 `history` reads evidence without publishing, claiming or requeuing it. Like most authenticated relay actions, it can activate a suspended Room and resume configured wake processing. Local `ack` and `doctor` require an already active Runtime and never activate one. `doctor` reports capability/cooldown observations without sending a wake or contacting a model. `summary` is the body-free transport inspection used by `relay status --brief` / `relay reconcile --brief`: inbox counts and at most eight unknown-delivery recovery IDs, without message bodies, native session/transcript references, or the audit log. The CLI may reconcile pending Stop publication before requesting that summary.
 
-Relay actions require a live binding; an incomplete pre-upgrade binding permits only inspection/revocation and this body-free summary, and requires explicit replacement. `confirm` rechecks the hook's official session identity against the bind-time capture. Every operation rechecks the live generation. A same-ID `send` whose delivered payload differs from the accepted original returns HTTP 409 with `code:"send_payload_conflict"`; nothing new is published. Body limit is 256 KiB UTF-8 before JSON escaping; HTTP JSON is bounded to 2 MiB. Wait is bounded to 30 seconds and performs no claim while idle. With `park: true`, an empty inbox returns `{"claim":null}` at once unless a peer reply to this slot is expected ([Protocol](PROTOCOL.md#native-host-protocol-v8)). For Grok with `park: true`, wait instead probes readiness without claiming: `{"claim":null,"foreground_required":true}` means run a foreground wait, not delivery or acknowledgement. This leaves the full FIFO input queued and avoids Grok's clipped hook feedback. Only foreground collection or a non-Grok hook acknowledges after writing the full envelope to stdout.
+Relay actions require a live binding; an incomplete pre-upgrade binding permits only inspection/revocation and this body-free summary, and requires explicit replacement. `confirm` rechecks the hook's official session identity against the bind-time capture. Every operation rechecks the live sender generation. Dynamic peer `send` and `report` requests also require `expected_peer_generation`; zero/missing context is invalid and a stale target yields HTTP 409 `peer_changed` without publication. Idempotent receipt lookup remains tied to the original publication. Dynamic `peer` returns `{binding,peer_generation}` instead of the legacy bare Binding. Claims return the peer generation represented by their envelope. Browser human messages select a current slot and the server captures its generation atomically; browser clients do not submit an agent peer-context assertion. A same-ID `send` whose delivered payload differs from the accepted original returns HTTP 409 with `code:"send_payload_conflict"`; nothing new is published. Body limit is 256 KiB UTF-8 before JSON escaping; HTTP JSON is bounded to 2 MiB. Wait is bounded to 30 seconds and performs no claim while idle. With `park: true`, an empty inbox returns `{"claim":null}` at once unless a peer reply to this slot is expected ([Protocol](PROTOCOL.md#native-host-protocol-v9)). For Grok with `park: true`, wait instead probes readiness without claiming: `{"claim":null,"foreground_required":true}` means run a foreground wait, not delivery or acknowledgement. This leaves the full FIFO input queued and avoids Grok's clipped hook feedback. Only foreground collection or a non-Grok hook acknowledges after writing the full envelope to stdout.
 
 Within a native Room surface, `GET api/v1/snapshot` returns `{room, relay, protocol, config_notice, summary, identities}`. `relay` contains public bindings, ordered messages, audit entries and a sequence cursor. `GET api/v1/events` emits `native` SSE invalidations; clients refresh snapshots, never replay commands. `POST api/v1/messages` accepts `{id,to,text,attachment_ids,quote_id}`. Quoted messages must belong to the same Room. `POST api/v1/messages/{id}/cancel` is queued-only; `/retry` requires an unknown source and generates a new ID. `POST api/v1/participants/{slot}/park` accepts `{enabled}`. Uploads return the attachment object directly. Downloads authenticate and validate the stored attachment kind, media type, size and bytes; explicit text evidence uses `kind:"file"` and a download link rather than an image preview. There is no native Interrupt/start/restart/permission control.
 
@@ -319,7 +318,11 @@ History, inspection and review do not grant native execution/approval control.
 Opening a Room surface or using ordinary authenticated relay reads can activate
 its Runtime; an active-only doctor report is the path that avoids activation.
 The Native snapshot additionally exposes a body-free `summary`; its sequence
-identifies the observation independently of the bounded chat snapshot.
+identifies the observation independently of the bounded chat snapshot. New
+Native snapshots expose `dynamic_bindings:true` and `target_generations`; an
+unbound slot names its next generation. Messages retain immutable
+`from_runtime` / `from_generation` rather than inheriting the current occupant.
+The snapshot reports protocol v9 for dynamic Rooms and v8 for legacy Rooms.
 
 ## Native LAN collaboration
 
@@ -336,7 +339,7 @@ The local Management API owns listener settings, explicit shared-Room creation, 
 
 LAN hosting is disabled initially. The address must be numeric with an explicit port: an assigned private/link-local interface, or numeric loopback for local verification. Wildcard, public and hostname addresses are rejected. Invalid requests return 400. A bind failure is reported as 400 with the saved configuration's diagnostic available on the next GET; do not infer that a failed response reverted the saved preference.
 
-Shared creation adds `sharing:"lan"`, `owner_slot:"slot1"|"slot2"`, and only that owner's `agents` entry to a Native create request. The peer is stored as `{awaiting_peer:true}` with no fabricated Runtime/session. A saved pair profile cannot select the remote agent. Admission records the peer's actual Runtime. Host mode, sharing, and owner slot are immutable; existing local Rooms cannot be converted to shared history. A public invitation grants only the right to request membership. Before exact-receipt acceptance, the guest cannot read Room content or claim work.
+Shared creation adds `sharing:"lan"` and `owner_slot:"slot1"|"slot2"` to the runtime-free Native create request. Both `agents` and `agent_pair_profile_id` are rejected. The local owner starts as `awaiting_binding` and the guest as `awaiting_peer`; admission records the guest's actual Runtime. Host mode, dynamic-binding mode, sharing, and owner slot are immutable. Existing local Rooms cannot be converted to shared history, and this topology reserves one local owner plus one remote guest, not two independent remote seats. A public invitation grants only request access; before exact-receipt acceptance, the guest cannot read Room content or claim work.
 
 | Method/path | Request and result |
 |---|---|

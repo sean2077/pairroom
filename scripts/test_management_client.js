@@ -21,13 +21,13 @@ function client() {
     addEventListener() {},
     getElementById(id) {
       if (!nodes.has(id)) nodes.set(id, {
-        value: '', checked: false, disabled: false, textContent: '', style: {}, dataset: {}, attributes: {},
+        value: '', checked: false, disabled: false, textContent: '', style: {}, dataset: {}, attributes: {}, options: [],
         listeners: new Map(), hidden: false,
         addEventListener(type, cb) { this.listeners.set(type, cb); },
         setAttribute(key, value) { this.attributes[key] = value; },
         removeAttribute(key) { delete this.attributes[key]; },
         setCustomValidity() {}, replaceChildren() {}, querySelectorAll() { return []; }, querySelector() { return null; },
-        focus() { document.activeElement = this; }, close() { this.open = false; },
+        focus() { document.activeElement = this; }, close() { this.open = false; }, showModal() { this.open = true; },
         classList: {add() {}, remove() {}, toggle() {}, contains() { return false; }},
       });
       return nodes.get(id);
@@ -35,7 +35,7 @@ function client() {
   };
   const location = {hash: '#/overview', pathname: '/', search: '', origin: 'http://127.0.0.1:9876'};
   const sandbox = {
-    document, location, history: {replaceState() {}}, console, URL, URLSearchParams, Headers, Response,
+    document, location, history: {replaceState() {}}, console, URL, URLSearchParams, Headers, Response, TextEncoder,
     window: {location, localStorage: {getItem() { return null; }}, addEventListener() {}, dispatchEvent(e) { events.push(e); }},
     requestAnimationFrame() {}, queueMicrotask,
     setTimeout(callback, delay) { const id = ++timerID; timers.set(id, {callback, delay}); return id; },
@@ -53,6 +53,7 @@ function client() {
       syncConfirmRequirement, submitConfirm, resetConfirmState, createBrowserSession, showCredentialLogin,
       notificationWatch, startNotificationWatch, renderCLIBuildBanner, diagnosticSnapshot,
       invalidateSessionReads, openRoomInBrowserAction, connect, updateDesktopStartup,
+      openRoomDialog, createRoom, syncHostMode, loadRoomAgentControls,
       setDesktop(value) { window.PairRoomDesktop = value; },
       setAPI(callback) { api = callback; }, setCanRender(value) { canRenderNow = () => value; }};
     render = () => { renders.push(state.snapshot); state.renderedSnapshotKey = snapshotRenderKey(state.snapshot); };
@@ -76,7 +77,75 @@ function client() {
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
+function creationClient() {
+  const c = client(); let next = 0;
+  c.document.createElement = () => c.getNode(`created-element-${++next}`);
+  c.document.querySelector = selector => {
+    const mode = /^input\[name="(slot[12])-mode"\](?:\[value="(new|existing)"\]|:checked)$/.exec(selector);
+    if (mode) {
+      const node = c.getNode(`${mode[1]}-${mode[2] || 'new'}`);
+      node.value = mode[2] || 'new'; return node;
+    }
+    const fieldset = /^fieldset\[data-actor="(slot[12])"\]$/.exec(selector);
+    return fieldset ? c.getNode(`${fieldset[1]}-fieldset`) : null;
+  };
+  c.state.snapshot.projects = [{id:'p',root:'/fixture/project',available:true}];
+  // Invalid stale selections must be irrelevant while these form controls are
+  // hidden/disabled. A Runtime-dependent creation path will fail this fixture.
+  for (const actor of ['slot1', 'slot2']) {
+    c.getNode(`${actor}-runtime`).value = 'stale-runtime';
+    c.getNode(`${actor}-runtime`).reportValidity = () => { throw new Error('Native validated a Runtime selector'); };
+    c.getNode(`${actor}-provider`).reportValidity = () => { throw new Error('Native validated a Provider selector'); };
+  }
+  return c;
+}
+
 async function main() {
+  {
+    const c = creationClient(), calls = [];
+    c.setAPI(async (path, options) => {
+      calls.push({path, options});
+      if (path === '/api/v1/service') return c.state.snapshot;
+      if (path === '/api/v1/projects/p/rooms') return {id:'native-room'};
+      throw new Error(`Native creation contacted ${path}`);
+    });
+    await c.openRoomDialog('p');
+    assert.equal(c.getNode('room-submit').disabled, false, 'new Native creation waits for no catalog or profile');
+    assert.equal(c.getNode('room-pair-profile-controls').hidden, true);
+    assert.equal(c.getNode('room-agent-selection-heading').hidden, true);
+    assert.equal(c.getNode('room-native-slots').hidden, false);
+    assert.equal(c.getNode('slot1-fieldset').disabled, true);
+    assert.equal(c.getNode('slot2-fieldset').disabled, true);
+    assert.equal(calls.length, 0, 'opening a Native dialog contacted Embedded configuration');
+    c.getNode('room-name').value = 'Empty Native room';
+    await c.createRoom({preventDefault() {}});
+    assert.equal(calls[0].path, '/api/v1/projects/p/rooms');
+    assert.deepEqual(JSON.parse(calls[0].options.body), {name:'Empty Native room',collaboration:{mode:'default'},host_mode:'native'});
+    assert.equal(c.getNode('room-dialog').open, false);
+  }
+  {
+    // Embedded configuration may fail after the human has already switched
+    // back to Native. The late error must not disable or contaminate that form.
+    const c = creationClient(), read = deferred();
+    c.setAPI(() => read.promise);
+    await c.openRoomDialog('p');
+    const mode = c.getNode('room-host-mode'), change = mode.listeners.get('change');
+    mode.value = 'embedded';
+    const loading = change();
+    assert.equal(c.getNode('room-submit').disabled, true);
+    mode.value = 'native'; await change();
+    assert.equal(c.getNode('room-submit').disabled, false);
+    read.reject(new Error('fixture catalog unavailable')); await loading;
+    assert.equal(c.getNode('room-submit').disabled, false);
+    assert.equal(c.getNode('room-form-error').hidden, true);
+    assert.equal(c.state.pairProfileReady, false);
+    c.getNode('room-share-lan').checked = true;
+    c.getNode('room-lan-owner-slot').value = 'slot2'; c.syncHostMode();
+    assert.equal(c.getNode('room-native-slot1-state').textContent, 'room.lan.awaitingPeer');
+    assert.equal(c.getNode('room-native-slot2-state').textContent, 'room.native.awaitingBinding');
+    assert.equal(c.getNode('slot1-fieldset').disabled, true);
+    assert.equal(c.getNode('slot2-fieldset').disabled, true);
+  }
   {
     const c=client();
     c.state.connected=true;

@@ -12,14 +12,14 @@
 
 Having Claude Code draft a plan, copying it to Codex for review, and pasting the review back gets tiring when it repeats. PairRoom lets the two Agents talk directly: one proposes, the other challenges, supplements, or executes. You see the whole exchange and can step in at any time.
 
-- **One pair, any supported combination.** Each slot can use any supported Runtime, including the same one twice. Task decomposition, tools, and subagents stay with each harness.
+- **Create first, join with any supported Runtime.** Native Rooms start with two empty slots; the joining sessions identify their own type. Both slots may use the same Runtime and keep stable `@agent1` / `@agent2` handles. Task decomposition, tools, and subagents stay with each harness.
 - **Flexible responsibilities.** By default Agent 1 plans and reviews while Agent 2 implements, verifies, and supplements. Custom instructions can make both reviewers or divide implementation. Simple tasks can finish directly; a finished review does not by itself authorize implementation.
 - **Visible collaboration.** Published messages are visible in the Room. In Native, each side's work stays in its own terminal or client, where you can stop or correct it.
 - **A colleague's Agent can join.** Only the LAN Room's host needs a Service. Each machine keeps its own workspace, credentials, and native permissions; local and joined Rooms can coexist through different sessions.
 
 | Host mode | Choose it for | Boundary |
 |---|---|---|
-| **Native** (default and recommended) | Your existing sessions, including Codex Desktop, in your usual terminal (such as [WezTerm](https://wezterm.org/)) or client | PairRoom supplies bindings, durable relay, and audit. The original harness owns configuration, permissions, and execution; Room selections are display-only. |
+| **Native** (default and recommended) | Your existing sessions, including Codex Desktop, in your usual terminal (such as [WezTerm](https://wezterm.org/)) or client | PairRoom supplies bindings, durable relay, and audit. Runtime is recorded at bind. The original harness owns models, credentials, permissions, and execution. |
 | **Embedded** (optional) | PairRoom's desktop/browser conversation and adapter controls, with supported per-slot Provider, model, effort, and instruction choices | PairRoom owns the adapters and runs one native Turn at a time per Room. Unset options inherit native configuration. |
 
 PairRoom follows your existing repository instructions, worktrees, and PR/MR policy. Relay adds no coordinating model or mandatory phases and does not append accumulated Room history to each message. No comparative token or cost saving has been measured.
@@ -30,7 +30,7 @@ Gemini CLI works in both modes, including two Gemini sessions in one Room. Embed
 
 ## A look around
 
-Screenshots use synthetic demo conversations; they do not show model output.
+Screenshots use synthetic demo conversations; they do not show model output. The creation screenshot predates empty-slot Native creation; the current Native form does not ask for Agent types.
 
 **Embedded Room** — PairRoom hosts both Agents; turn summaries, diffs and approvals sit in the work inspector.
 
@@ -40,7 +40,7 @@ Screenshots use synthetic demo conversations; they do not show model output.
 
 ![Project detail listing Embedded and Native Rooms](docs/images/pairroom-management.png)
 
-**Create a Room** — choose the host mode, collaboration style and each slot's Runtime.
+**Create a Room** — Native needs only Room and collaboration settings; Embedded keeps per-slot Runtime and configuration choices.
 
 ![Create Room dialog](docs/images/pairroom-create-room.png)
 
@@ -100,7 +100,7 @@ pairroom relay install --runtime claude,codex
 
 Approve the hooks in each harness and reload it as required. Before binding locally, run `pairroom relay preflight` in each session to check PATH, the Service, and hook installation. Read its `next_steps`, including version warnings; it cannot see whether you approved the hooks.
 
-In the first session, load the installed skill and run `/pairroom-relay <topic>`. It creates the Room and prints a join command; ask the second session's Agent to run that exact command. Bind reads official tool-call session metadata; Gemini needs its approved BeforeTool hook. Once both bind successfully, reuse the Room across rounds. After each session's first completed turn, a recent `last_hook_at` in `pairroom relay doctor` confirms its response hook ran. See the [first Native Room](docs/GETTING_STARTED.md#first-native-room) walkthrough.
+In the first session, load the installed skill and run `/pairroom-relay <topic>`. It creates an untyped Room, identifies the caller at bind and prints a generic join command; ask the second session's Agent to run that exact command. Bind reads official tool-call session metadata; Gemini needs its approved BeforeTool hook. You can also create the empty Native Room in Management before either session joins. Once both bind successfully, reuse the Room across rounds. After each session's first completed turn, a recent `last_hook_at` in `pairroom relay doctor` confirms its response hook ran. See the [first Native Room](docs/GETTING_STARTED.md#first-native-room) walkthrough.
 
 How replies travel:
 
@@ -108,7 +108,7 @@ How replies travel:
 - **A Stop reply with neither handle stays private and is not copied into the Room.**
 - `relay send` / `exchange` deliver to the command's target regardless of mentions in the body. Using both paths for the same content produces two messages.
 
-See [publication rules](docs/NATIVE_RELAY.md#what-is-published).
+New Native Rooms use protocol v9 with `@agent1` / `@agent2`; existing Native Rooms retain v8 and their old handles. Explicit [participant replacement](docs/NATIVE_RELAY.md#replace-a-participant-deliberately) advances the binding generation, preserves historical authorship and pauses old automatic replies so they cannot reach a new peer accidentally. See [publication rules](docs/NATIVE_RELAY.md#what-is-published).
 
 Response hooks collect during bounded waiting windows. Beyond them, eligible Claude Code/Codex sessions can receive a fixed, body-free wake; Grok/Gemini need their documented collector or human fallback. Waiting in the CLI makes no model calls; subsequent model work still costs quota. PairRoom never starts or interrupts native sessions. Check the [Runtime-specific continuation limits](docs/NATIVE_RELAY.md#long-unattended-runs-by-runtime) before relying on unattended work.
 

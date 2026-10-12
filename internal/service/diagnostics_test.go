@@ -78,7 +78,7 @@ func TestManagementDiagnosticsBoundaries(t *testing.T) {
 
 func TestManagementDiagnosticsMockAndExport(t *testing.T) {
 	server, project := diagnosticTestServer(t)
-	room, err := server.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "private-room-name", Bindings: specs(BindingNew, BindingNew, "private"), Agents: defaultAgentSelections()}, SyntheticProvisioner{})
+	room, err := server.registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "private-room-name", Bindings: specs(BindingNew, BindingNew, "private"), Agents: defaultAgentSelections()}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestManagementDiagnosticsMockAndExport(t *testing.T) {
 
 func TestManagementDiagnosticsHonorsDefaultProfileAndStoredRoom(t *testing.T) {
 	server, project := diagnosticTestServer(t)
-	room, err := server.registry.ProvisionRoom(context.Background(), ProvisionRequest{ProjectID: project.ID, Name: "native-room", Bindings: specs(BindingNew, BindingNew, "stored"), Agents: defaultAgentSelections()}, SyntheticProvisioner{})
+	room, err := server.registry.ProvisionRoom(context.Background(), ProvisionRequest{HostMode: model.HostEmbedded, ProjectID: project.ID, Name: "native-room", Bindings: specs(BindingNew, BindingNew, "stored"), Agents: defaultAgentSelections()}, SyntheticProvisioner{})
 	if err != nil {
 		t.Fatal(err)
 	}

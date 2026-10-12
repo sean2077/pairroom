@@ -29,7 +29,6 @@ func grokNativeHTTP(t *testing.T, peer model.RuntimeKind) *nativeFixture {
 	})
 	room, err := f.registry.ProvisionRoom(context.Background(), ProvisionRequest{
 		ProjectID: f.project.ID, Name: "Grok pair", HostMode: model.HostNative,
-		Agents: map[model.ActorID]model.AgentSelection{model.ActorSlot1: {Runtime: model.RuntimeGrok}, model.ActorSlot2: {Runtime: peer}},
 	}, noSpawn)
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +38,7 @@ func grokNativeHTTP(t *testing.T, peer model.RuntimeKind) *nativeFixture {
 		t.Fatal(err)
 	}
 	f.room, f.native = room, rt.(*nativeHostRuntime)
+	f.runtimes = map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeGrok, model.ActorSlot2: peer}
 	return f
 }
 
@@ -68,14 +68,14 @@ func TestGrokNativeRoundTripDefersFullInboxToForeground(t *testing.T) {
 	grok := bindGrok(t, f, model.ActorSlot1)
 	peer := associateCLI(t, f, model.ActorSlot2)
 	text := strings.Repeat("完整消息🌟", 4000) // longer than Grok's 10k hook feedback
-	incoming, err := f.native.engine.Send(peer, relay.SendRequest{ID: "opening", Text: text})
+	incoming, err := f.native.engine.Send(peer, relay.SendRequest{ExpectedPeerGeneration: 1, ID: "opening", Text: text})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.native.engine.Park(grok.Slot, true); err != nil {
 		t.Fatal(err)
 	}
-	output, err := grokHook(t, f, grok, "ready @codex", nil)
+	output, err := grokHook(t, f, grok, "ready @agent2", nil)
 	if err != nil || !strings.Contains(string(output), `"decision":"block"`) || !strings.Contains(string(output), "pairroom relay wait") || strings.Contains(string(output), "完整消息") || len(output) > 8000 {
 		t.Fatalf("unsafe readiness hint: %q %v", output, err)
 	}
@@ -129,12 +129,12 @@ func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) 
 		{"reason": "shutdown"}, {"reason": "channel_closed"}, {"subagentType": "explore"},
 		{"hookEventName": "stop_cancelled", "hook_event_name": "StopCancelled", "reason": "user_interrupt"},
 	} {
-		out, err := grokHook(t, f, a, "@claude private partial", extra)
+		out, err := grokHook(t, f, a, "@agent1 private partial", extra)
 		if err != nil || strings.TrimSpace(string(out)) != "{}" || f.native.engine.Snapshot().Sequence != seq {
 			t.Fatalf("passive Grok event had effects: %s %v", out, err)
 		}
 	}
-	out, err := grokHook(t, f, a, "@claude prefix… [+123 chars]", nil)
+	out, err := grokHook(t, f, a, "@agent1 prefix… [+123 chars]", nil)
 	if err != nil || !strings.Contains(string(out), "COMPLETE original text") || f.native.engine.Snapshot().Sequence != seq {
 		t.Fatalf("clipped prefix was published: %q %v", out, err)
 	}
@@ -144,13 +144,13 @@ func TestGrokClippedStopIsNotPublishedAndPassiveEventsStayPassive(t *testing.T) 
 	// Dual hook files: the Claude command must stay inert so Grok's own file owns Stop.
 	out, err = f.run(t, []string{"hook", "--runtime", "claude"}, map[string]any{
 		"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": a.SessionID, "cwd": f.project.Root,
-		"reason": "end_turn", "lastAssistantMessage": "@claude do not double publish",
+		"reason": "end_turn", "lastAssistantMessage": "@agent1 do not double publish",
 	})
 	if err != nil || strings.TrimSpace(string(out)) != "{}" || f.native.engine.Snapshot().Sequence != seq {
 		t.Fatal("compatibility hook duplicated relay")
 	}
 	// Failure records a safe category only, never error text or partial replies.
-	out, err = grokHook(t, f, a, "PRIVATE error with @claude", map[string]any{"hookEventName": "stop_failure", "hook_event_name": "StopFailure", "error": "authentication_failed"})
+	out, err = grokHook(t, f, a, "PRIVATE error with @agent1", map[string]any{"hookEventName": "stop_failure", "hook_event_name": "StopFailure", "error": "authentication_failed"})
 	if err != nil || strings.TrimSpace(string(out)) != "{}" {
 		t.Fatal(err)
 	}
@@ -188,13 +188,13 @@ func TestGrokStopUsesSharedClaudeHookWhenGrokFileAbsent(t *testing.T) {
 	seq := f.native.engine.Snapshot().Sequence
 	out, err := f.runAs(t, model.RuntimeGrok, session, []string{"hook", "--runtime", "claude"}, map[string]any{
 		"hookEventName": "stop", "hook_event_name": "Stop", "sessionId": session, "cwd": f.project.Root,
-		"workspaceRoot": f.project.Root, "reason": "end_turn", "lastAssistantMessage": "@claude shared hook should publish",
+		"workspaceRoot": f.project.Root, "reason": "end_turn", "lastAssistantMessage": "@agent2 shared hook should publish",
 	})
 	if err != nil {
 		t.Fatalf("shared Claude hook: %s %v", out, err)
 	}
 	messages := f.native.engine.Snapshot().Messages
-	if f.native.engine.Snapshot().Sequence == seq || len(messages) == 0 || messages[len(messages)-1].Text != "@claude shared hook should publish" {
+	if f.native.engine.Snapshot().Sequence == seq || len(messages) == 0 || messages[len(messages)-1].Text != "@agent2 shared hook should publish" {
 		t.Fatalf("shared Claude hook did not publish Grok Stop: %s messages=%+v", out, messages)
 	}
 }
@@ -205,7 +205,7 @@ func TestTwoNativeGrokSessionsUseDistinctSlotsAndHandles(t *testing.T) {
 	b := bindGrok(t, f, model.ActorSlot2)
 	for i, sender := range []relay.Auth{a, b} {
 		to := model.OtherParticipant(sender.Slot)
-		text := fmt.Sprintf("@grok%d review this", 1-i)
+		text := fmt.Sprintf("@agent%d review this", 2-i)
 		if _, err := grokHook(t, f, sender, text, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +222,7 @@ func TestTwoNativeGrokSessionsUseDistinctSlotsAndHandles(t *testing.T) {
 		t.Setenv("GROK_SESSION_ID", "")
 	}
 	// Old-generation credentials cannot consume the inbox after replacement.
-	_, err := f.native.engine.Bind(a.Slot, relay.BindRequest{BindID: "replacement", CredentialHash: relay.Digest("secret"), SessionID: "replacement-session", Replace: true})
+	_, err := f.native.engine.Bind(a.Slot, relay.BindRequest{Runtime: model.RuntimeGrok, BindID: "replacement", CredentialHash: relay.Digest("secret"), SessionID: "replacement-session", Replace: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,8 +265,6 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			} else {
-				args = append(args, "--peer-runtime", "codex")
 			}
 			var out bytes.Buffer
 			run := func(args []string) error {
@@ -291,8 +289,8 @@ func TestGrokNativeCreateInsideHarnessWithoutIdentityFlags(t *testing.T) {
 					f.room = room
 				}
 			}
-			if f.room.Agents[wantSlot].Runtime != model.RuntimeGrok || f.room.Agents[model.ActorSlot2].Runtime != model.RuntimeCodex {
-				t.Fatal("creator-first runtime selections lost")
+			if f.room.Agents[wantSlot].Runtime != model.RuntimeGrok || !f.room.Agents[model.ActorSlot2].AwaitingBinding {
+				t.Fatal("creator runtime was not detected or peer was preselected")
 			}
 			rt, _, err := f.manager.Activate(context.Background(), f.room.ID)
 			if err != nil {

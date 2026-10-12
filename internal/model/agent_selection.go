@@ -69,6 +69,9 @@ func normalizeCCSwitchAppType(value string) string {
 
 // AgentSelection is immutable, secret-free configuration for one stable Room slot.
 type AgentSelection struct {
+	// AwaitingBinding is an unselected local slot in a dynamic Native Room.
+	// Its actual Runtime belongs to a later binding generation.
+	AwaitingBinding bool `json:"awaiting_binding,omitempty"`
 	// AwaitingPeer is an explicit unselected LAN peer, never a default Runtime.
 	// The Service restricts it to the invited slot of a Native shared Room.
 	AwaitingPeer   bool        `json:"awaiting_peer,omitempty"`
@@ -83,7 +86,7 @@ type AgentSelection struct {
 }
 
 func (s AgentSelection) Normalized(actor ActorID) AgentSelection {
-	if s.AwaitingPeer {
+	if s.AwaitingPeer || s.AwaitingBinding {
 		return s
 	}
 	s.Runtime = s.Runtime.CanonicalForSlot(actor)
@@ -105,8 +108,12 @@ func (s AgentSelection) Validate(actor ActorID) error {
 	if !actor.ValidParticipant() {
 		return fmt.Errorf("invalid Agent slot %q", actor)
 	}
-	if s.AwaitingPeer {
+	if s.AwaitingPeer || s.AwaitingBinding {
+		if s.AwaitingPeer && s.AwaitingBinding {
+			return errors.New("a slot cannot await both local binding and remote admission")
+		}
 		s.AwaitingPeer = false
+		s.AwaitingBinding = false
 		if s != (AgentSelection{}) {
 			return errors.New("awaiting peer must not select a runtime, provider, or execution configuration")
 		}

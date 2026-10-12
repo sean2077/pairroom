@@ -33,13 +33,30 @@ func MentionsWithRuntimes(text string, sender model.ActorID, runtimes map[model.
 }
 
 func ParseMentions(text string, sender model.ActorID, runtimes map[model.ActorID]model.RuntimeKind) MentionResult {
+	return parseMentions(text, sender, runtimes, false)
+}
+
+// ParseNativeMentions is exclusively the dynamic Native v9 routing contract.
+// Legacy Native and Embedded keep their runtime-derived exact handles.
+func ParseNativeMentions(text string, sender model.ActorID) MentionResult {
+	return parseMentions(text, sender, nil, true)
+}
+
+func parseMentions(text string, sender model.ActorID, runtimes map[model.ActorID]model.RuntimeKind, stable bool) MentionResult {
 	identities := model.ParticipantIdentities(runtimes)
+	if stable {
+		for _, actor := range model.SlotActors() {
+			identities[actor] = model.NativeParticipantIdentityFor(actor)
+		}
+	}
 	byHandle := make(map[string]model.ActorID, len(identities))
 	runtimeCounts := make(map[string]int, len(identities))
 	for actor, identity := range identities {
 		byHandle[strings.TrimPrefix(strings.ToLower(identity.MentionHandle), "@")] = actor
-		kind := runtimes[actor].CanonicalForSlot(actor)
-		runtimeCounts[string(kind)]++
+		if !stable {
+			kind := runtimes[actor].CanonicalForSlot(actor)
+			runtimeCounts[string(kind)]++
+		}
 	}
 
 	clean := stripMarkdownCodeAndURLs(text)
@@ -68,9 +85,14 @@ func ParseMentions(text string, sender model.ActorID, runtimes map[model.ActorID
 			continue
 		}
 		switch name {
-		case "driver", "reviewer", "lead", "executor", "peer", "human", "all", "agent1", "agent2":
+		case "driver", "reviewer", "lead", "executor", "peer", "human", "all":
 			removed["@"+name] = struct{}{}
 			continue
+		case "agent1", "agent2":
+			if !stable {
+				removed["@"+name] = struct{}{}
+				continue
+			}
 		}
 		if actor, ok := byHandle[name]; ok {
 			if actor != sender {

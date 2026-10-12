@@ -4,7 +4,7 @@ PairRoom configuration describes listeners, runtime policy, command templates, t
 
 ## Host-mode scope
 
-Per-process Provider/model/effort/permission projection in this page applies to **Embedded** adapters. **Native** stores selections for identity/display but does not resolve Providers or apply overrides to already-running harnesses. Configure their effective models, credentials, and permissions in the original sessions; see [Native setup](NATIVE_RELAY.md).
+Per-process Provider/model/effort/permission projection in this page applies to **Embedded** adapters. **New Native** Rooms contain two empty slots and record actual Runtime only when sessions bind. Creation does not read pair profiles, Provider catalogs, model or permission selections. **Legacy Native** Rooms preserve their stored selections for identity/display without applying overrides to already-running harnesses. Configure their effective models, credentials, and permissions in the original sessions; see [Native setup](NATIVE_RELAY.md).
 
 Shared Service settings, saved pair templates, and creation-time collaboration are not permission to reconfigure a Native process. A desktop-owned embedded Service can serve either Room host mode.
 
@@ -16,7 +16,7 @@ Native is the default for new Service Rooms. Choose Embedded explicitly when Pai
 
 LAN hosting settings and the persistent host key live in private `<service data root>/lan/host.json`, outside startup JSON. Disabling the listener keeps that key. Use a stable address and port: each joined client binding retains the endpoint and host pin from its invitation, and automatic address migration is not supported. The guest's CLI/hooks connect directly using that Room's admitted certificate. Joining requires no local Service, listener, proxy setting, or `--service-file`. Client identities live in a private per-user store separate from every Service data root. A local Service may optionally project those bindings in **Joined Rooms**; it does not replace their transport target. Distinct native sessions can concurrently use locally hosted Rooms and Rooms on several other hosts without a global server switch. [Storage](STORAGE.md#direct-lan-client-state) owns identity and recovery files; [Operations](OPERATIONS.md#backup) owns the complete backup procedure.
 
-Create a shared Room explicitly with `sharing: "lan"` and `owner_slot`, or `pairroom relay bind --create --share lan`. Only the owner's Runtime is selected initially; the other selection is `{"awaiting_peer":true}` until its owner's request is admitted. `awaiting_peer` is a pending identity, never an executable Runtime or a reusable pair-template selection. LAN Rooms support Native mode only. [Native LAN collaboration](LAN_NATIVE.md) explains the complete invitation, approval, evidence and recovery workflow.
+Create a shared Room explicitly with `sharing: "lan"` and `owner_slot`, or `pairroom relay bind --create --share lan`. No Runtime is selected at creation. The local owner slot is `awaiting_binding`; the other selection is `{"awaiting_peer":true}` until its owner's request is admitted. CLI creation immediately binds the caller's actual Runtime after creating the empty Room; Management creation may leave the owner unbound. Both waiting markers describe empty identities, never executable Runtimes or reusable pair-template selections. LAN Rooms support Native mode only. [Native LAN collaboration](LAN_NATIVE.md) explains the complete invitation, approval, evidence and recovery workflow.
 
 ## Load and override
 
@@ -34,7 +34,7 @@ Collaboration **instructions** have two creation-time choices: `default` Lead/Ex
 
 Top-level `claude` and `codex` keys name the Agent 1/2 default templates; they are not durable ActorIDs and do not select vendors. Durable slots are `slot1`/`slot2`. Each selection independently uses Runtime `claude`, `codex`, `grok`, or `gemini`, including duplicates.
 
-Each default `AgentSelection` contains `runtime`, structured `provider`, optional `model`, `effort`, `instructions`, and applicable native permission/approval/sandbox values. Creation snapshots both; changing Service defaults does not rewrite an existing Room.
+Each default `AgentSelection` contains `runtime`, structured `provider`, optional `model`, `effort`, `instructions`, and applicable native permission/approval/sandbox values. Embedded creation snapshots both; changing Service defaults does not rewrite an existing Room. New Native creation ignores these templates.
 
 For Embedded, `provider: {"source":"native"}` delegates credentials/configuration to the selected CLI. Empty model/effort/instructions add no override. New defaults use Claude `permission_mode: yolo` and Codex `approval_policy: yolo` with `sandbox: danger-full-access`; Grok and Gemini YOLO project native approval bypass with sandbox `off`. Both participants use these defaults regardless of responsibility. Explicit narrower values remain respected; empty policy fields request native inheritance. Restoring configured `yolo` with no sandbox completes full access; clear both fields to inherit native settings.
 
@@ -61,11 +61,11 @@ Gemini uses official ACP without calling the state-changing `authenticate` RPC. 
 
 ## Agent pair profiles
 
-A named pair is reusable across Projects in one Service. In **Settings → Agent pair profiles**, create/edit/rename/delete or set/clear the default, even before registering a Project. Create Room can load a profile or **Service defaults (no profile)**; **Save or update this pair** persists the current controls explicitly. Browser and Desktop share storage/API.
+A named pair is reusable across Projects in one Service. In **Settings → Agent pair profiles**, create/edit/rename/delete or set/clear the default, even before registering a Project. Embedded Create Room can load a profile or **Service defaults (no profile)**; **Save or update this pair** persists the current controls explicitly. Browser and Desktop share storage/API.
 
 Profiles contain each slot's Runtime, Provider reference, model, effort, additional instructions, and applicable policy values. They contain no resolved native credentials, command/args, Project/path, Room name, session/Binding, or collaboration mode. Do not place secrets in names/instructions. A pair profile is distinct from a CC Switch Provider Profile and an effective Permission profile.
 
-Selection fills controls without saving temporary edits. Room creation copies the final pair; Embedded additionally revalidates/materializes supported Provider references. Editing/deleting a profile never changes existing Rooms or Native processes. Deleting the default clears it rather than selecting another arbitrary profile. Missing/unsupported Providers remain visible; Embedded creation fails rather than falling back, while saved templates remain repairable.
+Selection fills controls without saving temporary edits. Embedded Room creation copies the final pair and revalidates/materializes supported Provider references. New Native creation neither reads these profiles nor accepts a profile ID or Agent selection map. Editing/deleting a profile never changes existing Rooms or Native processes. Deleting the default clears it rather than selecting another arbitrary profile. Missing/unsupported Providers remain visible; Embedded creation fails rather than falling back, while saved templates remain repairable.
 
 Profiles live in `<service data root>/agent-pair-profiles.json`, separate from startup JSON, browser storage, and the rebuildable Registry. Different roots have independent profiles; standalone `pairroom serve` does not read them. Names are non-blank, unique case-insensitively, at most 160 UTF-8 bytes without control characters; up to 100 profiles are supported. Use [Management API](API_REFERENCE.md#agent-pair-profiles) for automation.
 
@@ -129,6 +129,7 @@ These JSON names come from configuration/model struct tags. The list identifies 
 - `approval_policy`
 - `args`
 - `auto_start`
+- `awaiting_binding`
 - `awaiting_peer`
 - `cc_switch`
 - `claude`
