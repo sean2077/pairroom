@@ -12,6 +12,10 @@
   let selectedRoomID = "";
   let displayedMessages = [], historyTotal = 0, historyCursor = "", historySequence = 0, historyBusy = false, historyChanged = false, targetGenerations = {};
   const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("pairroom.enterprise.account.v1") : null;
+  let recoveryChannel = null;
+  if (typeof BroadcastChannel === "function") {
+    try { recoveryChannel = new BroadcastChannel("pairroom.enterprise.recovery.v1"); } catch { /* Recovery hints are optional. */ }
+  }
   const listIDs = ["room-list", "project-list", "device-list", "agent-list", "session-list", "room-members", "project-members", "slots", "messages", "binding-requests", "governance-actions", "pending-list", "administration-users", "administration-administrators", "administration-admissions", "administration-connections"];
   const inputIDs = ["room-id", "create-room-name", "collaboration-instructions", "create-project-name", "project-name", "project-member-id", "room-name", "room-project-id", "member-id", "ownership-target", "message-text", "governance-room", "governance-owner", "governance-target", "governance-revision", "governance-reason"];
   const textIDs = ["room-identity", "room-state", "room-sequence", "project-title", "project-state", "pending-description", "journal-status"];
@@ -76,6 +80,10 @@
     announced = incoming;
     if (!incoming) { signedOut("Account changed in another tab. Refresh to check your session."); return; }
     invalidate(); status("Account changed in another tab. Checking your session…"); queueRefresh();
+  };
+  if (recoveryChannel) recoveryChannel.onmessage = ({ data }) => {
+    if (!account || !exactKeys(data, ["kind", "origin", "deployment", "user"]) || data.kind !== "recovery_changed" || data.origin !== window.location.origin || data.deployment !== account.deployment_id || data.user !== account.user_id || !journalRecords.size) return;
+    status("Recovery records changed in another tab. Refresh metadata or explicitly Resolve the original action; this tab's unconfirmed record is retained.");
   };
   function responseScope(response, expected) {
     return response.headers && response.headers.get("X-PairRoom-User") === expected.user_id && response.headers.get("X-PairRoom-Session") === expected.session_id;
@@ -433,7 +441,7 @@
     if (op.path === "/rooms" && id === body.room_id && op.resolvePath === "/rooms/" + id + "/resolve-create") return exactKeys(body, ["client_id", "room_id", "intent"]) && exactKeys(body.intent, ["name", "collaboration"]) && exactKeys(body.intent.collaboration, ["version", "mode", "instructions"]);
     if (id && op.path === "/rooms/" + id + "/messages" && op.resolvePath === "/rooms/" + id + "/resolve-message") return exactKeys(body, ["client_id", "to", "text", "attachment_ids"]) && ["slot1", "slot2"].includes(body.to) && typeof body.text === "string" && (body.attachment_ids === undefined || Array.isArray(body.attachment_ids) && body.attachment_ids.length <= 8 && new Set(body.attachment_ids).size === body.attachment_ids.length && body.attachment_ids.every(validAttachmentID));
     if (id && op.path === "/rooms/" + id + "/memberships" && op.resolvePath === "/rooms/" + id + "/resolve-membership") return exactKeys(body, ["client_id", "expected_revision", "intent"]) && revision(body.expected_revision) && exactKeys(body.intent, ["action", "target_user_id", "role"]);
-    if (id && op.path === "/rooms/" + id + "/ownership" && op.resolvePath === "/rooms/" + id + "/resolve-ownership") return exactKeys(body, ["client_id", "intent", "action_id"]) && exactKeys(body.intent, ["room_id", "target_user_id", "expected_owner_user_id", "expected_revision", "reason"]) && body.intent.room_id === id && revision(body.intent.expected_revision) && (body.action_id ? validGovernanceReason(body.intent.reason) : body.intent.reason === undefined || validGovernanceReason(body.intent.reason));
+    if (id && op.path === "/rooms/" + id + "/ownership" && op.resolvePath === "/rooms/" + id + "/resolve-ownership") return exactKeys(body, ["client_id", "intent", "action_id"]) && (body.action_id === undefined || validID(body.action_id)) && exactKeys(body.intent, ["room_id", "target_user_id", "expected_owner_user_id", "expected_revision", "reason"]) && body.intent.room_id === id && revision(body.intent.expected_revision) && (body.action_id ? validGovernanceReason(body.intent.reason) : body.intent.reason === undefined || validGovernanceReason(body.intent.reason));
     if (id && op.path === "/rooms/" + id + "/queue" && op.resolvePath === "/rooms/" + id + "/resolve-queue") return exactKeys(body, ["client_id", "expected_revision", "intent"]) && revision(body.expected_revision) && exactKeys(body.intent, ["kind", "message_id"]) && ["retry", "cancel"].includes(body.intent.kind) && validID(body.intent.message_id);
     return typeof op.path === "string" && /^\/devices\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/revoke$/.test(op.path) && op.resolvePath === op.path.replace(/\/revoke$/, "/resolve-revoke") && exactKeys(body, ["client_id"]);
   }
@@ -505,6 +513,10 @@
       if (!result.ok || result.data.outcome === "unknown" || result.data.outcome && !["committed", "replayed"].includes(result.data.outcome)) { status("This action is not confirmed. Check its original result before taking another action."); return; }
       try { window.localStorage.removeItem(journalKey(op)); } catch { storageAvailable = false; }
       journalRecords.delete(key); absentOperations.delete(key); renderJournal(); status("Action confirmed: " + op.label + " · " + operationResource(op));
+      if (recoveryChannel) {
+        try { recoveryChannel.postMessage({ kind: "recovery_changed", origin: window.location.origin, deployment: account.deployment_id, user: account.user_id }); } catch { /* A hint cannot change a confirmed result. */ }
+      }
+      if (validID(op.body.action_id) && op.path === "/rooms/" + op.scope.room + "/ownership") { showPanel("governance"); loadGovernance(); return; }
       if (op.body.attachment_ids) for (const [id, draft] of attachmentDrafts) if (draft.scope.room === op.scope.room && op.body.attachment_ids.includes(draft.object_id)) removeAttachmentDraft(id);
       if (op.scope.room && (!selectedRoomID || selectedRoomID === op.scope.room)) openRoom(op.scope.room);
       loadRooms();
