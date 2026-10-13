@@ -257,7 +257,7 @@ func (e *Engine) apply(ev model.Event) error {
 		return errors.New("enterprise Room cannot replay Local or LAN binding authority")
 	}
 	if !e.enterprise && ev.Kind == model.EnterpriseBindingUpdatedKind {
-		return errors.New("Local or LAN Room cannot replay enterprise Binding authority")
+		return errors.New("local or LAN Room cannot replay enterprise Binding authority")
 	}
 	e.sequence = ev.Seq
 	e.initIndexes()
@@ -425,7 +425,7 @@ func (e *Engine) apply(ev model.Event) error {
 }
 func (e *Engine) applyBinding(ev model.Event, b bindingFact) error {
 	if e.enterprise || b.enterprise != nil {
-		return errors.New("Local or LAN binding codec cannot carry enterprise identity")
+		return errors.New("local or LAN binding codec cannot carry enterprise identity")
 	}
 	if !b.Slot.ValidParticipant() || b.Generation == 0 || !validID(b.BindID) || (b.Active && b.RemoteKey == "" && !validHash(b.CredentialHash)) {
 		return errors.New("invalid native binding fact")
