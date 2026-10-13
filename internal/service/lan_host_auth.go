@@ -58,6 +58,7 @@ func allowedLANAction(action string) bool {
 type lanRoomAuthorization struct {
 	invites  map[string]relay.LANInvite
 	requests map[string]relay.LANJoinRequest
+	latest   map[string]string
 	admitted map[string]bool
 	member   *relay.LANMember
 	invalid  bool
@@ -67,6 +68,7 @@ func newLANRoomAuthorization() *lanRoomAuthorization {
 	return &lanRoomAuthorization{
 		invites:  make(map[string]relay.LANInvite),
 		requests: make(map[string]relay.LANJoinRequest),
+		latest:   make(map[string]string),
 		admitted: make(map[string]bool),
 	}
 }
@@ -85,6 +87,7 @@ func (p *lanRoomAuthorization) apply(event model.Event) error {
 			return errors.New("invalid LAN join authorization fact")
 		}
 		p.requests[j.RequestID] = j
+		p.latest[j.Key] = j.RequestID
 	case relay.EventLANMember:
 		var member relay.LANMember
 		if json.Unmarshal(event.Data, &member) != nil {
@@ -106,7 +109,7 @@ func (p *lanRoomAuthorization) apply(event model.Event) error {
 // Prune only after a complete replay or a live append. During replay a later
 // membership fact may still need an earlier request that has expired today.
 func (p *lanRoomAuthorization) prune(now time.Time) {
-	relay.PruneLANRequests(p.requests, p.invites, p.admitted, p.member, now)
+	relay.PruneLANRequests(p.requests, p.latest, p.invites, p.admitted, p.member, now)
 	referenced := make(map[string]bool, len(p.requests))
 	for _, request := range p.requests {
 		referenced[request.InviteID] = true

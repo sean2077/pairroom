@@ -51,6 +51,7 @@ type Engine struct {
 	lanWakeResults  map[string]string
 	lanInvites      map[string]LANInvite
 	lanRequests     map[string]LANJoinRequest
+	lanLatest       map[string]string // newest request per key in durable append order
 	lanAdmitted     map[string]bool
 	lanAttempts     map[string]int
 	lanKeyAttempts  map[string]int

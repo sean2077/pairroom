@@ -65,6 +65,9 @@ func (e *Engine) initLAN() {
 	if e.lanRequests == nil {
 		e.lanRequests = make(map[string]LANJoinRequest)
 	}
+	if e.lanLatest == nil {
+		e.lanLatest = make(map[string]string)
+	}
 	if e.lanAdmitted == nil {
 		e.lanAdmitted = make(map[string]bool)
 	}
@@ -80,22 +83,17 @@ func (e *Engine) initLAN() {
 // and the Service's cold authorization index. Callers must finish replay before
 // pruning: a later membership fact can protect an earlier admitted request.
 // Only requests are removed; the Event Log and admitted history stay intact.
-func PruneLANRequests(requests map[string]LANJoinRequest, invites map[string]LANInvite, admitted map[string]bool, member *LANMember, now time.Time) {
+// latest is derived while applying join facts in durable append order. Wall
+// clocks can repeat or regress and request IDs carry no chronological meaning.
+func PruneLANRequests(requests map[string]LANJoinRequest, latest map[string]string, invites map[string]LANInvite, admitted map[string]bool, member *LANMember, now time.Time) {
 	if len(requests) == 0 {
 		return
-	}
-	newest := make(map[string]string, len(requests))
-	newestAt := make(map[string]time.Time, len(requests))
-	for id, j := range requests {
-		if at, ok := newestAt[j.Key]; !ok || j.CreatedAt.After(at) || j.CreatedAt.Equal(at) && id > newest[j.Key] {
-			newest[j.Key], newestAt[j.Key] = id, j.CreatedAt
-		}
 	}
 	for id, j := range requests {
 		if admitted[id] || member != nil && member.RequestID == id {
 			continue
 		}
-		if newest[j.Key] != id {
+		if latest[j.Key] != id {
 			delete(requests, id)
 			continue
 		}
@@ -104,11 +102,18 @@ func PruneLANRequests(requests map[string]LANJoinRequest, invites map[string]LAN
 			delete(requests, id)
 		}
 	}
+	// An expired newest attempt need not keep a key entry alive. Earlier admitted
+	// requests are protected independently above, including future replay facts.
+	for key, id := range latest {
+		if _, ok := requests[id]; !ok {
+			delete(latest, key)
+		}
+	}
 }
 
 func (e *Engine) pruneLANRequestsLocked() {
 	if !e.replaying {
-		PruneLANRequests(e.lanRequests, e.lanInvites, e.lanAdmitted, e.lanMember, e.cfg.Now())
+		PruneLANRequests(e.lanRequests, e.lanLatest, e.lanInvites, e.lanAdmitted, e.lanMember, e.cfg.Now())
 	}
 }
 func (e *Engine) applyLAN(ev model.Event) error {
@@ -142,6 +147,7 @@ func (e *Engine) applyLAN(ev model.Event) error {
 		// Replay retains those earlier facts until all admissions are known;
 		// the later unadmitted attempt replaces them, never an admitted one.
 		e.lanRequests[j.RequestID] = j
+		e.lanLatest[j.Key] = j.RequestID
 		// Every join fact costs one attempt of its invitation and of the presenting
 		// certificate. Both budgets are derived from all facts and never pruned, so
 		// one holder of an invitation cannot append unbounded durable requests,

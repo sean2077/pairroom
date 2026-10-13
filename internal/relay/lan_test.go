@@ -31,6 +31,63 @@ func lanEngine(t *testing.T, now func() time.Time) (*Engine, Auth, string) {
 	}
 	return e, Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, SessionID: "official-local-session", Secret: "local-secret"}, dir
 }
+
+func TestLANLatestJoinAppendWinsEqualAndRegressingClockAcrossReplay(t *testing.T) {
+	for _, offset := range []time.Duration{0, -time.Millisecond} {
+		t.Run(offset.String(), func(t *testing.T) {
+			now := time.Now().UTC()
+			engine, _, dir := lanEngine(t, func() time.Time { return now })
+			invite, err := engine.CreateLANInvite()
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := Digest("clock-order-peer")
+			request := LANJoinRequest{InviteID: invite.ID, RequestID: "z-forgotten", Key: key, Runtime: model.RuntimeCodex}
+			if _, _, err := engine.RequestLANJoin(request); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(offset)
+			request.RequestID = "a-current"
+			_, receipt, err := engine.RequestLANJoin(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCurrent := func(e *Engine) {
+				t.Helper()
+				if _, _, err := e.LANJoinStatus("z-forgotten", key); !errors.Is(err, ErrAuth) {
+					t.Fatalf("older appended request remained authorized: %v", err)
+				}
+				join, status, err := e.LANJoinStatus("a-current", key)
+				if err != nil || status != "pending" || join.RequestID != request.RequestID {
+					t.Fatal("newest appended request lost recovery", err)
+				}
+				_, recoveredReceipt, err := e.RequestLANJoin(request)
+				if err != nil || recoveredReceipt != receipt || len(e.lanLatest) != 1 || len(e.lanRequests) != 1 {
+					t.Fatal("latest request receipt or bounded index changed", err)
+				}
+			}
+			assertCurrent(engine)
+			if err := engine.Close(); err != nil {
+				t.Fatal(err)
+			}
+			log, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := Open(Config{RoomID: "room", Store: log, SharedSlot: model.ActorSlot2, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeAwaitingPeer}, Now: func() time.Time { return now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restarted.Close()
+			assertCurrent(restarted)
+			now = invite.ExpiresAt.Add(lanInviteLifetime + time.Second)
+			_, _, _ = restarted.LANJoinStatus(request.RequestID, key)
+			if len(restarted.lanRequests) != 0 || len(restarted.lanLatest) != 0 {
+				t.Fatal("expiry retained an unreferenced request or latest-key index")
+			}
+		})
+	}
+}
 func admitLAN(t *testing.T, e *Engine, key string) Auth {
 	t.Helper()
 	invite, err := e.CreateLANInvite()

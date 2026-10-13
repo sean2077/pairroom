@@ -45,7 +45,7 @@ func TestLANColdAuthorizationBoundsRepeatedRequestsDuringAppendAndRebuild(t *tes
 		registry.lanAuthMu.RLock()
 		defer registry.lanAuthMu.RUnlock()
 		projection := registry.lanAuth[room.ID]
-		if projection == nil || projection.invalid || len(projection.requests) != 1 || len(projection.invites) != 1 || len(projection.admitted) != 0 {
+		if projection == nil || projection.invalid || len(projection.requests) != 1 || len(projection.latest) != 1 || len(projection.invites) != 1 || len(projection.admitted) != 0 {
 			t.Fatalf("historical retry count escaped the current authorization projection: %+v", projection)
 		}
 		if _, ok := projection.requests["attempt-4999"]; !ok {
@@ -71,7 +71,7 @@ func TestLANColdAuthorizationPrunesAfterAdmissionFactsAndKeepsExpiryAnswers(t *t
 	windowInvite := relay.LANInvite{ID: "expired-invite", ExpiresAt: now.Add(-time.Minute)}
 	windowRequest := relay.LANJoinRequest{InviteID: windowInvite.ID, RequestID: "expired-request", Key: relay.Digest("waiting-key"), Runtime: model.RuntimeGrok, CreatedAt: now.Add(-2 * time.Minute)}
 	newInvite := relay.LANInvite{ID: "current-invite", ExpiresAt: now.Add(10 * time.Minute)}
-	newRequest := relay.LANJoinRequest{InviteID: newInvite.ID, RequestID: "current-admission", Key: relay.Digest("new-key"), Runtime: model.RuntimeGemini, CreatedAt: now}
+	newRequest := relay.LANJoinRequest{InviteID: newInvite.ID, RequestID: "current-admission", Key: oldRequest.Key, Runtime: model.RuntimeGemini, CreatedAt: now}
 	newMember := relay.LANMember{RequestID: newRequest.RequestID, InviteID: newInvite.ID, Binding: relay.Binding{Slot: model.ActorSlot2, Runtime: newRequest.Runtime, RemoteKey: newRequest.Key, BindID: "new-binding", Generation: 2, Active: true}}
 	events := []model.Event{
 		lanAuthorizationFact(t, room.ID, relay.EventLANInvite, oldAt, oldInvite),
@@ -96,7 +96,7 @@ func TestLANColdAuthorizationPrunesAfterAdmissionFactsAndKeepsExpiryAnswers(t *t
 		t.Fatal("a new invitation discarded the prior request's expiry-answer window")
 	}
 	projection.prune(now.Add(11 * time.Minute))
-	if len(projection.requests) != 2 || len(projection.admitted) != 2 || projection.member.RequestID != newRequest.RequestID {
+	if len(projection.requests) != 2 || len(projection.latest) != 1 || len(projection.admitted) != 2 || projection.member.RequestID != newRequest.RequestID {
 		t.Fatalf("expiry clipping lost durable admission facts: %+v", projection)
 	}
 	if _, ok := projection.requests[windowRequest.RequestID]; ok {
@@ -128,5 +128,40 @@ func TestLANColdForgottenJoinDoesNotActivateAfterRegistryRestart(t *testing.T) {
 	var recovered lanshare.JoinResponse
 	if err := lanshare.Call(context.Background(), client, fixture.invite, "join-status", lanshare.JoinStatusRequest{RequestID: "newest-request"}, &recovered); err != nil || recovered.Status != "pending" || recovered.Receipt != newest.Receipt {
 		t.Fatalf("bounded projection lost the current request's recovery: %+v %v", recovered, err)
+	}
+}
+
+func TestLANColdAuthorizationLatestAppendWinsEqualAndRegressingClock(t *testing.T) {
+	for _, offset := range []time.Duration{0, -time.Millisecond} {
+		t.Run(offset.String(), func(t *testing.T) {
+			now := time.Now().UTC()
+			room := Room{ID: "clock-order", Sharing: "lan"}
+			invite := relay.LANInvite{ID: "clock-invite", ExpiresAt: now.Add(time.Minute)}
+			key := relay.Digest("clock-request-key")
+			old := relay.LANJoinRequest{InviteID: invite.ID, RequestID: "z-forgotten", Key: key, Runtime: model.RuntimeCodex, CreatedAt: now}
+			current := old
+			current.RequestID, current.CreatedAt = "a-current", now.Add(offset)
+			events := []model.Event{
+				lanAuthorizationFact(t, room.ID, relay.EventLANInvite, now.Add(-time.Second), invite),
+				lanAuthorizationFact(t, room.ID, relay.EventLANJoin, old.CreatedAt, old),
+				lanAuthorizationFact(t, room.ID, relay.EventLANJoin, current.CreatedAt, current),
+			}
+			registry := &Registry{}
+			assertCurrent := func() {
+				t.Helper()
+				projection := registry.lanAuth[room.ID]
+				if len(projection.requests) != 1 || projection.requests[current.RequestID].RequestID != current.RequestID {
+					t.Fatal("authorization retained an older appended request using wall-clock or lexical ID order")
+				}
+			}
+			for _, event := range events {
+				registry.observeLANAuthorization(event)
+			}
+			assertCurrent()
+			if err := registry.resetLANAuthorization(room, events); err != nil {
+				t.Fatal(err)
+			}
+			assertCurrent()
+		})
 	}
 }

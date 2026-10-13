@@ -323,6 +323,7 @@ func (e *Engine) adoptDurableLocked(fresh *Engine) {
 	e.lanWakeResults = fresh.lanWakeResults
 	e.lanInvites = fresh.lanInvites
 	e.lanRequests = fresh.lanRequests
+	e.lanLatest = fresh.lanLatest
 	e.lanAdmitted = fresh.lanAdmitted
 	e.lanAttempts = fresh.lanAttempts
 	e.lanKeyAttempts = fresh.lanKeyAttempts
