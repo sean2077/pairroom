@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +42,30 @@ func TestHTTPPGLeaseLostAfterActualClaimCommitReleasesNoPrivateEnvelope(t *testi
 	for _, successor := range []bool{false, true} {
 		t.Run(fmt.Sprintf("successor=%t", successor), func(t *testing.T) {
 			f := newHTTPPGFixture(t)
+			// The fixture also retains a schema-bootstrap connection. Tag only the
+			// Store connections so observing a surviving PID cannot select it.
+			if err := f.store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			workTag := "release-fence-" + f.schema
+			if strings.HasPrefix(f.cfg.DSN, "postgres://") || strings.HasPrefix(f.cfg.DSN, "postgresql://") {
+				connectionURL, err := url.Parse(f.cfg.DSN)
+				if err != nil {
+					t.Fatal("private test connection URI invalid")
+				}
+				query := connectionURL.Query()
+				query.Set("application_name", workTag)
+				connectionURL.RawQuery = query.Encode()
+				f.cfg.DSN = connectionURL.String()
+			} else {
+				f.cfg.DSN += " application_name='" + workTag + "'"
+			}
+			store, err := sqlstore.Open(t.Context(), f.cfg)
+			if err != nil {
+				t.Fatal("tagged test Store unavailable")
+			}
+			f.store = store
+			t.Cleanup(func() { _ = store.Close() })
 			gate := &releaseFenceStore{Store: f.store, committed: make(chan sqlstore.Result, 1), resume: make(chan struct{})}
 			released := false
 			defer func() {
@@ -75,8 +101,9 @@ func TestHTTPPGLeaseLostAfterActualClaimCommitReleasesNoPrivateEnvelope(t *testi
 			if err := f.admin.QueryRow(t.Context(), `SELECT lease_pid,epoch FROM ownership`).Scan(&leasePID, &epoch); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.admin.QueryRow(t.Context(), `SELECT pid FROM pg_catalog.pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>$1 AND pid<>$2`, int32(f.admin.PgConn().PID()), leasePID).Scan(&workPID); err != nil {
-				t.Fatal("original work backend not uniquely observable", err)
+			var workCount int
+			if err := f.admin.QueryRow(t.Context(), `SELECT count(*),min(pid) FROM pg_catalog.pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND application_name=$1 AND pid<>$2`, workTag, leasePID).Scan(&workCount, &workPID); err != nil || workCount != 1 {
+				t.Fatal("tagged original work backend not uniquely observable")
 			}
 			type reply struct {
 				status int
