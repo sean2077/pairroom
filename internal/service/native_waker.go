@@ -22,6 +22,7 @@ const (
 	nativeWakeHourlyLimit     = 10
 	nativeWakeCommandTimeout  = 10 * time.Second
 	nativeWakeQueueRecheck    = 30 * time.Second
+	nativeWakeQueueMaxBackoff = 5 * time.Minute
 )
 
 var errNativeWakeAudit = errors.New("native wake audit is unavailable")
@@ -168,9 +169,10 @@ func (w *nativeWaker) Close() {
 }
 
 type nativeWakeDeferred struct {
-	MessageID string
-	At        time.Time
-	Reason    string
+	MessageID  string
+	At         time.Time
+	Reason     string
+	QueueDelay time.Duration
 }
 
 type nativeWakeHeadSource interface{ WakeHeads() []relay.WakeCandidate }
@@ -264,6 +266,31 @@ func (w *nativeWaker) deferCandidate(c relay.WakeCandidate, at time.Time, reason
 	w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: at, Reason: reason}
 }
 
+// A prompt held in the native queue may outlive Desktop itself. Keep the
+// waiting input reachable, but exponentially back off read-only subprocesses
+// for this unchanged head. A different head or an empty/failed probe resets
+// the delay; this is scheduling state, never permission to submit an effect.
+func (w *nativeWaker) deferQueuedPrompt(c relay.WakeCandidate) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return
+	}
+	delay := nativeWakeQueueRecheck
+	previous := w.deferred[c.Target]
+	if previous.MessageID == c.MessageID && previous.Reason == "queue_pending" {
+		delay = min(max(previous.QueueDelay*2, delay), nativeWakeQueueMaxBackoff)
+	}
+	w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: w.now().Add(delay), Reason: "queue_pending", QueueDelay: delay}
+}
+
+func (w *nativeWaker) queueProbeDeferred(c relay.WakeCandidate) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	next := w.deferred[c.Target]
+	return next.MessageID == c.MessageID && next.Reason == "queue_pending" && w.now().Before(next.At)
+}
+
 // Wake evaluates one post-enqueue message. A durable reservation is appended
 // before invoking the vendor wake, so neither a crash nor a duplicate HTTP retry
 // can automatically repeat a possibly accepted vendor effect.
@@ -292,6 +319,11 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	defer w.end(candidate.Target)
 	if reason := nativeWakeSuppression(candidate); reason != "" {
 		return w.suppress(candidate, reason)
+	}
+	// Publication callbacks share maintenance's backoff. Repeated callbacks for
+	// the same unattempted head must not bypass it or extend the deadline.
+	if w.queueProbeDeferred(candidate) {
+		return nil
 	}
 	target := candidate.Target
 	if err := w.wait(ctx, w.grace); err != nil {
@@ -354,9 +386,14 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 				return w.record("suppressed", "capability_unavailable", candidate.Target)
 			}
 			if pending {
-				w.deferCandidate(candidate, w.now().Add(nativeWakeQueueRecheck), "queue_pending")
+				w.deferQueuedPrompt(candidate)
 				return w.record("suppressed", "nudge_pending", candidate.Target)
 			}
+			w.mu.Lock()
+			if next := w.deferred[candidate.Target]; next.MessageID == candidate.MessageID && next.Reason == "queue_pending" {
+				delete(w.deferred, candidate.Target)
+			}
+			w.mu.Unlock()
 		}
 		attempt = func(ctx context.Context) (string, string) {
 			err := w.run(ctx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
