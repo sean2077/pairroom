@@ -333,7 +333,7 @@ CREATE TABLE control_events (
 CREATE TABLE control_operations (
   op_namespace text NOT NULL CHECK (op_namespace IN ('operator', 'oidc', 'human', 'device')),
   deployment_id text NOT NULL REFERENCES deployment(deployment_id),
-  op_kind text NOT NULL CHECK (op_kind IN ('identity.configure', 'identity.login', 'session.revoke', 'identity.admission', 'user.status', 'administrator.set', 'device.enrollment.begin', 'device.enrollment.decide', 'device.enrollment.complete', 'device.rotate', 'device.recover', 'device.revoke', 'agent.register')),
+  op_kind text NOT NULL CHECK (op_kind IN ('identity.configure', 'identity.login', 'session.revoke', 'identity.admission', 'user.status', 'administrator.set', 'device.enrollment.begin', 'device.enrollment.decide', 'device.enrollment.complete', 'device.enrollment.headless.decide', 'device.enrollment.headless.complete', 'device.rotate', 'device.recover', 'device.revoke', 'agent.register')),
   identifier text NOT NULL CHECK (identifier <> ''),
   principal text NOT NULL CHECK (principal <> ''),
   intent_hash bytea NOT NULL CHECK (octet_length(intent_hash) = 32),
@@ -667,6 +667,15 @@ CREATE TABLE relay_operations (
 CREATE TRIGGER relay_operations_immutable BEFORE UPDATE OR DELETE ON relay_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();
 
 CREATE TABLE device_enrollments (
+  transport_mode text NOT NULL CHECK(transport_mode IN ('loopback','headless')),
+  confirmation_hash bytea,
+  confirmation_failures integer NOT NULL DEFAULT 0 CHECK(confirmation_failures BETWEEN 0 AND 5),
+  next_poll_at timestamptz,
+  poll_sequence bigint NOT NULL DEFAULT 0 CHECK(poll_sequence BETWEEN 0 AND 120),
+  poll_violations integer NOT NULL DEFAULT 0 CHECK(poll_violations BETWEEN 0 AND 5),
+  last_poll_intent_hash bytea,
+  last_poll_status text,
+  last_poll_next_at timestamptz,
   request_id text PRIMARY KEY CHECK(request_id<>''),
   device_id text NOT NULL CHECK(device_id<>''),
   label text NOT NULL CHECK(length(label) BETWEEN 1 AND 128),
@@ -684,10 +693,22 @@ CREATE TABLE device_enrollments (
   created_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
   CHECK(expires_at>created_at AND expires_at<=created_at+interval '10 minutes'),
-  CHECK(status NOT IN ('approved','completed') OR (approved_user_id IS NOT NULL AND code_hash IS NOT NULL AND approval_count>0))
+  CHECK(status NOT IN ('approved','completed') OR (approved_user_id IS NOT NULL AND code_hash IS NOT NULL AND approval_count>0)),
+  CONSTRAINT device_enrollments_transport_shape CHECK((transport_mode='loopback' AND callback_uri<>'' AND client_state<>'' AND confirmation_hash IS NULL AND confirmation_failures=0 AND next_poll_at IS NULL AND poll_sequence=0 AND poll_violations=0 AND last_poll_intent_hash IS NULL AND last_poll_status IS NULL AND last_poll_next_at IS NULL) OR (transport_mode='headless' AND callback_uri='' AND client_state='' AND octet_length(confirmation_hash)=32 AND confirmation_hash IS NOT NULL AND next_poll_at IS NOT NULL AND next_poll_at<=expires_at AND approval_count<=1 AND (status NOT IN ('approved','completed') OR code_hash=confirmation_hash))),
+  CONSTRAINT device_enrollments_poll_shape CHECK((poll_sequence=0 AND last_poll_intent_hash IS NULL AND last_poll_status IS NULL AND last_poll_next_at IS NULL) OR (poll_sequence>0 AND octet_length(last_poll_intent_hash)=32 AND last_poll_intent_hash IS NOT NULL AND last_poll_status IN ('pending','approved','denied','completed','invalidated','expired','slow_down','polling_exhausted') AND last_poll_status IS NOT NULL AND last_poll_next_at IS NOT NULL AND last_poll_next_at<=expires_at))
 );
 CREATE TRIGGER device_enrollments_no_delete BEFORE DELETE ON device_enrollments FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
-CREATE TRIGGER device_enrollments_identity_immutable BEFORE UPDATE ON device_enrollments FOR EACH ROW EXECUTE FUNCTION control_guard_columns('device_enrollments_identity_immutable','request_id','device_id','label','origin','callback_uri','client_state','proof_hash','grant_id','access_hash','refresh_hash','created_at','expires_at');
+CREATE TRIGGER device_enrollments_identity_immutable BEFORE UPDATE ON device_enrollments FOR EACH ROW EXECUTE FUNCTION control_guard_columns('device_enrollments_identity_immutable','transport_mode','confirmation_hash','request_id','device_id','label','origin','callback_uri','client_state','proof_hash','grant_id','access_hash','refresh_hash','created_at','expires_at');
+
+CREATE FUNCTION device_enrollments_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+BEGIN
+ IF NEW.confirmation_failures<OLD.confirmation_failures OR NEW.poll_violations<OLD.poll_violations OR NEW.poll_sequence<OLD.poll_sequence OR NEW.poll_sequence>OLD.poll_sequence+1 OR NEW.next_poll_at<OLD.next_poll_at THEN RAISE EXCEPTION 'enrollment counters are monotonic' USING ERRCODE='23514'; END IF;
+ IF OLD.status IN ('denied','invalidated','completed') AND NEW.status<>OLD.status THEN RAISE EXCEPTION 'enrollment terminal state is permanent' USING ERRCODE='23514'; END IF;
+ IF NEW.confirmation_failures=5 AND NEW.status<>'invalidated' OR NEW.poll_violations=5 AND NEW.status<>'invalidated' THEN RAISE EXCEPTION 'enrollment exhausted' USING ERRCODE='23514'; END IF;
+ IF OLD.transport_mode='headless' AND OLD.status='approved' AND (NEW.approved_user_id IS DISTINCT FROM OLD.approved_user_id OR NEW.code_hash IS DISTINCT FROM OLD.code_hash OR NEW.approval_count<>OLD.approval_count) THEN RAISE EXCEPTION 'headless consent immutable' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END; $$;
+CREATE TRIGGER device_enrollments_state_guard BEFORE UPDATE ON device_enrollments FOR EACH ROW EXECUTE FUNCTION device_enrollments_guard();
 
 CREATE TABLE device_families (
   family_id text PRIMARY KEY REFERENCES device_enrollments(request_id),

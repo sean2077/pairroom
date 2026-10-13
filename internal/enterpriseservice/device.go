@@ -72,13 +72,15 @@ func (r deviceCandidateRequest) candidate() (sqlstore.DeviceCredentialCandidate,
 }
 
 type deviceBeginRequest struct {
-	RequestID   string                 `json:"request_id"`
-	DeviceID    string                 `json:"device_id"`
-	Label       string                 `json:"label"`
-	CallbackURI string                 `json:"callback_uri"`
-	ClientState privateDeviceInput     `json:"client_state"`
-	ProofHash   string                 `json:"proof_hash"`
-	Credential  deviceCandidateRequest `json:"credential"`
+	TransportMode    string                 `json:"transport_mode,omitempty"`
+	ConfirmationHash string                 `json:"confirmation_hash,omitempty"`
+	RequestID        string                 `json:"request_id"`
+	DeviceID         string                 `json:"device_id"`
+	Label            string                 `json:"label"`
+	CallbackURI      string                 `json:"callback_uri"`
+	ClientState      privateDeviceInput     `json:"client_state"`
+	ProofHash        string                 `json:"proof_hash"`
+	Credential       deviceCandidateRequest `json:"credential"`
 }
 
 type deviceCompleteRequest struct {
@@ -140,6 +142,19 @@ func (d *DeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.registerAgent(w, r)
 	default:
 		prefix := "/enterprise/device/v1/enrollments/"
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
+			if len(parts) == 2 && validHeadlessRequestID(parts[0]) {
+				switch parts[1] {
+				case "poll", "resolve-poll":
+					d.headlessPoll(w, r, parts[0], parts[1] == "resolve-poll")
+					return
+				case "headless-complete":
+					d.headlessComplete(w, r, parts[0])
+					return
+				}
+			}
+		}
 		if strings.HasPrefix(r.URL.Path, prefix) && strings.HasSuffix(r.URL.Path, "/complete") {
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), "/complete")
 			if validID(id) {
@@ -194,11 +209,22 @@ func (d *DeviceHandler) begin(w http.ResponseWriter, r *http.Request) {
 	}
 	candidate, ok := request.Credential.candidate()
 	proof, pok := deviceVerifierHash(request.ProofHash)
-	if !ok || !pok || !validID(request.RequestID) || !validID(request.DeviceID) || !validDeviceLabel(request.Label) || enterpriseauth.ValidateDeviceCallback(request.CallbackURI, string(request.ClientState)) != nil {
+	mode := request.TransportMode
+	if mode == "" {
+		mode = sqlstore.DeviceTransportLoopback
+	}
+	var confirmation [32]byte
+	validTransport := mode == sqlstore.DeviceTransportLoopback && request.ConfirmationHash == "" && enterpriseauth.ValidateDeviceCallback(request.CallbackURI, string(request.ClientState)) == nil
+	if mode == sqlstore.DeviceTransportHeadless {
+		var cok bool
+		confirmation, cok = deviceVerifierHash(request.ConfirmationHash)
+		validTransport = cok && validHeadlessRequestID(request.RequestID) && request.CallbackURI == "" && request.ClientState == ""
+	}
+	if !ok || !pok || !validID(request.RequestID) || !validID(request.DeviceID) || !validDeviceLabel(request.Label) || !validTransport {
 		fail(w, http.StatusBadRequest, "invalid_device_request")
 		return
 	}
-	result, err := d.backend.BeginDeviceEnrollment(r.Context(), sqlstore.DeviceEnrollmentCommand{RequestID: request.RequestID, DeviceID: request.DeviceID, Label: request.Label, Origin: d.policy.origin, CallbackURI: request.CallbackURI, ClientState: string(request.ClientState), ProofHash: proof, Credential: candidate})
+	result, err := d.backend.BeginDeviceEnrollment(r.Context(), sqlstore.DeviceEnrollmentCommand{TransportMode: mode, ConfirmationHash: confirmation, RequestID: request.RequestID, DeviceID: request.DeviceID, Label: request.Label, Origin: d.policy.origin, CallbackURI: request.CallbackURI, ClientState: string(request.ClientState), ProofHash: proof, Credential: candidate})
 	if err == nil && confirmed(result) && (!deviceReceiptMatches(result, sqlstore.ControlDeviceEnrollment) || result.Control.RequestID != request.RequestID || result.Control.DeviceID != request.DeviceID) {
 		fail(w, http.StatusServiceUnavailable, "device_unavailable")
 		return
@@ -206,6 +232,10 @@ func (d *DeviceHandler) begin(w http.ResponseWriter, r *http.Request) {
 	var location string
 	if err == nil && confirmed(result) && deviceReceiptMatches(result, sqlstore.ControlDeviceEnrollment) && result.Control.RequestID == request.RequestID {
 		location = d.policy.origin + "/enterprise/device-enrollments/" + request.RequestID
+	}
+	if mode == sqlstore.DeviceTransportHeadless {
+		writeHeadlessOperation(w, result, err, sqlstore.ControlDeviceEnrollment, location, enterpriseauth.HeadlessCandidateFingerprint(candidate.GrantID, candidate.AccessHash, candidate.RefreshHash))
+		return
 	}
 	writeDeviceOperation(w, result, err, sqlstore.ControlDeviceEnrollment, location, "")
 }
@@ -288,12 +318,14 @@ func (d *DeviceHandler) registerAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type devicePublicInfo struct {
-	RequestID string    `json:"request_id"`
-	DeviceID  string    `json:"device_id"`
-	Label     string    `json:"label"`
-	Origin    string    `json:"origin"`
-	Status    string    `json:"status"`
-	ExpiresAt time.Time `json:"expires_at"`
+	TransportMode        string    `json:"transport_mode"`
+	CandidateFingerprint string    `json:"candidate_fingerprint,omitempty"`
+	RequestID            string    `json:"request_id"`
+	DeviceID             string    `json:"device_id"`
+	Label                string    `json:"label"`
+	Origin               string    `json:"origin"`
+	Status               string    `json:"status"`
+	ExpiresAt            time.Time `json:"expires_at"`
 }
 
 // deviceBrowser is dispatched only after the main browser authentication
@@ -320,12 +352,20 @@ func (h *Handler) deviceBrowser(w http.ResponseWriter, r *http.Request, session 
 			writeDeviceError(w, err)
 			return
 		}
-		if info.RequestID != parts[0] || info.Origin != h.policy.origin || enterpriseauth.ValidateDeviceCallback(info.CallbackURI, info.ClientState) != nil {
+		mode := info.TransportMode
+		if mode == "" {
+			mode = sqlstore.DeviceTransportLoopback
+		}
+		validTransport := mode == sqlstore.DeviceTransportLoopback && enterpriseauth.ValidateDeviceCallback(info.CallbackURI, info.ClientState) == nil
+		if mode == sqlstore.DeviceTransportHeadless {
+			validTransport = validHeadlessRequestID(info.RequestID) && info.CallbackURI == "" && info.ClientState == "" && validCandidateFingerprint(info.CandidateFingerprint)
+		}
+		if info.RequestID != parts[0] || info.Origin != h.policy.origin || !validTransport {
 			fail(w, http.StatusServiceUnavailable, "device_unavailable")
 			return
 		}
 		if r.Method == http.MethodGet && len(parts) == 1 {
-			writeJSON(w, http.StatusOK, devicePublicInfo{info.RequestID, info.DeviceID, info.Label, info.Origin, info.Status, info.ExpiresAt})
+			writeJSON(w, http.StatusOK, devicePublicInfo{TransportMode: mode, CandidateFingerprint: info.CandidateFingerprint, RequestID: info.RequestID, DeviceID: info.DeviceID, Label: info.Label, Origin: info.Origin, Status: info.Status, ExpiresAt: info.ExpiresAt})
 			return
 		}
 		if r.Method != http.MethodPost || len(parts) != 2 || parts[1] != "decision" || !h.browserMutationProof(r, session) {
@@ -333,14 +373,23 @@ func (h *Handler) deviceBrowser(w http.ResponseWriter, r *http.Request, session 
 			return
 		}
 		var request struct {
-			ClientID string `json:"client_id"`
-			Action   string `json:"action"`
+			ClientID         string             `json:"client_id"`
+			Action           string             `json:"action"`
+			ConfirmationCode privateDeviceInput `json:"confirmation_code,omitempty"`
 		}
 		if !decodeRequest(w, r, &request) || !validID(request.ClientID) || (request.Action != "approve" && request.Action != "deny") {
 			fail(w, http.StatusBadRequest, "invalid_device_request")
 			return
 		}
 		approve := request.Action == "approve"
+		if mode == sqlstore.DeviceTransportHeadless {
+			h.headlessDecision(w, r, session, info, request.ClientID, approve, string(request.ConfirmationCode))
+			return
+		}
+		if request.ConfirmationCode != "" {
+			fail(w, http.StatusBadRequest, "invalid_device_request")
+			return
+		}
 		var code string
 		var codeHash [32]byte
 		if approve {

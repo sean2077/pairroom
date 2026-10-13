@@ -66,7 +66,7 @@ func controlAuditTarget(receipt ControlReceipt) string {
 		return receipt.UserID
 	case controlRevoke:
 		return receipt.SessionID
-	case ControlDeviceComplete, ControlDeviceRotate, ControlDeviceRecover, ControlDeviceRevoke:
+	case ControlDeviceComplete, ControlHeadlessComplete, ControlDeviceRotate, ControlDeviceRecover, ControlDeviceRevoke:
 		return receipt.DeviceID
 	case ControlAgentRegister:
 		return receipt.AgentID

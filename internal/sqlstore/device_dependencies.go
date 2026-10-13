@@ -9,6 +9,12 @@ import (
 )
 
 type deviceDependencies struct {
+	transportMode                                                                                                                                         string
+	confirmationHash, lastPollIntentHash                                                                                                                  [32]byte
+	confirmationFailures, pollViolations                                                                                                                  int
+	pollSequence                                                                                                                                          uint64
+	nextPollAt, lastPollNextAt                                                                                                                            time.Time
+	lastPollStatus                                                                                                                                        string
 	missing, expired, deviceMissing, deviceDisabled, deviceRetired, revoked, epochMismatch, recoveryUsed, recoveryExpired                                 bool
 	requestID, deviceID, label, origin, callbackURI, clientState, status, ownerID, grantID, familyID, currentGrantID, previousGrantID, recoveryRotationID string
 	proofHash, codeHash, accessHash, refreshHash, recoveryHash                                                                                            [32]byte
@@ -25,8 +31,10 @@ func hashFromDB(dst *[32]byte, src []byte) error {
 }
 func (s *Store) readEnrollment(ctx context.Context, q rowQuerier, id, lock string) (deviceDependencies, error) {
 	d := deviceDependencies{requestID: id}
-	var proof, code, access, refresh []byte
-	e := q.QueryRow(ctx, `SELECT device_id,label,origin,callback_uri,client_state,status,COALESCE(approved_user_id,''),grant_id,proof_hash,code_hash,access_hash,refresh_hash,approval_count,expires_at,expires_at<=pg_catalog.clock_timestamp() FROM `+s.table("device_enrollments")+` WHERE request_id=$1`+lock, id).Scan(&d.deviceID, &d.label, &d.origin, &d.callbackURI, &d.clientState, &d.status, &d.ownerID, &d.grantID, &proof, &code, &access, &refresh, &d.approvalCount, &d.expiresAt, &d.expired)
+	var proof, code, access, refresh, confirmation, pollIntent []byte
+	var next, last *time.Time
+	var pollStatus *string
+	e := q.QueryRow(ctx, `SELECT device_id,label,origin,callback_uri,client_state,status,COALESCE(approved_user_id,''),grant_id,proof_hash,code_hash,access_hash,refresh_hash,approval_count,expires_at,expires_at<=pg_catalog.clock_timestamp(),transport_mode,confirmation_hash,confirmation_failures,next_poll_at,poll_sequence,poll_violations,last_poll_intent_hash,last_poll_status,last_poll_next_at FROM `+s.table("device_enrollments")+` WHERE request_id=$1`+lock, id).Scan(&d.deviceID, &d.label, &d.origin, &d.callbackURI, &d.clientState, &d.status, &d.ownerID, &d.grantID, &proof, &code, &access, &refresh, &d.approvalCount, &d.expiresAt, &d.expired, &d.transportMode, &confirmation, &d.confirmationFailures, &next, &d.pollSequence, &d.pollViolations, &pollIntent, &pollStatus, &last)
 	if errors.Is(e, pgx.ErrNoRows) {
 		d.missing = true
 		return d, nil
@@ -44,6 +52,25 @@ func (s *Store) readEnrollment(ctx context.Context, q rowQuerier, id, lock strin
 	}
 	if code != nil {
 		if e := hashFromDB(&d.codeHash, code); e != nil {
+			return d, e
+		}
+	}
+	if next != nil {
+		d.nextPollAt = next.UTC()
+	}
+	if last != nil {
+		d.lastPollNextAt = last.UTC()
+	}
+	if pollStatus != nil {
+		d.lastPollStatus = *pollStatus
+	}
+	if confirmation != nil {
+		if e := hashFromDB(&d.confirmationHash, confirmation); e != nil {
+			return d, e
+		}
+	}
+	if pollIntent != nil {
+		if e := hashFromDB(&d.lastPollIntentHash, pollIntent); e != nil {
 			return d, e
 		}
 	}
@@ -91,7 +118,7 @@ func (s *Store) readDeviceControlDependencies(ctx context.Context, q rowQuerier,
 		if err != nil {
 			return nil, err
 		}
-		if kind == ControlDeviceComplete {
+		if kind == ControlDeviceComplete || kind == ControlHeadlessComplete || kind == controlHeadlessPoll {
 			actor = d.device.ownerID
 		}
 	}
@@ -157,14 +184,14 @@ func (s *Store) readDeviceControlDependencies(ctx context.Context, q rowQuerier,
 			return nil, err
 		}
 	}
-	if kind == ControlDeviceComplete && d.device.deviceID != "" {
+	if (kind == ControlDeviceComplete || kind == ControlHeadlessComplete || kind == controlHeadlessPoll) && d.device.deviceID != "" {
 		var owner string
 		err = q.QueryRow(ctx, `SELECT user_id,disabled,retired_at IS NOT NULL FROM `+s.table("devices")+` WHERE device_id=$1`+exclusive, d.device.deviceID).Scan(&owner, &d.device.deviceDisabled, &d.device.deviceRetired)
 		d.device.deviceMissing = errors.Is(err, pgx.ErrNoRows)
 		if err != nil && !d.device.deviceMissing {
 			return nil, err
 		}
-		if !d.device.deviceMissing && owner != d.device.ownerID {
+		if !d.device.deviceMissing && d.device.ownerID != "" && owner != d.device.ownerID {
 			d.device.deviceDisabled = true
 		}
 		if d.device.status == "completed" {
@@ -208,11 +235,13 @@ func (s *Store) deviceReadAllowed(plan opPlan, d *controlDependencies) bool {
 	liveBrowser := liveActor && d.credential.allowed() && d.credential.kind == CredentialBrowser
 	switch plan.control.kind {
 	case ControlDeviceEnrollment:
-		return x.missing || !x.expired && x.proofHash == m.enrollment.ProofHash
-	case controlEnrollmentRead, ControlDeviceDecision:
-		return liveBrowser && !x.missing && !x.expired && (x.ownerID == "" || x.ownerID == plan.auth.UserID)
-	case ControlDeviceComplete:
-		return liveActor && !x.missing && !x.expired && !x.deviceDisabled && !x.deviceRetired && x.origin == m.completion.Origin && x.proofHash == m.completion.ProofHash && x.codeHash == m.completion.CodeHash && (x.status == "approved" || x.status == "completed")
+		return x.missing || !x.expired && x.proofHash == m.enrollment.ProofHash && x.transportMode == m.enrollment.TransportMode && (x.transportMode != DeviceTransportHeadless || x.status != "invalidated" && x.status != "denied")
+	case controlEnrollmentRead, ControlDeviceDecision, ControlHeadlessDecision:
+		return liveBrowser && !x.missing && !x.expired && (x.ownerID == "" || x.ownerID == plan.auth.UserID) && (plan.control.kind == controlEnrollmentRead || plan.control.kind == ControlDeviceDecision && x.transportMode == DeviceTransportLoopback || plan.control.kind == ControlHeadlessDecision && x.transportMode == DeviceTransportHeadless)
+	case controlHeadlessPoll:
+		return !x.missing && x.transportMode == DeviceTransportHeadless && x.origin == m.poll.Origin && x.proofHash == m.poll.ProofHash && (x.ownerID == "" || liveActor) && !x.deviceDisabled && !x.deviceRetired && (x.status != "completed" || d.candidate.allowed())
+	case ControlDeviceComplete, ControlHeadlessComplete:
+		return (x.transportMode == DeviceTransportHeadless) == m.headlessComplete && liveActor && !x.missing && !x.expired && !x.deviceDisabled && !x.deviceRetired && x.origin == m.completion.Origin && x.proofHash == m.completion.ProofHash && x.codeHash == m.completion.CodeHash && (x.status == "approved" || x.status == "completed")
 	case ControlDeviceRotate, ControlDeviceRecover:
 		return liveActor && !x.missing && !x.expired && !x.revoked && !x.deviceDisabled && !x.deviceRetired && !x.epochMismatch && x.deviceID == m.rotation.DeviceID && x.origin == m.rotation.Origin && x.proofHash == m.rotation.ClientProofHash && x.refreshHash == m.rotation.CurrentRefreshHash
 	case ControlDeviceRevoke:

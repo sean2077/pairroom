@@ -18,6 +18,9 @@ type deviceMutation struct {
 	decision                                        *DeviceEnrollmentDecision
 	completion                                      *DeviceEnrollmentCompletion
 	rotation                                        *DeviceRotationCommand
+	headlessDecision                                *HeadlessEnrollmentDecision
+	poll                                            *HeadlessEnrollmentPoll
+	headlessComplete                                bool
 	requestID, deviceID, origin, sourceKey, agentID string
 	runtime                                         model.RuntimeKind
 	tokenHash                                       [32]byte
@@ -41,14 +44,18 @@ func (s *Store) deviceControlPlan(kind, id, principal string, m *deviceMutation)
 	return opPlan{key: OpKey{Namespace: "device", Deployment: s.cfg.DeploymentID, OpKind: kind, Identifier: id, Principal: principal}, control: &controlMutation{kind: kind, device: m}}
 }
 func (s *Store) BeginDeviceEnrollment(ctx context.Context, cmd DeviceEnrollmentCommand) (Result, error) {
-	if !validRoomCreateIdentity(cmd.RequestID) || !validRoomCreateIdentity(cmd.DeviceID) || !validDeviceOrigin(cmd.Origin) || cmd.ProofHash == ([32]byte{}) || !validDeviceCandidate(cmd.Credential) || len(cmd.Label) == 0 || len(cmd.Label) > 128 || !utf8.ValidString(cmd.Label) || strings.ContainsFunc(cmd.Label, unicode.IsControl) || enterpriseauth.ValidateDeviceCallback(cmd.CallbackURI, cmd.ClientState) != nil {
+	if cmd.TransportMode == "" {
+		cmd.TransportMode = DeviceTransportLoopback
+	}
+	validTransport := cmd.TransportMode == DeviceTransportLoopback && cmd.ConfirmationHash == ([32]byte{}) && enterpriseauth.ValidateDeviceCallback(cmd.CallbackURI, cmd.ClientState) == nil || cmd.TransportMode == DeviceTransportHeadless && validHeadlessRequestID(cmd.RequestID) && cmd.CallbackURI == "" && cmd.ClientState == "" && cmd.ConfirmationHash != ([32]byte{})
+	if !validTransport || !validRoomCreateIdentity(cmd.RequestID) || !validRoomCreateIdentity(cmd.DeviceID) || !validDeviceOrigin(cmd.Origin) || cmd.ProofHash == ([32]byte{}) || !validDeviceCandidate(cmd.Credential) || len(cmd.Label) == 0 || len(cmd.Label) > 128 || !utf8.ValidString(cmd.Label) || strings.ContainsFunc(cmd.Label, unicode.IsControl) {
 		return refused(ClassInvalidRequest, nil)
 	}
 	p := s.deviceControlPlan(ControlDeviceEnrollment, cmd.RequestID, hex.EncodeToString(cmd.ProofHash[:]), &deviceMutation{enrollment: &cmd, requestID: cmd.RequestID})
 	p.hash = controlHash(p.key, struct {
-		Command                DeviceEnrollmentCommand
-		Proof, Access, Refresh [32]byte
-	}{cmd, cmd.ProofHash, cmd.Credential.AccessHash, cmd.Credential.RefreshHash})
+		Command                              DeviceEnrollmentCommand
+		Proof, Access, Refresh, Confirmation [32]byte
+	}{cmd, cmd.ProofHash, cmd.Credential.AccessHash, cmd.Credential.RefreshHash, cmd.ConfirmationHash})
 	return s.commitWithRestarts(ctx, p, model.Event{})
 }
 func (s *Store) GetDeviceEnrollment(ctx context.Context, auth AuthContext, requestID string) (DeviceEnrollmentInfo, error) {

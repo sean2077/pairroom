@@ -72,7 +72,7 @@ func (c *Client) Login(parent context.Context, label string, recover bool) (Stat
 	}
 	var listener *callback
 	if recover {
-		if s.Pending == nil || s.Pending.Kind != "enrollment" {
+		if s.Pending == nil || s.Pending.Kind != "enrollment" || s.Pending.TransportMode != "" {
 			return s.status(), ErrPending
 		}
 		if s.Pending.CompletionCode == "" {

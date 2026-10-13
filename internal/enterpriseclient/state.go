@@ -8,7 +8,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/sean2077/pairroom/internal/enterpriseauth"
 
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/privatelock"
@@ -26,24 +29,29 @@ type credential struct {
 	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
 }
 type pending struct {
-	Kind           string     `json:"kind"`
-	Phase          string     `json:"phase"`
-	RequestID      string     `json:"request_id,omitempty"`
-	ClientID       string     `json:"client_id"`
-	DeviceID       string     `json:"device_id"`
-	UserID         string     `json:"user_id,omitempty"`
-	Label          string     `json:"label,omitempty"`
-	CallbackURI    string     `json:"callback_uri,omitempty"`
-	ClientState    secret     `json:"client_state,omitempty"`
-	Proof          secret     `json:"proof"`
-	CompletionCode secret     `json:"completion_code,omitempty"`
-	CurrentGrantID string     `json:"current_grant_id,omitempty"`
-	CurrentRefresh secret     `json:"current_refresh,omitempty"`
-	Next           credential `json:"next"`
-	CreatedAt      time.Time  `json:"created_at"`
-	IntentHash     string     `json:"intent_hash"`
-	CompletionHash string     `json:"completion_hash,omitempty"`
-	ExpiresAt      time.Time  `json:"expires_at,omitzero"`
+	TransportMode    string     `json:"transport_mode,omitempty"`
+	ConfirmationCode secret     `json:"confirmation_code,omitempty"`
+	PollSequence     uint64     `json:"poll_sequence,omitempty"`
+	PollIntentHash   string     `json:"poll_intent_hash,omitempty"`
+	NextPollAt       time.Time  `json:"next_poll_at,omitzero"`
+	Kind             string     `json:"kind"`
+	Phase            string     `json:"phase"`
+	RequestID        string     `json:"request_id,omitempty"`
+	ClientID         string     `json:"client_id"`
+	DeviceID         string     `json:"device_id"`
+	UserID           string     `json:"user_id,omitempty"`
+	Label            string     `json:"label,omitempty"`
+	CallbackURI      string     `json:"callback_uri,omitempty"`
+	ClientState      secret     `json:"client_state,omitempty"`
+	Proof            secret     `json:"proof"`
+	CompletionCode   secret     `json:"completion_code,omitempty"`
+	CurrentGrantID   string     `json:"current_grant_id,omitempty"`
+	CurrentRefresh   secret     `json:"current_refresh,omitempty"`
+	Next             credential `json:"next"`
+	CreatedAt        time.Time  `json:"created_at"`
+	IntentHash       string     `json:"intent_hash"`
+	CompletionHash   string     `json:"completion_hash,omitempty"`
+	ExpiresAt        time.Time  `json:"expires_at,omitzero"`
 }
 
 type retainedOperation struct {
@@ -66,7 +74,22 @@ type RetainedOperationInfo struct {
 }
 
 func (p pending) intentHash(origin, deployment string) string {
-	return digest(struct{ Origin, Deployment, Kind, RequestID, ClientID, DeviceID, UserID, Label, CallbackURI, State, Proof, CurrentGrantID, CurrentRefresh, NextGrantID, NextAccess, NextRefresh string }{origin, deployment, p.Kind, p.RequestID, p.ClientID, p.DeviceID, p.UserID, p.Label, p.CallbackURI, verifier(p.ClientState), verifier(p.Proof), p.CurrentGrantID, verifier(p.CurrentRefresh), p.Next.GrantID, verifier(p.Next.Access), verifier(p.Next.Refresh)})
+	legacy := digest(struct{ Origin, Deployment, Kind, RequestID, ClientID, DeviceID, UserID, Label, CallbackURI, State, Proof, CurrentGrantID, CurrentRefresh, NextGrantID, NextAccess, NextRefresh string }{origin, deployment, p.Kind, p.RequestID, p.ClientID, p.DeviceID, p.UserID, p.Label, p.CallbackURI, verifier(p.ClientState), verifier(p.Proof), p.CurrentGrantID, verifier(p.CurrentRefresh), p.Next.GrantID, verifier(p.Next.Access), verifier(p.Next.Refresh)})
+	if p.TransportMode == "headless" {
+		confirmation, _ := enterpriseauth.HeadlessConfirmationHash(string(p.ConfirmationCode))
+		return digest(struct {
+			Domain, Mode, Legacy string
+			Confirmation         [32]byte
+		}{"pairroom-headless-intent-v1", p.TransportMode, legacy, confirmation})
+	}
+	return legacy
+}
+
+func (p pending) pollIntentHash(origin, deployment string) string {
+	return digest(struct {
+		Origin, Deployment, RequestID, Proof string
+		Sequence                             uint64
+	}{origin, deployment, p.RequestID, verifier(p.Proof), p.PollSequence})
 }
 func (p pending) completionHash() string {
 	return digest(struct{ RequestID, ClientID, Proof, Code string }{p.RequestID, p.ClientID, verifier(p.Proof), verifier(p.CompletionCode)})
@@ -189,6 +212,10 @@ func (c *Client) read() (state, error) {
 	if p := s.Pending; p != nil {
 		switch p.Phase {
 		case "prepared", "awaiting_approval", "completion_ready", "begin_unknown", "completion_unknown", "rotation_unknown", "not_committed":
+		case "begin_not_committed", "completion_not_committed", "poll_ready", "poll_unknown", "poll_not_committed", "poll_confirmed", "terminal":
+			if p.TransportMode != "headless" {
+				return state{}, ErrPrivateState
+			}
 		default:
 			return state{}, ErrPrivateState
 		}
@@ -198,8 +225,18 @@ func (c *Client) read() (state, error) {
 		if (p.Kind != "enrollment" && p.Kind != "rotation") || !validID(p.ClientID) || !validID(p.DeviceID) || !validID(p.Next.GrantID) || !validSecret(p.Proof) || !validSecret(p.Next.Access) || !validSecret(p.Next.Refresh) || p.IntentHash != p.intentHash(c.origin, c.deployment) {
 			return state{}, ErrPrivateState
 		}
-		if p.Kind == "enrollment" && (!validID(p.RequestID) || !validSecret(p.ClientState) || !validCallbackURI(p.CallbackURI)) {
-			return state{}, ErrPrivateState
+		if p.TransportMode == "headless" {
+			code, err := enterpriseauth.NormalizeHeadlessConfirmationCode(string(p.ConfirmationCode))
+			if p.Kind != "enrollment" || !validHeadlessID(p.RequestID) || err != nil || code != string(p.ConfirmationCode) || p.CallbackURI != "" || p.ClientState != "" || p.CompletionCode != "" || p.CompletionHash != "" || p.PollSequence > 120 || (p.PollSequence > 0 && p.PollIntentHash != p.pollIntentHash(c.origin, c.deployment)) || (p.PollSequence == 0 && p.PollIntentHash != "") {
+				return state{}, ErrPrivateState
+			}
+			if p.Phase == "rotation_unknown" || p.Phase == "not_committed" || (strings.HasPrefix(p.Phase, "poll_") && p.PollSequence == 0) {
+				return state{}, ErrPrivateState
+			}
+		} else {
+			if p.TransportMode != "" || p.ConfirmationCode != "" || p.PollSequence != 0 || p.PollIntentHash != "" || !p.NextPollAt.IsZero() || (p.Kind == "enrollment" && (!validID(p.RequestID) || !validSecret(p.ClientState) || !validCallbackURI(p.CallbackURI))) {
+				return state{}, ErrPrivateState
+			}
 		}
 		if p.Kind == "rotation" && (!validID(p.UserID) || !validID(p.CurrentGrantID) || !validSecret(p.CurrentRefresh)) {
 			return state{}, ErrPrivateState

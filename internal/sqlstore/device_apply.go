@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"github.com/sean2077/pairroom/internal/enterpriseauth"
 	"math"
 	"time"
 )
@@ -11,6 +12,8 @@ import (
 func (s *Store) resolveDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *controlDependencies) (Result, error) {
 	c := d.credential
 	switch p.control.kind {
+	case controlHeadlessPoll:
+		return s.resolveHeadlessPoll(p, d)
 	case ControlDeviceRevoke:
 		r, found, e := s.lookupControl(ctx, tx, p)
 		if e != nil {
@@ -32,7 +35,7 @@ func (s *Store) resolveDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d
 		return r, nil
 	case controlEnrollmentRead:
 		x := d.device
-		return Result{Outcome: OutcomeReplayed, enrollment: &DeviceEnrollmentInfo{RequestID: x.requestID, DeviceID: x.deviceID, Label: x.label, Origin: x.origin, CallbackURI: x.callbackURI, ClientState: x.clientState, Status: x.status, ExpiresAt: x.expiresAt}}, nil
+		return Result{Outcome: OutcomeReplayed, enrollment: &DeviceEnrollmentInfo{RequestID: x.requestID, DeviceID: x.deviceID, Label: x.label, Origin: x.origin, CallbackURI: x.callbackURI, ClientState: x.clientState, Status: x.status, ExpiresAt: x.expiresAt, TransportMode: x.transportMode, CandidateFingerprint: enterpriseauth.HeadlessCandidateFingerprint(x.grantID, x.accessHash, x.refreshHash)}}, nil
 	case controlDeviceAuthenticate:
 		return Result{Outcome: OutcomeReplayed, device: &DeviceCredential{Auth: AuthContext{Deployment: s.cfg.DeploymentID, UserID: c.userID, DeviceGrantID: c.grantID}, DeviceID: c.deviceID, GrantID: c.grantID, ExpiresAt: c.expiresAt, RefreshExpiresAt: c.refreshExpiresAt}}, nil
 	case controlBindingAuthenticate:
@@ -42,6 +45,12 @@ func (s *Store) resolveDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d
 }
 func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *controlDependencies) (Result, error) {
 	m, x, kind := p.control.device, d.device, p.control.kind
+	if kind == controlHeadlessPoll {
+		return s.applyHeadlessPoll(ctx, tx, p, d)
+	}
+	if kind == ControlHeadlessDecision {
+		return s.applyHeadlessDecision(ctx, tx, p, d)
+	}
 	if kind == ControlAgentRegister {
 		// Credential rotation changes a verifier, not the endpoint's identity.
 		// Freeze the live Device authority instead of the particular access grant.
@@ -91,11 +100,17 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 			if r.Control == nil || !validDeviceReceipt(p, d, *r.Control) {
 				return refused(ClassStoredFactUnreadable, nil)
 			}
-			if kind == ControlDeviceComplete && !d.candidate.allowed() {
+			if (kind == ControlDeviceComplete || kind == ControlHeadlessComplete) && !d.candidate.allowed() {
 				return refused(ClassAuthorization, nil)
 			}
 			if kind == ControlDeviceDecision && (m.decision.Approve && (x.status != "approved" || x.codeHash != m.decision.CodeHash) || !m.decision.Approve && x.status != "denied") {
 				return refused(ClassInvalidControlState, nil)
+			}
+			if kind == ControlHeadlessComplete {
+				r.headless = headlessObservation(x, "completed", "")
+			}
+			if kind == ControlDeviceEnrollment && x.transportMode == DeviceTransportHeadless {
+				r.headless = &HeadlessEnrollmentResult{RequestID: x.requestID, Status: "pending", ExpiresAt: x.expiresAt, NextPollAt: x.expiresAt.Add(-10*time.Minute + 5*time.Second)}
 			}
 			return r, nil
 		}
@@ -103,7 +118,11 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 	if d.revision >= math.MaxInt64 {
 		return refused(ClassRangeExceeded, nil)
 	}
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	var now time.Time
+	if e := tx.QueryRow(ctx, `SELECT pg_catalog.clock_timestamp()`).Scan(&now); e != nil {
+		return controlStatementFailure(s, ctx, e)
+	}
+	now = now.UTC()
 	r := ControlReceipt{Version: 1, Kind: kind, Seq: d.revision + 1}
 	actor := p.auth.UserID
 	switch kind {
@@ -116,7 +135,7 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 		}
 		c := m.enrollment
 		expiry := now.Add(10 * time.Minute)
-		_, e := tx.Exec(ctx, `INSERT INTO `+s.table("device_enrollments")+`(request_id,device_id,label,origin,callback_uri,client_state,proof_hash,grant_id,access_hash,refresh_hash,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, c.RequestID, c.DeviceID, c.Label, c.Origin, c.CallbackURI, c.ClientState, c.ProofHash[:], c.Credential.GrantID, c.Credential.AccessHash[:], c.Credential.RefreshHash[:], now, expiry)
+		_, e := tx.Exec(ctx, `INSERT INTO `+s.table("device_enrollments")+`(request_id,device_id,label,origin,callback_uri,client_state,proof_hash,grant_id,access_hash,refresh_hash,created_at,expires_at,transport_mode,confirmation_hash,next_poll_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, c.RequestID, c.DeviceID, c.Label, c.Origin, c.CallbackURI, c.ClientState, c.ProofHash[:], c.Credential.GrantID, c.Credential.AccessHash[:], c.Credential.RefreshHash[:], now, expiry, c.TransportMode, nullableConfirmation(c), headlessFirstPoll(c, now))
 		if e != nil {
 			return controlStatementFailure(s, ctx, e)
 		}
@@ -141,7 +160,7 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 			return controlStatementFailure(s, ctx, e)
 		}
 		r.UserID, r.RequestID, r.DeviceID, r.Status, r.ExpiresAt = actor, m.requestID, x.deviceID, status, x.expiresAt
-	case ControlDeviceComplete:
+	case ControlDeviceComplete, ControlHeadlessComplete:
 		if x.status != "approved" {
 			return refused(ClassInvalidControlState, nil)
 		}
@@ -241,7 +260,14 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 	if e := s.appendControlResult(ctx, tx, p, r, actor); e != nil {
 		return controlStatementFailure(s, ctx, e)
 	}
-	return Result{Outcome: OutcomeCommitted, Control: &r}, nil
+	result := Result{Outcome: OutcomeCommitted, Control: &r}
+	if kind == ControlHeadlessComplete {
+		result.headless = headlessObservation(x, "completed", "")
+	}
+	if kind == ControlDeviceEnrollment && m.enrollment.TransportMode == DeviceTransportHeadless {
+		result.headless = &HeadlessEnrollmentResult{RequestID: r.RequestID, Status: r.Status, ExpiresAt: r.ExpiresAt, NextPollAt: now.Add(5 * time.Second)}
+	}
+	return result, nil
 }
 
 func validDeviceReceipt(p opPlan, d *controlDependencies, r ControlReceipt) bool {
@@ -258,7 +284,7 @@ func validDeviceReceipt(p opPlan, d *controlDependencies, r ControlReceipt) bool
 			status = "approved"
 		}
 		expected.RequestID, expected.DeviceID, expected.UserID, expected.Status, expected.ExpiresAt = p.control.device.requestID, d.device.deviceID, p.auth.UserID, status, d.device.expiresAt
-	case ControlDeviceComplete:
+	case ControlDeviceComplete, ControlHeadlessComplete:
 		expected.RequestID, expected.DeviceID, expected.UserID, expected.GrantID, expected.Status = p.control.device.requestID, d.device.deviceID, d.device.ownerID, d.device.grantID, "completed"
 		expected.ExpiresAt, expected.RefreshExpiresAt = d.candidate.expiresAt, d.candidate.refreshExpiresAt
 	case ControlDeviceRotate:

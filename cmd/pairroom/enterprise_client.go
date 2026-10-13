@@ -31,10 +31,11 @@ func runEnterpriseClient(args []string) error {
 	directory := flags.String("state-dir", "", "owner-private endpoint state directory")
 	ca := flags.String("ca-file", "", "optional PEM CA certificates extending system roots")
 	var label *string
-	var recoverFlag, retryFlag *bool
+	var recoverFlag, retryFlag, headlessFlag *bool
 	if action == "login" {
 		label = flags.String("label", "Native endpoint", "device name shown for browser approval")
 		recoverFlag = flags.Bool("recover", false, "explicitly reconcile the original saved enrollment")
+		headlessFlag = flags.Bool("headless", false, "print an HTTPS verification URL and code; poll only in this foreground command, without a browser or listener")
 	}
 	if action == "refresh" {
 		recoverFlag = flags.Bool("recover", false, "consume the bounded original-predecessor recovery once")
@@ -70,7 +71,14 @@ func runEnterpriseClient(args []string) error {
 	case "status":
 		status, e = client.CheckStatus(ctx)
 	case "login":
-		status, e = client.Login(ctx, *label, *recoverFlag)
+		if *headlessFlag {
+			status, e = client.LoginHeadless(ctx, *label, *recoverFlag, func(verification enterpriseclient.HeadlessVerification) error {
+				_, err := fmt.Fprintf(os.Stdout, "Open this exact HTTPS URL in your browser: %s\nDevice: %s\nCandidate fingerprint: %s\nCode from this CLI: %s\nExpires: %s\nEnter only the code from your own terminal. Approval grants Device credentials for Agent registration. Room membership, content access and Binding approval are separate; revoke Device credentials in My Devices.\n", verification.VerificationURL, verification.DeviceID, verification.CandidateFingerprint, verification.ConfirmationCode, verification.ExpiresAt.Format(time.RFC3339))
+				return err
+			})
+		} else {
+			status, e = client.Login(ctx, *label, *recoverFlag)
+		}
 	case "refresh":
 		mode := enterpriseclient.RefreshNew
 		if *recoverFlag {

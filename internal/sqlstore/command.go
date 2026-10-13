@@ -156,6 +156,7 @@ const (
 // fact. Replayed returns the original stored fact (original event id and
 // creation time) — never a freshly constructed candidate event.
 type Result struct {
+	headless           *HeadlessEnrollmentResult
 	Outcome            Outcome
 	Class              string
 	Err                error

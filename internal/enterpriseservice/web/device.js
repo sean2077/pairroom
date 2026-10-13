@@ -16,10 +16,12 @@
     inFlight.clear();
     csrf = "";
     info = null;
+    byId("device-code").value = "";
+    byId("device-confirmation").hidden = true;
     byId("device-details").hidden = true;
     byId("device-approve").disabled = true;
     byId("device-deny").disabled = true;
-    for (const id of ["device-label", "device-origin", "device-id", "device-expiry", "device-request-state", "device-status"]) byId(id).textContent = "";
+    for (const id of ["device-label", "device-origin", "device-id", "device-fingerprint", "device-expiry", "device-request-state", "device-status"]) byId(id).textContent = "";
     return epoch;
   }
 
@@ -66,17 +68,20 @@
       if (!response.ok || !matchesSession(response, session)) throw new Error("unavailable");
       const request = await response.json();
       if (!current(generation, controller)) return;
-      if (request.request_id !== requestID) throw new Error("wrong request");
+      const mode = request.transport_mode || "loopback";
+      if (request.request_id !== requestID || !["loopback", "headless"].includes(mode) || mode === "headless" && !/^[a-f0-9]{32}$/.test(request.candidate_fingerprint || "")) throw new Error("wrong request");
       info = request;
       byId("device-label").textContent = request.label;
       byId("device-origin").textContent = request.origin;
       byId("device-id").textContent = request.device_id;
+      byId("device-fingerprint").textContent = request.candidate_fingerprint || "—";
+      byId("device-confirmation").hidden = mode !== "headless";
       byId("device-expiry").textContent = new Date(request.expires_at).toLocaleString();
-      byId("device-request-state").textContent = request.status === "approved" ? "Previously approved. Approve again only if your CLI did not receive the completion." : `Request: ${request.status}`;
-      const pending = request.status === "pending" || request.status === "approved";
-      byId("device-approve").textContent = request.status === "approved" ? "Approve again" : "Approve device";
+      byId("device-request-state").textContent = request.status === "approved" ? mode === "headless" ? "Approved. Your original CLI can complete enrollment until this request expires." : "Previously approved. Approve again only if your CLI did not receive the completion." : `Request: ${request.status}`;
+      const pending = request.status === "pending" || request.status === "approved" && mode === "loopback";
+      byId("device-approve").textContent = request.status === "approved" && mode === "loopback" ? "Approve again" : "Approve device";
       byId("device-approve").disabled = !pending;
-      byId("device-deny").disabled = !pending;
+      byId("device-deny").disabled = !["pending", "approved"].includes(request.status);
       byId("device-details").hidden = false;
     } catch {
       if (current(generation, controller)) {
@@ -104,6 +109,12 @@
 
   async function decide(action) {
     if (!csrf || !info || !["pending", "approved"].includes(info.status)) return;
+    const headless = info.transport_mode === "headless";
+    let confirmationCode = "";
+    if (headless && action === "approve") {
+      confirmationCode = byId("device-code").value;
+      if (!/^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-?[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/.test(confirmationCode)) { byId("device-status").textContent = "Enter the eight uppercase symbols shown by your own CLI."; return; }
+    }
     const proof = csrf;
     const expectedSession = observedSession;
     const generation = invalidate();
@@ -113,13 +124,22 @@
       const response = await fetch(`/enterprise/api/v1/device-enrollments/${requestID}/decision`, {
         method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal,
         headers: { "Content-Type": "application/json", "X-PairRoom-CSRF": proof },
-        body: JSON.stringify({ client_id: crypto.randomUUID(), action })
+        body: JSON.stringify({ client_id: crypto.randomUUID(), action, ...(confirmationCode ? { confirmation_code: confirmationCode } : {}) })
       });
       if (!current(generation, controller)) return;
-      if (!response.ok || !matchesSession(response, expectedSession)) throw new Error("unconfirmed");
+      if (!matchesSession(response, expectedSession)) throw new Error("unconfirmed");
       const result = await response.json();
       if (!current(generation, controller)) return;
       if (result.request_id !== requestID) throw new Error("wrong request");
+      if (headless) {
+        if (!["committed", "replayed"].includes(result.outcome) || result.kind !== "device.enrollment.headless.decide" || result.transport_mode !== "headless" || result.completion_location) throw new Error("unconfirmed");
+        if (response.status === 400 && result.disposition === "confirmation_rejected") { byId("device-status").textContent = "The code did not match. This failed confirmation was recorded. Refresh the request before entering your own CLI code again."; return; }
+        if (response.status === 429 && result.disposition === "verification_exhausted") { byId("device-status").textContent = "The confirmation limit was reached and this request was invalidated. No Device credential was issued. Start a new request explicitly in your CLI."; return; }
+        if (!response.ok || result.disposition || result.status !== (action === "approve" ? "approved" : "denied")) throw new Error("unconfirmed");
+        byId("device-status").textContent = action === "approve" ? "Device approved. Return to your original CLI to complete enrollment. Room membership, content access and Binding approval remain separate." : "Request denied. No Device credential was issued.";
+        return;
+      }
+      if (!response.ok) throw new Error("unconfirmed");
       if (action === "approve") {
         if (!validCompletionLocation(result.completion_location)) throw new Error("invalid completion");
         window.location.assign(result.completion_location);

@@ -48,7 +48,19 @@ type Client struct {
 
 type Error struct{ Outcome, Class string }
 
-func (e *Error) Error() string   { return "enterprise operation " + e.Outcome + " (" + e.Class + ")" }
+func (e *Error) Error() string {
+	if e.Outcome == "committed" || e.Outcome == "replayed" {
+		switch e.Class {
+		case "verification_exhausted", "polling_exhausted":
+			return "enterprise enrollment limit reached; the counter transaction was confirmed and this request was invalidated. This observation did not issue a Device credential"
+		case "enrollment_expired":
+			return "enterprise enrollment request expired; the observation was confirmed. This observation did not issue a Device credential"
+		case "confirmation_rejected":
+			return "enterprise enrollment code did not match; the failed confirmation was recorded. This confirmation did not issue a Device credential"
+		}
+	}
+	return "enterprise operation " + e.Outcome + " (" + e.Class + ")"
+}
 func unknown(class string) error { return &Error{Outcome: "unknown", Class: class} }
 
 type secret string
@@ -127,6 +139,11 @@ type operationResponse struct {
 	RefreshExpiresAt            time.Time `json:"refresh_expires_at"`
 	VerificationURL             string    `json:"verification_url"`
 	CompletionLocation          string    `json:"completion_location"`
+	TransportMode               string    `json:"transport_mode,omitempty"`
+	Disposition                 string    `json:"disposition,omitempty"`
+	CandidateFingerprint        string    `json:"candidate_fingerprint,omitempty"`
+	Sequence                    uint64    `json:"sequence,omitempty"`
+	NextPollAt                  time.Time `json:"next_poll_at,omitzero"`
 }
 
 func (r operationResponse) confirmed() bool {
@@ -253,7 +270,7 @@ func (c *Client) post(ctx context.Context, path string, body any, bearer secret)
 // output. Only the protocol's fixed public class vocabulary reaches the CLI.
 func safeClass(class string) string {
 	switch class {
-	case "prepared_head_changed", "object_missing", "resource_limit":
+	case "prepared_head_changed", "object_missing", "resource_limit", "poll_observation_unavailable", "enrollment_expired", "confirmation_rejected", "verification_exhausted", "polling_exhausted":
 		return class
 	case "peer_changed", "revision_conflict", "room_not_found", "room_taken", "unsupported_op", "unsupported_namespace", "invalid_fact", "authorization", "invalid_request", "invalid_control_state", "payload_conflict", "state_invalid", "unsupported_control_state", "last_administrator", "operation_budget_exceeded", "connection_failed", "commit_uncertain", "connection_exception", "canceled", "closed", "lease_lost", "stored_fact_unreadable", "constraint_violation", "statement_failed", "serialization_failure", "deadlock_detected", "discovery_restart_exceeded", "range_exceeded", "rotation_recovery_required", "rotation_recovery_unavailable", "enrollment_approval_limit":
 		return class

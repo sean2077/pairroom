@@ -152,6 +152,9 @@ func verifySchemaVersion(ctx context.Context, q rowQuerier, schema string) error
 	if err := q.QueryRow(ctx, `SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='attachments' AND column_name='restore_epoch' AND is_nullable='NO' AND data_type='text')=1 AND (SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='governance_actions' AND column_name='invalidated_at' AND data_type='timestamp with time zone')=1`, schema).Scan(&restoreShape); err != nil || !restoreShape {
 		return fmt.Errorf("sqlstore: unsupported restore authority schema shape")
 	}
+	if err := verifyHeadlessSchema(ctx, q, schema); err != nil {
+		return err
+	}
 	var auditShape bool
 	if err := q.QueryRow(ctx, `SELECT count(*)=3 FROM information_schema.columns WHERE table_schema=$1 AND table_name='audit' AND is_nullable='YES' AND column_default IS NULL AND ((column_name IN ('target_id','operation_id') AND data_type='text') OR (column_name='invalidated_approval_count' AND data_type='bigint'))`, schema).Scan(&auditShape); err != nil || !auditShape {
 		return fmt.Errorf("sqlstore: unsupported mutation audit schema shape")
