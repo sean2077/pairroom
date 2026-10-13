@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,11 +31,14 @@ import (
 // A caller that observed an Unknown (connection_exception / commit_uncertain)
 // keeps the original typed request OUTSIDE the failed service process — its
 // deployment, Room, principal, client identity, target and full original text.
-// The whole deployment is then rebuilt as a new instance and epoch through the
-// existing reviewed APIs (sqlstore.Open, sqlstore.RoomPort, relay.OpenEnterprise
-// — never relay.Open, which reaps), the pending outcome is verified read-only
-// before anything is sent again, and a re-send happens only as a separate
-// explicit instruction carrying the same key and the same intent.
+// The failed service process is replaced by a SECOND real child process on the
+// same deployment: that replacement opens the deployment, verifies the pending
+// outcome read-only with the original identity, key and intent, builds the
+// Room engine from an authenticated read-only snapshot (relay.OpenEnterprise,
+// never the reap-writing relay.Open), and only then executes a separately
+// received, explicit send with the same key and intent. The parent keeps the
+// original request and observes PostgreSQL; it never takes over the test's
+// service store.
 //
 // Nothing here claims server-side persistence of a pending outcome, recovery
 // from an arbitrary crash, a durable caller outbox, production service
@@ -40,48 +46,80 @@ import (
 // behavior is untouched; there is no new production API, control or hook.
 
 // s3cAutoSendDemonstration is the test-side flaw injection for the
-// no-auto-send sensitivity experiment: when true, the caller sends the
-// original request once BEFORE any verification, which the row-count
-// assertions must reject with red wherever a duplicate effect is possible. It
-// is never enabled in normal runs; the experiment is run by flipping it, and
-// the red and green runs are recorded as evidence.
+// no-auto-send sensitivity experiment: when true, the replacement process
+// sends the original request once BEFORE it verifies anything — the forbidden
+// automatic retry. The commit-call counter and the row counts must reject it
+// with red in both lost-response shapes. It is never enabled in normal runs;
+// the experiment is run by flipping it, and the red and green runs are
+// recorded as evidence.
 const s3cAutoSendDemonstration = false
 
 const (
-	s3cHelperEnv    = "PAIRROOM_S3C_HELPER"
-	s3cProxyDSNEnv  = "PAIRROOM_S3C_PROXY_DSN"
-	s3cDirectDSNEnv = "PAIRROOM_S3C_DIRECT_DSN"
-	s3cSchemaEnv    = "PAIRROOM_S3C_SCHEMA"
-	s3cRoomsEnv     = "PAIRROOM_S3C_ROOMS"
+	s3cHelperEnv     = "PAIRROOM_S3C_HELPER"
+	s3cStoreDSNEnv   = "PAIRROOM_S3C_STORE_DSN"
+	s3cDirectDSNEnv  = "PAIRROOM_S3C_DIRECT_DSN"
+	s3cSchemaEnv     = "PAIRROOM_S3C_SCHEMA"
+	s3cDeploymentEnv = "PAIRROOM_S3C_DEPLOYMENT"
 )
+
+// s3cScanLimit bounds one IPC line: a legal body is at most MaxBodyBytes
+// (256 KiB) and JSON escaping can double it, so the default 64 KiB scanner is
+// not enough — both directions use this explicit bound and check scanner.Err.
+const s3cScanLimit = 4 << 20
+
+// s3cLargeText builds a legal body larger than one scanner default (64 KiB)
+// with newlines, quotes, backslashes and non-ASCII text, so the verbatim
+// round trip is real.
+func s3cLargeText(prefix string) string {
+	var b strings.Builder
+	b.WriteString(prefix)
+	b.WriteString("\nline with \"quotes\" and \\backslashes\\ and 中文 and \t tabs\n")
+	for b.Len() < 96<<10 {
+		b.WriteString("0123456789abcdef")
+	}
+	b.WriteString("\nend")
+	return b.String()
+}
 
 // s3cOutcomeAccepted is the child's report for a human send its engine
 // accepted; the committed/replayed distinction is asserted parent-side through
 // the read-only verification, not guessed in the child.
 const s3cOutcomeAccepted = "accepted"
 
-// s3cCommand is one instruction from the parent; the full original request
-// travels this channel, never a credential.
+// s3cCommand is one instruction from the parent. The deployment, principal,
+// Room, client identity, target and the complete original text travel here
+// verbatim: the child hard-codes no user, no target and no text, so a wrong
+// identity or target cannot be masked by the fixture.
 type s3cCommand struct {
-	Op   string `json:"op"`
-	Room string `json:"room,omitempty"`
-	ID   string `json:"id,omitempty"`
-	Text string `json:"text,omitempty"`
+	Op         string `json:"op"`
+	Deployment string `json:"deployment,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	Room       string `json:"room,omitempty"`
+	ClientID   string `json:"client_id,omitempty"`
+	To         string `json:"to,omitempty"`
+	Text       string `json:"text,omitempty"`
 }
 
-// s3cMessage is one report from the child over stdout.
+// s3cMessage is one report from the child over stdout. Ops names what the
+// child actually executed, and the counters are read from the child's own
+// counting port, so "no command was sent before verification" is measured.
 type s3cMessage struct {
-	Ready     bool     `json:"ready,omitempty"`
-	Rooms     []string `json:"rooms,omitempty"`
-	PID       int      `json:"pid,omitempty"`
-	Epoch     int64    `json:"epoch,omitempty"`
-	Instance  string   `json:"instance,omitempty"`
-	Outcome   string   `json:"outcome,omitempty"`
-	Class     string   `json:"class,omitempty"`
-	MessageID string   `json:"message_id,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	Error     string   `json:"error,omitempty"`
-	Exited    bool     `json:"exited,omitempty"`
+	Ready     bool   `json:"ready,omitempty"`
+	PID       int    `json:"pid,omitempty"`
+	Epoch     int64  `json:"epoch,omitempty"`
+	Instance  string `json:"instance,omitempty"`
+	Ops       string `json:"ops,omitempty"`
+	Room      string `json:"room,omitempty"`
+	Outcome   string `json:"outcome,omitempty"`
+	Class     string `json:"class,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
+	Text      string `json:"text,omitempty"`
+	To        string `json:"to,omitempty"`
+	Created   string `json:"created,omitempty"`
+	Commits   int64  `json:"commits,omitempty"`
+	Resolves  int64  `json:"resolves,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Exited    bool   `json:"exited,omitempty"`
 }
 
 // TestS3cHelperProcess is the child half of the rebuild tests. It runs only
@@ -95,10 +133,34 @@ func TestS3cHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-// runS3cHelperProcess is one service process holding one Store and one
-// enterprise engine per Room. The DSNs reach it only through private
-// environment variables; every report carries identities and outcomes, never
-// credentials.
+// countingPort counts the commands each recovery step really issues, so "we
+// verified before sending" is a measurement rather than a claim.
+type countingPort struct {
+	inner    relay.EnterprisePort
+	commits  atomic.Int64
+	resolves atomic.Int64
+}
+
+func (c *countingPort) CommitHumanSend(ctx context.Context, cmd relay.EnterpriseSendCommand) (relay.EnterpriseSendResult, error) {
+	c.commits.Add(1)
+	return c.inner.CommitHumanSend(ctx, cmd)
+}
+
+func (c *countingPort) ResolveHumanSend(ctx context.Context, auth relay.EnterpriseAuth, roomID, clientID string, intent relay.EnterpriseSendIntent) (relay.EnterpriseSendResult, error) {
+	c.resolves.Add(1)
+	return c.inner.ResolveHumanSend(ctx, auth, roomID, clientID, intent)
+}
+
+func (c *countingPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseAuth, roomID string) (relay.EnterpriseRoomSnapshot, error) {
+	return c.inner.ReadonlySnapshot(ctx, auth, roomID)
+}
+
+// runS3cHelperProcess is one service process: it opens the deployment store
+// (its DSN reaches it only through a private environment variable), reports
+// readiness with its own PID, the ownership epoch and instance it read, and
+// then executes the instructions it receives. Room engines are built lazily by
+// an explicit open instruction, so the replacement process really performs
+// Open → verify → authorized read-only open → explicit send in that order.
 func runS3cHelperProcess() {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
@@ -113,24 +175,23 @@ func runS3cHelperProcess() {
 	}
 	ctx := context.Background()
 	schema := os.Getenv(s3cSchemaEnv)
-	dbStore, err := sqlstore.Open(ctx, sqlstore.Config{DSN: os.Getenv(s3cProxyDSNEnv), Schema: schema, DeploymentID: "dep-test"})
+	dbStore, err := sqlstore.Open(ctx, sqlstore.Config{DSN: os.Getenv(s3cStoreDSNEnv), Schema: schema, DeploymentID: os.Getenv(s3cDeploymentEnv)})
 	if err != nil {
 		fail(err)
 	}
-	port := sqlstore.NewRoomPort(dbStore)
+	port := &countingPort{inner: sqlstore.NewRoomPort(dbStore)}
 	engines := map[string]*relay.Engine{}
-	rooms := []string{}
-	for _, room := range strings.Split(os.Getenv(s3cRoomsEnv), ",") {
-		room = strings.TrimSpace(room)
-		if room == "" {
-			continue
+	openEngine := func(command s3cCommand) (*relay.Engine, error) {
+		if engine, ok := engines[command.Room]; ok {
+			return engine, nil
 		}
-		engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: room, Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
+		auth := relay.EnterpriseAuth{Deployment: command.Deployment, UserID: command.UserID}
+		engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: command.Room, Runtimes: roomRuntimes()}, port, auth)
 		if err != nil {
-			fail(err)
+			return nil, err
 		}
-		engines[room] = engine
-		rooms = append(rooms, room)
+		engines[command.Room] = engine
+		return engine, nil
 	}
 	admin, err := pgx.Connect(ctx, os.Getenv(s3cDirectDSNEnv))
 	if err != nil {
@@ -145,9 +206,10 @@ func runS3cHelperProcess() {
 	if err := admin.QueryRow(ctx, `SELECT epoch, instance_id FROM ownership WHERE id`).Scan(&epoch, &instance); err != nil {
 		fail(err)
 	}
-	report(s3cMessage{Ready: true, Rooms: rooms, PID: os.Getpid(), Epoch: epoch, Instance: instance})
+	report(s3cMessage{Ready: true, PID: os.Getpid(), Epoch: epoch, Instance: instance, Ops: "open-store"})
 
 	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64<<10), s3cScanLimit)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -155,25 +217,54 @@ func runS3cHelperProcess() {
 		}
 		var command s3cCommand
 		if err := json.Unmarshal([]byte(line), &command); err != nil {
-			fail(err)
+			fail(fmt.Errorf("stdin command: %w", err))
 		}
+		auth := relay.EnterpriseAuth{Deployment: command.Deployment, UserID: command.UserID}
 		switch command.Op {
-		case "send":
-			engine, ok := engines[command.Room]
-			if !ok {
-				fail(fmt.Errorf("unknown room %q", command.Room))
+		case "resolve":
+			if s3cAutoSendDemonstration {
+				// The flaw: send before verifying anything, with the same
+				// identity, key and intent the caller retained.
+				if engine, err := openEngine(command); err == nil {
+					_, _ = engine.ExecuteHumanSend(ctx, auth, relay.SendRequest{ID: command.ClientID, Text: command.Text, To: model.ActorID(command.To)})
+				}
 			}
-			message, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: command.ID, Text: command.Text, To: model.ActorSlot2})
+			result, err := port.ResolveHumanSend(ctx, auth, command.Room, command.ClientID, relay.EnterpriseSendIntent{To: command.To, Text: command.Text})
+			message := s3cMessage{Ops: "resolve", Room: command.Room, Outcome: result.Outcome, Commits: port.commits.Load(), Resolves: port.resolves.Load()}
+			if err != nil {
+				var commandErr *relay.EnterpriseCommandError
+				if !errors.As(err, &commandErr) {
+					fail(err)
+				}
+				message.Class = commandErr.Class
+				if commandErr.Outcome != "" {
+					message.Outcome = commandErr.Outcome
+				}
+			}
+			report(message)
+		case "open":
+			engine, err := openEngine(command)
+			if err != nil {
+				fail(err)
+			}
+			_ = engine
+			report(s3cMessage{Ops: "open", Room: command.Room, Commits: port.commits.Load(), Resolves: port.resolves.Load()})
+		case "send":
+			engine, err := openEngine(command)
+			if err != nil {
+				fail(err)
+			}
+			message, err := engine.ExecuteHumanSend(ctx, auth, relay.SendRequest{ID: command.ClientID, Text: command.Text, To: model.ActorID(command.To)})
 			if err == nil {
-				report(s3cMessage{Outcome: s3cOutcomeAccepted, MessageID: message.ID, Text: message.Text})
+				report(s3cMessage{Ops: "send", Room: command.Room, Outcome: s3cOutcomeAccepted, MessageID: message.ID, Text: message.Text, To: string(message.To), Created: message.CreatedAt.UTC().Format(time.RFC3339Nano), Commits: port.commits.Load(), Resolves: port.resolves.Load()})
 				continue
 			}
 			var commandErr *relay.EnterpriseCommandError
 			if errors.As(err, &commandErr) {
-				report(s3cMessage{Outcome: commandErr.Outcome, Class: commandErr.Class})
+				report(s3cMessage{Ops: "send", Room: command.Room, Outcome: commandErr.Outcome, Class: commandErr.Class, Commits: port.commits.Load(), Resolves: port.resolves.Load()})
 				continue
 			}
-			report(s3cMessage{Outcome: "error", Error: err.Error()})
+			report(s3cMessage{Ops: "send", Room: command.Room, Outcome: "error", Error: err.Error()})
 		case "exit":
 			for _, engine := range engines {
 				_ = engine.Close()
@@ -181,11 +272,14 @@ func runS3cHelperProcess() {
 			if err := dbStore.Close(); err != nil {
 				fail(err)
 			}
-			report(s3cMessage{Exited: true})
+			report(s3cMessage{Ops: "exit", Exited: true})
 			return
 		default:
 			fail(fmt.Errorf("unknown command %q", command.Op))
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		fail(fmt.Errorf("stdin scan: %w", err))
 	}
 }
 
@@ -196,17 +290,19 @@ type s3cChild struct {
 	stderr *bytes.Buffer
 }
 
-// startS3cChild re-executes this test binary as the failing service process
-// holding the given Rooms.
-func startS3cChild(t *testing.T, proxyDSN, directDSN, schema, rooms string) *s3cChild {
+// startS3cChild re-executes this test binary as a service process on the given
+// store DSN. The old process opens the store through the proxy; the
+// replacement process opens it directly, because the proxy stays armed and
+// would drop the replacement's own first commit response.
+func startS3cChild(t *testing.T, storeDSN, directDSN, schema, deployment string) *s3cChild {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestS3cHelperProcess$")
 	cmd.Env = append(os.Environ(),
 		s3cHelperEnv+"=1",
-		s3cProxyDSNEnv+"="+proxyDSN,
+		s3cStoreDSNEnv+"="+storeDSN,
 		s3cDirectDSNEnv+"="+directDSN,
 		s3cSchemaEnv+"="+schema,
-		s3cRoomsEnv+"="+rooms,
+		s3cDeploymentEnv+"="+deployment,
 	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -223,7 +319,9 @@ func startS3cChild(t *testing.T, proxyDSN, directDSN, schema, rooms string) *s3c
 	}
 	child := &s3cChild{cmd: cmd, stdin: bufio.NewWriter(stdin), lines: make(chan s3cMessage, 16), stderr: stderr}
 	go func() {
+		defer close(child.lines)
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64<<10), s3cScanLimit)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if !strings.HasPrefix(line, "{") {
@@ -231,11 +329,14 @@ func startS3cChild(t *testing.T, proxyDSN, directDSN, schema, rooms string) *s3c
 			}
 			var message s3cMessage
 			if err := json.Unmarshal([]byte(line), &message); err != nil {
-				continue
+				child.lines <- s3cMessage{Error: "child stdout is not a report: " + err.Error()}
+				return
 			}
 			child.lines <- message
 		}
-		close(child.lines)
+		if err := scanner.Err(); err != nil {
+			child.lines <- s3cMessage{Error: "child stdout scan: " + err.Error()}
+		}
 	}()
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
@@ -250,6 +351,9 @@ func (c *s3cChild) command(t *testing.T, command s3cCommand) {
 	encoded, err := json.Marshal(command)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(encoded) > s3cScanLimit {
+		t.Fatalf("command exceeds the IPC bound: %d bytes", len(encoded))
 	}
 	if _, err := fmt.Fprintln(c.stdin, string(encoded)); err != nil {
 		t.Fatalf("child stdin: %v (stderr: %s)", err, c.stderr.String())
@@ -270,7 +374,7 @@ func (c *s3cChild) next(t *testing.T) s3cMessage {
 			t.Fatalf("child error: %s (stderr: %s)", message.Error, c.stderr.String())
 		}
 		return message
-	case <-time.After(30 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatalf("child timed out (stderr: %s)", c.stderr.String())
 		return s3cMessage{}
 	}
@@ -302,23 +406,62 @@ func rowCounts3c(t *testing.T, admin *pgx.Conn, room string) [3]int64 {
 	return [3]int64{events, operations, audits}
 }
 
-// storedFactMessage reads the canonical message identity, creation time and
-// full text of one stored fact straight from its authoritative encoding. The
-// creation time is compared as its encoded RFC 3339 text: a round trip through
-// `timestamptz` would round to microsecond precision and could differ by a
-// nanosecond from the authoritative value.
-func storedFactMessage(t *testing.T, admin *pgx.Conn, room string, seq int64) (string, string, string) {
+// eventEncodingsHash hashes the authoritative stored bytes of one Room's whole
+// log, in sequence order with length prefixes, so "the history did not change"
+// is compared on the facts themselves and not on a row count.
+func eventEncodingsHash(t *testing.T, admin *pgx.Conn, room string) string {
 	t.Helper()
-	var id, createdText, text string
-	err := admin.QueryRow(context.Background(), `
-		SELECT convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'id',
-		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'created_at',
-		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'text'
-		FROM room_events WHERE room_id = $1 AND seq = $2`, room, seq).Scan(&id, &createdText, &text)
+	rows, err := admin.Query(context.Background(), `SELECT event_encoding FROM room_events WHERE room_id = $1 ORDER BY seq`, room)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return id, createdText, text
+	defer rows.Close()
+	digest := sha256.New()
+	var length [8]byte
+	for rows.Next() {
+		var encoding []byte
+		if err := rows.Scan(&encoding); err != nil {
+			t.Fatal(err)
+		}
+		binary.BigEndian.PutUint64(length[:], uint64(len(encoding)))
+		digest.Write(length[:])
+		digest.Write(encoding)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// storedFactMessage reads the canonical message identity, creation time, full
+// text and target of one stored fact straight from its authoritative encoding.
+// The creation time is compared as its encoded RFC 3339 text: a round trip
+// through `timestamptz` would round to microsecond precision and could differ
+// by a nanosecond from the authoritative value.
+func storedFactMessage(t *testing.T, admin *pgx.Conn, room string, seq int64) (string, string, string, string) {
+	t.Helper()
+	var id, createdText, text, to string
+	err := admin.QueryRow(context.Background(), `
+		SELECT convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'id',
+		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'created_at',
+		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'text',
+		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'to'
+		FROM room_events WHERE room_id = $1 AND seq = $2`, room, seq).Scan(&id, &createdText, &text, &to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, createdText, text, to
+}
+
+// storedOriginUser reads the immutable principal the storage layer recorded for
+// one stored fact.
+func storedOriginUser(t *testing.T, admin *pgx.Conn, room string, seq int64) string {
+	t.Helper()
+	var origin string
+	if err := admin.QueryRow(context.Background(), `SELECT origin_user FROM room_events WHERE room_id = $1 AND seq = $2`, room, seq).Scan(&origin); err != nil {
+		t.Fatal(err)
+	}
+	return origin
 }
 
 // assertLogContiguous proves the Room log is still one contiguous fact
@@ -337,21 +480,27 @@ func assertLogContiguous(t *testing.T, admin *pgx.Conn, room string) {
 	}
 }
 
-// membershipRows snapshots the authorization rows the rebuild must not touch.
-func membershipRows(t *testing.T, admin *pgx.Conn) []string {
+// aclSnapshot is the complete authorization state the deployment rebuild must
+// not touch: every membership with its role and disabled flag, and every user
+// with its disabled flag.
+func aclSnapshot(t *testing.T, admin *pgx.Conn) []string {
 	t.Helper()
-	rows, err := admin.Query(context.Background(), `SELECT room_id, user_id, role FROM room_members ORDER BY room_id, user_id`)
+	rows, err := admin.Query(context.Background(), `
+		SELECT 'member:' || room_id || '/' || user_id || '/' || role || '/' || disabled::text FROM room_members
+		UNION ALL
+		SELECT 'user:' || user_id || '/' || disabled::text FROM users
+		ORDER BY 1`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	var snapshot []string
 	for rows.Next() {
-		var room, user, role string
-		if err := rows.Scan(&room, &user, &role); err != nil {
+		var entry string
+		if err := rows.Scan(&entry); err != nil {
 			t.Fatal(err)
 		}
-		snapshot = append(snapshot, room+"/"+user+"/"+role)
+		snapshot = append(snapshot, entry)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -359,13 +508,24 @@ func membershipRows(t *testing.T, admin *pgx.Conn) []string {
 	return snapshot
 }
 
-// deployRebuild performs the controlled deployment rebuild: every old Room
-// engine is retired (closed through the enterprise shutdown, which settles
-// in-flight commands on the gate) before the shared store is closed, and a
-// fresh store — new instance, new epoch — is opened through the existing
-// reviewed APIs. The rebuild unit is the whole deployment. It never touches
-// relay.Open (which reaps) and never clears an old fatal or a sticky
-// lease-lost incarnation.
+func fetchOwnership(t *testing.T, admin *pgx.Conn) (int64, string) {
+	t.Helper()
+	var epoch int64
+	var instance string
+	if err := admin.QueryRow(context.Background(), `SELECT epoch, instance_id FROM ownership WHERE id`).Scan(&epoch, &instance); err != nil {
+		t.Fatal(err)
+	}
+	return epoch, instance
+}
+
+// deployRebuild performs the in-process object-level rebuild used by the
+// simulation-only test: every old Room engine is retired (closed through the
+// enterprise shutdown, which settles in-flight commands on the gate) before
+// the shared store is closed, and a fresh store — new instance, new epoch — is
+// opened through the existing reviewed APIs. The rebuild unit is the whole
+// deployment. It never touches relay.Open (which reaps) and never clears an
+// old fatal or a sticky lease-lost incarnation. The process-level tests do not
+// use it: there a real replacement child performs the restart itself.
 func deployRebuild(t *testing.T, dsn, schema string, oldEngines []*relay.Engine, oldStore *sqlstore.Store) *sqlstore.Store {
 	t.Helper()
 	for _, engine := range oldEngines {
@@ -386,92 +546,58 @@ func deployRebuild(t *testing.T, dsn, schema string, oldEngines []*relay.Engine,
 	return freshStore
 }
 
-func fetchOwnership(t *testing.T, admin *pgx.Conn) (int64, string) {
-	t.Helper()
-	var epoch int64
-	var instance string
-	if err := admin.QueryRow(context.Background(), `SELECT epoch, instance_id FROM ownership WHERE id`).Scan(&epoch, &instance); err != nil {
-		t.Fatal(err)
-	}
-	return epoch, instance
-}
-
-// countingPort wraps a real port and counts the calls each retried or refused
-// command path makes, so "no port call" claims are measured, not asserted.
-type countingPort struct {
-	inner     relay.EnterprisePort
-	commits   atomic.Int64
-	resolves  atomic.Int64
-	snapshots atomic.Int64
-}
-
-func (c *countingPort) CommitHumanSend(ctx context.Context, cmd relay.EnterpriseSendCommand) (relay.EnterpriseSendResult, error) {
-	c.commits.Add(1)
-	return c.inner.CommitHumanSend(ctx, cmd)
-}
-
-func (c *countingPort) ResolveHumanSend(ctx context.Context, auth relay.EnterpriseAuth, roomID, clientID string, intent relay.EnterpriseSendIntent) (relay.EnterpriseSendResult, error) {
-	c.resolves.Add(1)
-	return c.inner.ResolveHumanSend(ctx, auth, roomID, clientID, intent)
-}
-
-func (c *countingPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseAuth, roomID string) (relay.EnterpriseRoomSnapshot, error) {
-	c.snapshots.Add(1)
-	return c.inner.ReadonlySnapshot(ctx, auth, roomID)
-}
-
-// The full process-level rebuild, both Unknown shapes through a real proxy: a
-// real child process loses its commit response, reports the Unknown to the
-// caller, and exits; the caller keeps the original typed request, rebuilds the
-// whole deployment (new instance, new epoch, new PID), verifies the pending
-// outcome read-only without sending anything, and re-sends only under a
-// separate explicit instruction with the same key and intent.
+// The full process-level rebuild, both Unknown shapes through a real proxy. A
+// first real child process loses its commit response and reports the typed
+// unknown to the caller; it really exits. A SECOND real child process then
+// takes the deployment over: it opens the store, verifies the pending outcome
+// read-only with the original identity, key and intent, builds the Room engine
+// from an authenticated read-only snapshot, and only then executes the
+// separately received explicit send with the same key and intent. The parent
+// keeps the original request and reads PostgreSQL; it never opens the test's
+// service store.
 func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	for _, mode := range []string{"drop-response", "break-on-commit"} {
 		t.Run(mode, func(t *testing.T) {
 			schema, _ := sqltest.CreateSchema(t, dsn)
-			admin := sqltest.SeedRoom(t, dsn, schema)
+			admin := sqltest.SeedRoom(t, dsn, schema, "u-owner2")
 			proxy := sqltest.StartProxy(t, mode)
-			ctx := context.Background()
 
 			// The caller retains the original typed request — Room, principal,
 			// client identity, target and the complete original text — outside
-			// the service process, before the first attempt is ever made. The
-			// child never stores it; it only receives the instruction it is
-			// about to attempt.
-			request := relay.SendRequest{ID: "s3c-1", Text: "rebuild body with spaces\nand a second line", To: model.ActorSlot2}
-			auth := executeAuth("u-owner")
+			// every service process, before the first attempt is ever made.
+			// The text is larger than one scanner default and carries newlines,
+			// quotes, backslashes and non-ASCII characters.
+			request := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-1", ClientID: "s3c-1", To: "slot2", Text: s3cLargeText("rebuild body")}
 
-			child := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "room-1")
-			ready := child.next(t)
-			if !ready.Ready || ready.Epoch < 1 {
-				t.Fatalf("child ready: %+v", ready)
-			}
-			if ready.PID == 0 || ready.PID == os.Getpid() {
-				t.Fatalf("child is not a distinct process: pid=%d", ready.PID)
-			}
-			if len(ready.Rooms) != 1 || ready.Rooms[0] != "room-1" {
-				t.Fatalf("child rooms: %+v", ready.Rooms)
+			oldChild := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "dep-test")
+			oldReady := oldChild.next(t)
+			if !oldReady.Ready || oldReady.Epoch < 1 || oldReady.PID == 0 || oldReady.PID == os.Getpid() {
+				t.Fatalf("old child ready: %+v", oldReady)
 			}
 
 			// Both injected boundaries are a lost commit response: the child
 			// reports the typed Unknown and its class, which is what a caller
 			// may act on — nothing else.
 			proxy.Arm()
-			child.command(t, s3cCommand{Op: "send", Room: "room-1", ID: request.ID, Text: request.Text})
-			lost := child.next(t)
+			oldChild.command(t, request)
+			lost := oldChild.next(t)
 			if lost.Outcome != relay.EnterpriseOutcomeUnknown || lost.Class != string(sqlstore.ClassConnectionException) {
-				t.Fatalf("child outcome = %+v, want unknown/connection_exception", lost)
+				t.Fatalf("old child outcome = %+v, want unknown/connection_exception", lost)
 			}
-			child.exitAndWait(t)
+			oldChild.exitAndWait(t)
 
 			before := rowCounts3c(t, admin, "room-1")
+			var originalID, originalCreated, originalText string
 			switch mode {
 			case "drop-response":
 				// The server accepted the commit before the response was lost.
 				if before != [3]int64{1, 1, 1} {
 					t.Fatalf("accepted-then-lost rows: %v", before)
+				}
+				originalID, originalCreated, originalText, _ = storedFactMessage(t, admin, "room-1", 1)
+				if originalText != request.Text {
+					t.Fatal("the accepted fact did not store the complete original text")
 				}
 			case "break-on-commit":
 				// The COMMIT never reached the server: the operation is absent.
@@ -479,161 +605,180 @@ func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 					t.Fatalf("broken-commit rows: %v", before)
 				}
 			}
-			var originalID, originalCreated string
-			if mode == "drop-response" {
-				originalID, originalCreated, _ = storedFactMessage(t, admin, "room-1", 1)
+			roomOneHash := eventEncodingsHash(t, admin, "room-1")
+
+			// The replacement service process: a distinct child that performs
+			// the restart itself. The parent never opens this store.
+			replacement := startS3cChild(t, dsn, dsn, schema, "dep-test")
+			newReady := replacement.next(t)
+			if !newReady.Ready || newReady.PID == 0 || newReady.PID == os.Getpid() || newReady.PID == oldReady.PID {
+				t.Fatalf("replacement child is not a new process: %+v (old pid %d, parent pid %d)", newReady, oldReady.PID, os.Getpid())
+			}
+			if newReady.Instance == oldReady.Instance || newReady.Epoch != oldReady.Epoch+1 {
+				t.Fatalf("replacement ownership: instance %q->%q epoch %d->%d", oldReady.Instance, newReady.Instance, oldReady.Epoch, newReady.Epoch)
+			}
+			if newReady.Commits != 0 {
+				t.Fatalf("the replacement committed before any instruction: %d", newReady.Commits)
 			}
 
-			if s3cAutoSendDemonstration {
-				// Test-side flaw injection: send before any verification.
-				flawed, err := sqlstore.Open(ctx, sqlstore.Config{DSN: dsn, Schema: schema, DeploymentID: "dep-test"})
-				if err != nil {
-					t.Fatal(err)
-				}
-				flawedCommand := sqlstore.HumanSendCommand{
-					Auth:     sqlstore.AuthContext{Deployment: "dep-test", UserID: "u-owner"},
-					RoomID:   "room-1",
-					ClientID: request.ID,
-					Intent:   sqlstore.HumanSendIntent{To: "slot2", Text: request.Text},
-					Fact:     craftHumanSendCandidate("u-owner", request.ID, "slot2", request.Text),
-				}
-				_, _ = flawed.CommitHumanSend(ctx, flawedCommand)
-				_ = flawed.Close()
+			// 1) Verify with the original auth, key and intent — read-only, with
+			// zero commits issued so far. The commit counter is what makes the
+			// no-auto-send claim measurable: the flawed variant sends before
+			// this point and is rejected here even when it is an idempotent
+			// replay that would not change a single row.
+			verifyCommand := request
+			verifyCommand.Op = "resolve"
+			replacement.command(t, verifyCommand)
+			verified := replacement.next(t)
+			if verified.Ops != "resolve" || verified.Commits != 0 {
+				t.Fatalf("the verification path committed a command before certifying the outcome: %+v", verified)
 			}
-
-			freshStore := deployRebuild(t, dsn, schema, nil, nil)
-			// The rows assertion comes first so the sensitivity experiment
-			// fails on the effect it is about: a send before verification.
-			if got := rowCounts3c(t, admin, "room-1"); got != before {
-				t.Fatalf("rows changed before verification (rebuild or flaw injection): %v -> %v", before, got)
-			}
-			newEpoch, newInstance := fetchOwnership(t, admin)
-			if newEpoch != ready.Epoch+1 {
-				t.Fatalf("rebuild epoch = %d, want %d", newEpoch, ready.Epoch+1)
-			}
-			if newInstance == ready.Instance {
-				t.Fatal("rebuild kept the old instance identity")
-			}
-			assertLogContiguous(t, admin, "room-1")
-
-			port := sqlstore.NewRoomPort(freshStore)
-			resolved, err := port.ResolveHumanSend(ctx, auth, "room-1", request.ID, relay.EnterpriseSendIntent{To: "slot2", Text: request.Text})
-			if err != nil {
-				t.Fatalf("verification: %v", err)
-			}
-			if got := rowCounts3c(t, admin, "room-1"); got != before {
-				t.Fatalf("verification wrote state: %v -> %v", before, got)
-			}
-
-			// The new instance is constructed through the read-only enterprise
-			// open: an authenticated snapshot, no reap, no write.
-			freshEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, port, auth)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = freshEngine.Close() }()
-			if got := rowCounts3c(t, admin, "room-1"); got != before {
-				t.Fatalf("engine construction wrote state: %v -> %v", before, got)
-			}
-
 			switch mode {
 			case "drop-response":
-				if resolved.Outcome != relay.EnterpriseOutcomeReplayed {
-					t.Fatalf("verify after accepted loss = %q, want replayed", resolved.Outcome)
+				if verified.Outcome != relay.EnterpriseOutcomeReplayed {
+					t.Fatalf("verify after accepted loss = %+v, want replayed", verified)
 				}
-				// A separate explicit instruction with the same key and intent
-				// returns the original canonical result and adds nothing.
-				message, err := freshEngine.ExecuteHumanSend(ctx, auth, request)
-				if err != nil {
-					t.Fatal(err)
+			case "break-on-commit":
+				if verified.Outcome != relay.EnterpriseOutcomeNotCommitted {
+					t.Fatalf("verify after broken commit = %+v, want not_committed", verified)
 				}
-				if message.ID != originalID || message.CreatedAt.UTC().Format(time.RFC3339Nano) != originalCreated {
-					t.Fatalf("explicit re-send returned %q at %s, want the original %q at %s", message.ID, message.CreatedAt.UTC().Format(time.RFC3339Nano), originalID, originalCreated)
-				}
-				if message.Text != request.Text {
-					t.Fatalf("canonical text = %q, want the full original %q", message.Text, request.Text)
+			}
+			if got := rowCounts3c(t, admin, "room-1"); got != before {
+				t.Fatalf("rows changed before verification: %v -> %v", before, got)
+			}
+
+			// 2) The authenticated read-only open: a snapshot-derived engine,
+			// no reap, no write, and still no command sent.
+			replacement.command(t, s3cCommand{Op: "open", Deployment: "dep-test", UserID: "u-owner", Room: "room-1"})
+			opened := replacement.next(t)
+			if opened.Ops != "open" || opened.Commits != 0 {
+				t.Fatalf("the read-only open sent a command: %+v", opened)
+			}
+			if got := rowCounts3c(t, admin, "room-1"); got != before {
+				t.Fatalf("the read-only open wrote state: %v -> %v", before, got)
+			}
+
+			// 3) The separate explicit instruction: the same key, the same
+			// intent, the complete original text — and now exactly one commit.
+			replacement.command(t, request)
+			sent := replacement.next(t)
+			if sent.Ops != "send" || sent.Outcome != s3cOutcomeAccepted || sent.Commits != 1 || sent.Text != request.Text || sent.To != request.To {
+				t.Fatalf("explicit re-send: %+v", sent)
+			}
+			switch mode {
+			case "drop-response":
+				// The canonical original result, not a new one: identity,
+				// creation time and the complete text are the stored fact's.
+				if sent.MessageID != originalID || sent.Text != originalText || sent.Created != originalCreated {
+					t.Fatalf("explicit re-send returned %q at %s, want the original %q at %s", sent.MessageID, sent.Created, originalID, originalCreated)
 				}
 				if got := rowCounts3c(t, admin, "room-1"); got != before {
 					t.Fatalf("explicit re-send duplicated the accepted fact: %v -> %v", before, got)
 				}
 			case "break-on-commit":
-				if resolved.Outcome != relay.EnterpriseOutcomeNotCommitted {
-					t.Fatalf("verify after broken commit = %q, want not_committed", resolved.Outcome)
-				}
-				// Only the caller's explicit same-key request may send, and it
-				// adds exactly one fact.
-				message, err := freshEngine.ExecuteHumanSend(ctx, auth, request)
-				if err != nil {
-					t.Fatalf("explicit same-key re-send after absence: %v", err)
-				}
 				after := rowCounts3c(t, admin, "room-1")
 				if after[0] != before[0]+1 || after[1] != before[1]+1 || after[2] != before[2]+1 {
 					t.Fatalf("explicit re-send did not add exactly one fact/operation/audit: %v -> %v", before, after)
 				}
-				storedID, _, storedText := storedFactMessage(t, admin, "room-1", 1)
-				if message.ID != storedID || storedText != request.Text {
-					t.Fatalf("re-sent fact %q/%q, want the explicit request %q/%q", storedID, storedText, message.ID, request.Text)
+				storedID, _, storedText, _ := storedFactMessage(t, admin, "room-1", 1)
+				if storedID != sent.MessageID || storedText != request.Text {
+					t.Fatalf("the stored fact is %q/%q, want the explicit request %q", storedID, sent.MessageID, request.Text)
 				}
 			}
 			assertLogContiguous(t, admin, "room-1")
+
+			// 4) Identity and target travel verbatim: a different live member
+			// and the other slot, on the same replacement instance. The stored
+			// fact must carry that principal and that target.
+			other := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner2", Room: "room-1", ClientID: "s3c-2", To: "slot1", Text: "second user body"}
+			replacement.command(t, other)
+			accepted := replacement.next(t)
+			if accepted.Ops != "send" || accepted.Outcome != s3cOutcomeAccepted || accepted.To != "slot1" || accepted.Commits != 2 {
+				t.Fatalf("second-identity send: %+v", accepted)
+			}
+			storedID, _, _, storedTo := storedFactMessage(t, admin, "room-1", 2)
+			if storedID != accepted.MessageID || storedTo != "slot1" {
+				t.Fatalf("stored fact %q to %q, want %q to slot1", storedID, storedTo, accepted.MessageID)
+			}
+			if origin := storedOriginUser(t, admin, "room-1", 2); origin != "u-owner2" {
+				t.Fatalf("stored principal = %q, want u-owner2", origin)
+			}
+			if storedHash := eventEncodingsHash(t, admin, "room-1"); storedHash == roomOneHash {
+				t.Fatal("the second-identity send did not append a fact")
+			}
+			assertLogContiguous(t, admin, "room-1")
+
+			// 5) The replacement process retires cleanly and really releases the
+			// deployment: a fresh store can take it over afterwards.
+			replacement.exitAndWait(t)
+			released := openSQLStore(t, dsn, schema)
+			if _, instance := fetchOwnership(t, admin); instance == newReady.Instance {
+				t.Fatalf("the retired replacement still owns the deployment: %q", instance)
+			}
+			_ = released
 		})
 	}
 }
 
 // The deployment is one unit: while the old instance is still alive, a second
-// writer is refused; after it really exited, a new writer recovers through the
-// reviewed verification and an explicit send only.
+// writer is refused; after it really exited, the replacement process recovers
+// through the reviewed verification and an explicit send only.
 func TestS3cSecondWriterRefusedWhileOldStoreLives(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
 	admin := sqltest.SeedRoom(t, dsn, schema)
 	proxy := sqltest.StartProxy(t, "break-on-commit")
-	ctx := context.Background()
-	request := relay.SendRequest{ID: "s3c-1", Text: "rebuild body", To: model.ActorSlot2}
+	request := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-1", ClientID: "s3c-1", To: "slot2", Text: "rebuild body"}
 
-	child := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "room-1")
-	if ready := child.next(t); !ready.Ready {
-		t.Fatalf("child ready: %+v", ready)
+	oldChild := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "dep-test")
+	if ready := oldChild.next(t); !ready.Ready {
+		t.Fatalf("old child ready: %+v", ready)
 	}
 	proxy.Arm()
-	child.command(t, s3cCommand{Op: "send", Room: "room-1", ID: request.ID, Text: request.Text})
-	if lost := child.next(t); lost.Outcome != relay.EnterpriseOutcomeUnknown {
-		t.Fatalf("child outcome: %+v", lost)
+	oldChild.command(t, request)
+	if lost := oldChild.next(t); lost.Outcome != relay.EnterpriseOutcomeUnknown {
+		t.Fatalf("old child outcome: %+v", lost)
 	}
 	before := rowCounts3c(t, admin, "room-1")
-	if _, err := sqlstore.Open(ctx, sqlstore.Config{DSN: dsn, Schema: schema, DeploymentID: "dep-test"}); err == nil || !strings.Contains(err.Error(), "live lease holder") {
+	if _, err := sqlstore.Open(context.Background(), sqlstore.Config{DSN: dsn, Schema: schema, DeploymentID: "dep-test"}); err == nil || !strings.Contains(err.Error(), "live lease holder") {
 		t.Fatalf("a second writer was not refused while the old store lived: %v", err)
 	}
 	if got := rowCounts3c(t, admin, "room-1"); got != before {
 		t.Fatalf("the refused second writer changed rows: %v -> %v", before, got)
 	}
-	child.exitAndWait(t)
+	oldChild.exitAndWait(t)
 
-	freshStore := deployRebuild(t, dsn, schema, nil, nil)
-	port := sqlstore.NewRoomPort(freshStore)
-	resolved, err := port.ResolveHumanSend(ctx, executeAuth("u-owner"), "room-1", request.ID, relay.EnterpriseSendIntent{To: "slot2", Text: request.Text})
-	if err != nil || resolved.Outcome != relay.EnterpriseOutcomeNotCommitted {
-		t.Fatalf("recovery verification: %+v %v", resolved, err)
+	replacement := startS3cChild(t, dsn, dsn, schema, "dep-test")
+	newReady := replacement.next(t)
+	if !newReady.Ready {
+		t.Fatalf("replacement ready: %+v", newReady)
 	}
-	engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
-	if err != nil {
-		t.Fatal(err)
+	verifyCommand := request
+	verifyCommand.Op = "resolve"
+	replacement.command(t, verifyCommand)
+	verified := replacement.next(t)
+	if verified.Outcome != relay.EnterpriseOutcomeNotCommitted || verified.Commits != 0 {
+		t.Fatalf("recovery verification: %+v", verified)
 	}
-	defer func() { _ = engine.Close() }()
-	if _, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), request); err != nil {
-		t.Fatalf("the new writer could not recover after the old instance exited: %v", err)
+	replacement.command(t, request)
+	accepted := replacement.next(t)
+	if accepted.Outcome != s3cOutcomeAccepted {
+		t.Fatalf("recovery send: %+v", accepted)
 	}
 	after := rowCounts3c(t, admin, "room-1")
 	if after != [3]int64{1, 1, 1} {
 		t.Fatalf("recovery rows: %v", after)
 	}
+	replacement.exitAndWait(t)
 }
 
 // Object-level instance rebuild (in-process): this only simulates an instance
 // rebuild — close every engine and the store, then reopen — and is explicitly
 // not process or ownership recovery. It is what proves the remaining
 // object-level claims: a retired engine refuses with zero further port calls,
-// an old fatal is never cleared by the rebuild, and the new instance continues.
+// an old fatal is never cleared by the rebuild, and the new instance can
+// verify — a re-send is never made here, and the canonical-result claim is the
+// process-level test's job.
 func TestS3cObjectLevelInstanceRebuildIsSimulationOnly(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
@@ -658,114 +803,141 @@ func TestS3cObjectLevelInstanceRebuildIsSimulationOnly(t *testing.T) {
 	}
 
 	freshStore := deployRebuild(t, dsn, schema, []*relay.Engine{oldEngine}, dbStore)
-	if got := rowCounts3c(t, admin, "room-1"); got != [3]int64{1, 1, 1} {
-		t.Fatalf("the rebuild changed the accepted fact rows: %v", got)
+	rowsBefore := rowCounts3c(t, admin, "room-1")
+	if rowsBefore != [3]int64{1, 1, 1} {
+		t.Fatalf("the rebuild changed the accepted fact rows: %v", rowsBefore)
 	}
-	commits, resolves, snapshots := counting.commits.Load(), counting.resolves.Load(), counting.snapshots.Load()
+	commits, resolves := counting.commits.Load(), counting.resolves.Load()
 	if _, err := oldEngine.ExecuteHumanSend(ctx, auth, relay.SendRequest{ID: "obj-2", Text: "after", To: model.ActorSlot2}); err == nil {
 		t.Fatal("the retired engine accepted a command")
 	}
-	if counting.commits.Load() != commits || counting.resolves.Load() != resolves || counting.snapshots.Load() != snapshots {
+	if counting.commits.Load() != commits || counting.resolves.Load() != resolves {
 		t.Fatal("the retired engine still called the port")
 	}
 	if oldEngine.Fatal() == nil || oldEngine.Fatal().Error() != fatalBefore.Error() {
 		t.Fatalf("the rebuild cleared the old engine's fatal: %v -> %v", fatalBefore, oldEngine.Fatal())
 	}
-	newEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, sqlstore.NewRoomPort(freshStore), auth)
+
+	newPort := &countingPort{inner: sqlstore.NewRoomPort(freshStore)}
+	newEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, newPort, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = newEngine.Close() }()
-	message, err := newEngine.ExecuteHumanSend(ctx, auth, relay.SendRequest{ID: "obj-1", Text: "one", To: model.ActorSlot2})
-	if err != nil {
-		t.Fatalf("the rebuilt instance could not continue: %v", err)
+	if got := rowCounts3c(t, admin, "room-1"); got != rowsBefore {
+		t.Fatalf("the rebuilt instance's open wrote state: %v -> %v", rowsBefore, got)
 	}
-	storedID, _, _ := storedFactMessage(t, admin, "room-1", 1)
-	if message.ID != storedID {
-		t.Fatalf("the rebuilt instance returned %q, want the canonical %q", message.ID, storedID)
+	verified, err := newPort.ResolveHumanSend(ctx, auth, "room-1", "obj-1", relay.EnterpriseSendIntent{To: "slot2", Text: "one"})
+	if err != nil || verified.Outcome != relay.EnterpriseOutcomeReplayed {
+		t.Fatalf("the rebuilt instance could not verify the pending outcome: %+v %v", verified, err)
+	}
+	if newPort.commits.Load() != 0 {
+		t.Fatal("the rebuilt instance verified with a command it should never have sent")
+	}
+	if got := rowCounts3c(t, admin, "room-1"); got != rowsBefore {
+		t.Fatalf("the verification wrote state: %v -> %v", rowsBefore, got)
 	}
 }
 
-// deadTargetRoomPort forces the verification to be incomplete, standing in
-// for a rebuild whose verification target is unreachable.
-type deadTargetRoomPort struct {
-	inner relay.EnterprisePort
+// A verification target that cannot answer is synthetic here: the stub returns
+// a typed unknown without touching PostgreSQL, so this test claims nothing
+// about a real database failure — it only proves that an unverifiable outcome
+// sends nothing and stays unresolved.
+func TestS3cSyntheticUnverifiableVerificationSendsNothing(t *testing.T) {
+	dsn := sqltest.RequireDSN(t)
+	schema, _ := sqltest.CreateSchema(t, dsn)
+	admin := sqltest.SeedRoom(t, dsn, schema)
+	before := rowCounts3c(t, admin, "room-1")
+
+	stub := &syntheticUnverifiablePort{}
+	resolved, err := stub.ResolveHumanSend(context.Background(), executeAuth("u-owner"), "room-1", "s3c-1", relay.EnterpriseSendIntent{To: "slot2", Text: "rebuild body"})
+	var commandErr *relay.EnterpriseCommandError
+	if !errors.As(err, &commandErr) || resolved.Outcome != relay.EnterpriseOutcomeUnknown || commandErr.Class != string(sqlstore.ClassConnectionException) {
+		t.Fatalf("synthetic unverifiable verification: %+v %v", resolved, err)
+	}
+	if got := rowCounts3c(t, admin, "room-1"); got != before {
+		t.Fatalf("the synthetic unverifiable verification wrote state: %v -> %v", before, got)
+	}
 }
 
-func (d *deadTargetRoomPort) CommitHumanSend(ctx context.Context, cmd relay.EnterpriseSendCommand) (relay.EnterpriseSendResult, error) {
-	return d.inner.CommitHumanSend(ctx, cmd)
+// syntheticUnverifiablePort is a test-side stub: it answers no verification and
+// performs no SQL. It is NOT a real PostgreSQL failure injection.
+type syntheticUnverifiablePort struct{}
+
+func (s *syntheticUnverifiablePort) CommitHumanSend(context.Context, relay.EnterpriseSendCommand) (relay.EnterpriseSendResult, error) {
+	return relay.EnterpriseSendResult{}, errors.New("the synthetic stub never commits")
 }
 
-func (d *deadTargetRoomPort) ResolveHumanSend(ctx context.Context, auth relay.EnterpriseAuth, roomID, clientID string, intent relay.EnterpriseSendIntent) (relay.EnterpriseSendResult, error) {
-	return relay.EnterpriseSendResult{Outcome: relay.EnterpriseOutcomeUnknown}, &relay.EnterpriseCommandError{Outcome: relay.EnterpriseOutcomeUnknown, Class: string(sqlstore.ClassConnectionException), Err: errors.New("injected unverifiable state")}
+func (s *syntheticUnverifiablePort) ResolveHumanSend(context.Context, relay.EnterpriseAuth, string, string, relay.EnterpriseSendIntent) (relay.EnterpriseSendResult, error) {
+	return relay.EnterpriseSendResult{Outcome: relay.EnterpriseOutcomeUnknown}, &relay.EnterpriseCommandError{Outcome: relay.EnterpriseOutcomeUnknown, Class: string(sqlstore.ClassConnectionException), Err: errors.New("the synthetic stub cannot verify")}
 }
 
-func (d *deadTargetRoomPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseAuth, roomID string) (relay.EnterpriseRoomSnapshot, error) {
-	return d.inner.ReadonlySnapshot(ctx, auth, roomID)
+func (s *syntheticUnverifiablePort) ReadonlySnapshot(context.Context, relay.EnterpriseAuth, string) (relay.EnterpriseRoomSnapshot, error) {
+	return relay.EnterpriseRoomSnapshot{}, errors.New("the synthetic stub has no snapshot")
 }
 
-// Refusals after a rebuild are verified, never sent: changed intent, revoked
-// users, unverifiable states and a lost lease leave the rows untouched and the
-// pending outcome unresolved.
+// Refusals after the real rebuild are verified, never sent: changed intent,
+// revoked users and a lost lease leave the rows untouched, the pending outcome
+// unresolved, and the replacement process issues zero commands.
 func TestS3cRebuildVerificationRefusalsNeverSend(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
 	admin := sqltest.SeedRoom(t, dsn, schema)
 	proxy := sqltest.StartProxy(t, "drop-response")
-	ctx := context.Background()
+	request := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-1", ClientID: "s3c-1", To: "slot2", Text: "rebuild body"}
 
-	child := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "room-1")
-	if ready := child.next(t); !ready.Ready {
-		t.Fatalf("child ready: %+v", ready)
+	oldChild := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "dep-test")
+	if ready := oldChild.next(t); !ready.Ready {
+		t.Fatalf("old child ready: %+v", ready)
 	}
 	proxy.Arm()
-	child.command(t, s3cCommand{Op: "send", Room: "room-1", ID: "s3c-1", Text: "rebuild body"})
-	if lost := child.next(t); lost.Outcome != relay.EnterpriseOutcomeUnknown {
-		t.Fatalf("child outcome: %+v", lost)
+	oldChild.command(t, request)
+	if lost := oldChild.next(t); lost.Outcome != relay.EnterpriseOutcomeUnknown {
+		t.Fatalf("old child outcome: %+v", lost)
 	}
-	child.exitAndWait(t)
+	oldChild.exitAndWait(t)
 
-	freshStore := deployRebuild(t, dsn, schema, nil, nil)
-	port := sqlstore.NewRoomPort(freshStore)
+	replacement := startS3cChild(t, dsn, dsn, schema, "dep-test")
+	if ready := replacement.next(t); !ready.Ready {
+		t.Fatalf("replacement ready: %+v", ready)
+	}
 	before := rowCounts3c(t, admin, "room-1")
 
-	resolved, err := port.ResolveHumanSend(ctx, executeAuth("u-owner"), "room-1", "s3c-1", relay.EnterpriseSendIntent{To: "slot2", Text: "different intent"})
-	var commandErr *relay.EnterpriseCommandError
-	if !errors.As(err, &commandErr) || commandErr.Outcome != string(sqlstore.OutcomeConflict) || commandErr.Class != string(sqlstore.ClassPayloadConflict) {
-		t.Fatalf("changed-intent verification: %+v %v", resolved, err)
+	changed := request
+	changed.Op, changed.Text = "resolve", "different intent"
+	replacement.command(t, changed)
+	refused := replacement.next(t)
+	if refused.Outcome != string(sqlstore.OutcomeConflict) || refused.Class != string(sqlstore.ClassPayloadConflict) || refused.Commits != 0 {
+		t.Fatalf("changed-intent verification: %+v", refused)
 	}
 
-	if _, err := admin.Exec(ctx, `UPDATE users SET disabled = true WHERE user_id = 'u-owner'`); err != nil {
+	if _, err := admin.Exec(context.Background(), `UPDATE users SET disabled = true WHERE user_id = 'u-owner'`); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err = port.ResolveHumanSend(ctx, executeAuth("u-owner"), "room-1", "s3c-1", relay.EnterpriseSendIntent{To: "slot2", Text: "rebuild body"})
-	if !errors.As(err, &commandErr) || commandErr.Class != relay.EnterpriseClassAuthorization {
-		t.Fatalf("revoked verification: %+v %v", resolved, err)
+	replacement.command(t, mustResolve(request))
+	refused = replacement.next(t)
+	if refused.Class != relay.EnterpriseClassAuthorization || refused.Commits != 0 {
+		t.Fatalf("revoked verification: %+v", refused)
 	}
-	if _, err := admin.Exec(ctx, `UPDATE users SET disabled = false WHERE user_id = 'u-owner'`); err != nil {
+	if _, err := admin.Exec(context.Background(), `UPDATE users SET disabled = false WHERE user_id = 'u-owner'`); err != nil {
 		t.Fatal(err)
-	}
-
-	dead := &deadTargetRoomPort{inner: port}
-	resolved, err = dead.ResolveHumanSend(ctx, executeAuth("u-owner"), "room-1", "s3c-1", relay.EnterpriseSendIntent{To: "slot2", Text: "rebuild body"})
-	if err == nil || resolved.Outcome != relay.EnterpriseOutcomeUnknown {
-		t.Fatalf("unverifiable verification: %+v %v", resolved, err)
 	}
 	if got := rowCounts3c(t, admin, "room-1"); got != before {
 		t.Fatalf("refusals wrote or sent: %v -> %v", before, got)
 	}
 
-	// A lost lease is sticky: the rebuilt instance's own lease backend is
+	// A lost lease is sticky: the replacement instance's own lease backend is
 	// terminated, and the verification refuses while the pending outcome stays
 	// unresolved — it never degrades into an absence or an automatic send.
 	var leasePID int32
-	if err := admin.QueryRow(ctx, `SELECT lease_pid FROM ownership`).Scan(&leasePID); err != nil {
+	if err := admin.QueryRow(context.Background(), `SELECT lease_pid FROM ownership`).Scan(&leasePID); err != nil {
 		t.Fatal(err)
 	}
-	sqltest.KillBackend(t, admin, uint32(leasePID), "fresh store lease")
-	resolved, err = port.ResolveHumanSend(ctx, executeAuth("u-owner"), "room-1", "s3c-1", relay.EnterpriseSendIntent{To: "slot2", Text: "rebuild body"})
-	if !errors.As(err, &commandErr) || commandErr.Outcome != string(sqlstore.OutcomeRefused) || commandErr.Class != string(sqlstore.ClassLeaseLost) {
-		t.Fatalf("lease-lost verification: %+v %v", resolved, err)
+	sqltest.KillBackend(t, admin, uint32(leasePID), "replacement lease")
+	replacement.command(t, mustResolve(request))
+	refused = replacement.next(t)
+	if refused.Outcome != string(sqlstore.OutcomeRefused) || refused.Class != string(sqlstore.ClassLeaseLost) || refused.Commits != 0 {
+		t.Fatalf("lease-lost verification: %+v", refused)
 	}
 	if got := rowCounts3c(t, admin, "room-1"); got != before {
 		t.Fatalf("the lease-lost refusal wrote or sent: %v -> %v", before, got)
@@ -773,11 +945,19 @@ func TestS3cRebuildVerificationRefusalsNeverSend(t *testing.T) {
 	assertLogContiguous(t, admin, "room-1")
 }
 
-// Two distinct Rooms share one deployment store. A loses its commit response
-// (real child, real proxy) and the whole deployment — both Rooms — is rebuilt;
-// B is interrupted too, not spared, and the new instance serves both: A's
-// pending outcome verifies to its original canonical fact, B's history and
-// ACLs are intact, and B continues on the new instance.
+// mustResolve turns the original request into its read-only verification
+// instruction: same deployment, principal, Room, key, target and text.
+func mustResolve(request s3cCommand) s3cCommand {
+	request.Op = "resolve"
+	return request
+}
+
+// Two distinct Rooms share one deployment store. Room-1 loses its commit
+// response (real child, real proxy) and the whole deployment — both Rooms — is
+// rebuilt by a real replacement process; Room-2 is interrupted too, not
+// spared. The new instance serves both: room-1's pending outcome verifies to
+// its original canonical fact, and every stored byte and the complete
+// authorization state of both Rooms are unchanged.
 func TestS3cRebuildInterruptsBothRoomsPreservingHistory(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
@@ -790,35 +970,43 @@ func TestS3cRebuildInterruptsBothRoomsPreservingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxy := sqltest.StartProxy(t, "drop-response")
-	request := relay.SendRequest{ID: "a-1", Text: "room one pending", To: model.ActorSlot2}
+	request := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-1", ClientID: "a-1", To: "slot2", Text: "room one pending"}
 
-	child := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "room-1,room-2")
-	ready := child.next(t)
-	if !ready.Ready || len(ready.Rooms) != 2 {
-		t.Fatalf("child ready: %+v", ready)
+	oldChild := startS3cChild(t, proxy.DSN(dsn), dsn, schema, "dep-test")
+	oldReady := oldChild.next(t)
+	if !oldReady.Ready {
+		t.Fatalf("old child ready: %+v", oldReady)
 	}
 
-	// B establishes its history first, through the same shared store.
-	child.command(t, s3cCommand{Op: "send", Room: "room-2", ID: "b-1", Text: "room two history"})
-	if accepted := child.next(t); accepted.Outcome != s3cOutcomeAccepted || accepted.Text != "room two history" {
+	// Room-2 establishes its history first, through the same shared store.
+	oldChild.command(t, s3cCommand{Op: "open", Deployment: "dep-test", UserID: "u-owner", Room: "room-2"})
+	if opened := oldChild.next(t); opened.Ops != "open" {
+		t.Fatalf("room-2 open: %+v", opened)
+	}
+	oldChild.command(t, s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-2", ClientID: "b-1", To: "slot2", Text: "room two history"})
+	if accepted := oldChild.next(t); accepted.Outcome != s3cOutcomeAccepted || accepted.Text != "room two history" {
 		t.Fatalf("room-2 history: %+v", accepted)
 	}
 	roomTwoHistory := rowCounts3c(t, admin, "room-2")
-	membersBefore := membershipRows(t, admin)
+	roomTwoHashBefore := eventEncodingsHash(t, admin, "room-2")
+	aclBefore := aclSnapshot(t, admin)
 
 	proxy.Arm()
-	child.command(t, s3cCommand{Op: "send", Room: "room-1", ID: request.ID, Text: request.Text})
-	lost := child.next(t)
+	oldChild.command(t, request)
+	lost := oldChild.next(t)
 	if lost.Outcome != relay.EnterpriseOutcomeUnknown || lost.Class != string(sqlstore.ClassConnectionException) {
 		t.Fatalf("room-1 outcome = %+v, want unknown/connection_exception", lost)
 	}
+	// Room-1's accepted-then-lost fact is now durable; this is the state the
+	// rebuild must leave untouched.
 	roomOneBefore := rowCounts3c(t, admin, "room-1")
 	if roomOneBefore != [3]int64{1, 1, 1} {
 		t.Fatalf("room-1 accepted-then-lost rows: %v", roomOneBefore)
 	}
-	originalID, _, originalText := storedFactMessage(t, admin, "room-1", 1)
+	roomOneHashBefore := eventEncodingsHash(t, admin, "room-1")
+	originalID, _, originalText, _ := storedFactMessage(t, admin, "room-1", 1)
 	if originalText != request.Text {
-		t.Fatalf("accepted fact text = %q, want the full original %q", originalText, request.Text)
+		t.Fatal("the accepted fact did not store the complete original text")
 	}
 
 	// The deployment is one unit: while the old instance is alive, a second
@@ -826,71 +1014,77 @@ func TestS3cRebuildInterruptsBothRoomsPreservingHistory(t *testing.T) {
 	if _, err := sqlstore.Open(ctx, sqlstore.Config{DSN: dsn, Schema: schema, DeploymentID: "dep-test"}); err == nil || !strings.Contains(err.Error(), "live lease holder") {
 		t.Fatalf("a second writer was not refused while the old store lived: %v", err)
 	}
-	child.exitAndWait(t)
+	oldChild.exitAndWait(t)
 
-	freshStore := deployRebuild(t, dsn, schema, nil, nil)
-	newEpoch, newInstance := fetchOwnership(t, admin)
-	if newEpoch != ready.Epoch+1 || newInstance == ready.Instance {
-		t.Fatalf("rebuild ownership: epoch %d->%d instance %q->%q", ready.Epoch, newEpoch, ready.Instance, newInstance)
+	// The replacement process takes the whole deployment over.
+	replacement := startS3cChild(t, dsn, dsn, schema, "dep-test")
+	newReady := replacement.next(t)
+	if !newReady.Ready || newReady.PID == oldReady.PID || newReady.Instance == oldReady.Instance || newReady.Epoch != oldReady.Epoch+1 {
+		t.Fatalf("replacement ownership: %+v (old %+v)", newReady, oldReady)
 	}
-	// B was interrupted by the same rebuild: nothing of its history, ACLs or
-	// the pending room-1 fact changed, and nothing was re-sent.
+
+	// Room-2 was interrupted by the same rebuild — not spared — and its stored
+	// bytes and authorization state are unchanged, as are room-1's.
 	if got := rowCounts3c(t, admin, "room-1"); got != roomOneBefore {
 		t.Fatalf("room-1 rows changed across the rebuild: %v -> %v", roomOneBefore, got)
 	}
 	if got := rowCounts3c(t, admin, "room-2"); got != roomTwoHistory {
 		t.Fatalf("room-2 history changed across the rebuild: %v -> %v", roomTwoHistory, got)
 	}
-	if got := membershipRows(t, admin); !equalStrings(got, membersBefore) {
-		t.Fatalf("membership changed across the rebuild: %v -> %v", membersBefore, got)
+	if got := eventEncodingsHash(t, admin, "room-1"); got != roomOneHashBefore {
+		t.Fatal("room-1 stored bytes changed across the rebuild")
+	}
+	if got := eventEncodingsHash(t, admin, "room-2"); got != roomTwoHashBefore {
+		t.Fatal("room-2 stored bytes changed across the rebuild")
+	}
+	if got := aclSnapshot(t, admin); !equalStrings(got, aclBefore) {
+		t.Fatalf("authorization state changed across the rebuild: %v -> %v", aclBefore, got)
 	}
 	assertLogContiguous(t, admin, "room-1")
 	assertLogContiguous(t, admin, "room-2")
 
-	port := sqlstore.NewRoomPort(freshStore)
 	// Room-2's ACL still enforces on the new instance: a non-member is refused.
-	resolved, err := port.ResolveHumanSend(ctx, executeAuth("u-viewer"), "room-2", "b-1", relay.EnterpriseSendIntent{To: "slot2", Text: "room two history"})
-	var commandErr *relay.EnterpriseCommandError
-	if !errors.As(err, &commandErr) || commandErr.Class != relay.EnterpriseClassAuthorization {
-		t.Fatalf("non-member verification: %+v %v", resolved, err)
+	nonMember := s3cCommand{Op: "resolve", Deployment: "dep-test", UserID: "u-viewer", Room: "room-2", ClientID: "b-1", To: "slot2", Text: "room two history"}
+	replacement.command(t, nonMember)
+	if refused := replacement.next(t); refused.Class != relay.EnterpriseClassAuthorization || refused.Commits != 0 {
+		t.Fatalf("non-member verification: %+v", refused)
 	}
 
-	// Room-1: the pending outcome verifies to its original canonical fact, and
-	// the explicit same-key instruction adds nothing.
-	verified, err := port.ResolveHumanSend(ctx, executeAuth("u-owner"), "room-1", request.ID, relay.EnterpriseSendIntent{To: "slot2", Text: request.Text})
-	if err != nil || verified.Outcome != relay.EnterpriseOutcomeReplayed {
-		t.Fatalf("room-1 verification: %+v %v", verified, err)
+	// Room-1: verify with the original key and intent, then the separate
+	// explicit same-key instruction — which returns the original canonical
+	// fact and adds nothing.
+	replacement.command(t, mustResolve(request))
+	if verified := replacement.next(t); verified.Outcome != relay.EnterpriseOutcomeReplayed || verified.Commits != 0 {
+		t.Fatalf("room-1 verification: %+v", verified)
 	}
-	newA, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
-	if err != nil {
-		t.Fatal(err)
+	replacement.command(t, s3cCommand{Op: "open", Deployment: "dep-test", UserID: "u-owner", Room: "room-1"})
+	if opened := replacement.next(t); opened.Ops != "open" {
+		t.Fatalf("room-1 open: %+v", opened)
 	}
-	defer func() { _ = newA.Close() }()
-	message, err := newA.ExecuteHumanSend(ctx, executeAuth("u-owner"), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if message.ID != originalID || message.Text != request.Text {
-		t.Fatalf("room-1 canonical result: %+v, want %q", message, originalID)
+	replacement.command(t, request)
+	sent := replacement.next(t)
+	if sent.Outcome != s3cOutcomeAccepted || sent.MessageID != originalID || sent.Text != originalText {
+		t.Fatalf("room-1 canonical result: %+v, want %q", sent, originalID)
 	}
 	if got := rowCounts3c(t, admin, "room-1"); got != roomOneBefore {
 		t.Fatalf("room-1 explicit re-send duplicated the accepted fact: %v -> %v", roomOneBefore, got)
 	}
 
 	// Room-2 continues on the new instance.
-	newB, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-2", Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
-	if err != nil {
-		t.Fatal(err)
+	replacement.command(t, s3cCommand{Op: "open", Deployment: "dep-test", UserID: "u-owner", Room: "room-2"})
+	if opened := replacement.next(t); opened.Ops != "open" {
+		t.Fatalf("room-2 reopen: %+v", opened)
 	}
-	defer func() { _ = newB.Close() }()
-	if _, err := newB.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: "b-3", Text: "continued", To: model.ActorSlot2}); err != nil {
-		t.Fatalf("the rebuilt instance could not continue room-2: %v", err)
+	replacement.command(t, s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-2", ClientID: "b-3", To: "slot2", Text: "continued"})
+	if accepted := replacement.next(t); accepted.Outcome != s3cOutcomeAccepted || accepted.Room != "room-2" {
+		t.Fatalf("room-2 continuation: %+v", accepted)
 	}
 	after := rowCounts3c(t, admin, "room-2")
 	if after[0] != roomTwoHistory[0]+1 || after[1] != roomTwoHistory[1]+1 || after[2] != roomTwoHistory[2]+1 {
 		t.Fatalf("room-2 continuation appended %v", after)
 	}
 	assertLogContiguous(t, admin, "room-2")
+	replacement.exitAndWait(t)
 }
 
 func equalStrings(a, b []string) bool {
