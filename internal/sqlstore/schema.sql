@@ -329,27 +329,50 @@ END
 $fn$;
 
 -- Retirement is write-once and named: retired_at may go from absent to set,
--- never back, and a retirement must state its reason.
+-- never back, and a retirement must state a non-blank reason. The guard runs
+-- on every entry point, so a row inserted already-retired cannot skip it.
 CREATE FUNCTION control_guard_retired() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog
 AS $fn$
 DECLARE
-  was text := to_jsonb(OLD) ->> 'retired_at';
+  was text;
   now text := to_jsonb(NEW) ->> 'retired_at';
   reason text := to_jsonb(NEW) ->> 'retired_reason';
 BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    was := to_jsonb(OLD) ->> 'retired_at';
+  END IF;
   IF was IS NOT NULL AND now IS DISTINCT FROM was THEN
     RAISE EXCEPTION USING
       ERRCODE = '23514',
       CONSTRAINT = TG_TABLE_NAME || '_retired_once',
       MESSAGE = format('%s.retired_at is write-once', TG_TABLE_NAME);
   END IF;
-  IF now IS NOT NULL AND (reason IS NULL OR reason = '') THEN
+  -- Use the Unicode White_Space set explicitly: default btrim removes only
+  -- ASCII spaces and a locale-dependent character class can omit NBSP/NEL.
+  IF now IS NOT NULL AND (reason IS NULL OR btrim(reason, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') = '') THEN
     RAISE EXCEPTION USING
       ERRCODE = '23514',
       CONSTRAINT = TG_TABLE_NAME || '_retired_reason',
-      MESSAGE = format('%s retirement must state a reason', TG_TABLE_NAME);
+      MESSAGE = format('%s retirement must state a non-blank reason', TG_TABLE_NAME);
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+
+-- A slot head is created at generation one; only the update guard advances it.
+CREATE FUNCTION room_slots_insert_guard() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $fn$
+BEGIN
+  IF NEW.current_generation <> 1 THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '23514',
+      CONSTRAINT = 'room_slots_head_check',
+      MESSAGE = format('slot %s was created at generation %s', NEW.slot, NEW.current_generation),
+      DETAIL = 'a slot head starts at generation one and only advances by one';
   END IF;
   RETURN NEW;
 END
@@ -460,6 +483,13 @@ CREATE TRIGGER devices_no_delete BEFORE DELETE ON devices
   FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
 CREATE TRIGGER agents_no_delete BEFORE DELETE ON agents
   FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+-- The binding history and the slot heads are retained too: deleting either
+-- would bypass the explicit retirement, the generation uniqueness and the
+-- live-binding-equals-head invariant.
+CREATE TRIGGER bindings_no_delete BEFORE DELETE ON bindings
+  FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER room_slots_no_delete BEFORE DELETE ON room_slots
+  FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
 
 CREATE TRIGGER users_identity_immutable BEFORE UPDATE ON users
   FOR EACH ROW EXECUTE FUNCTION control_guard_columns('users_identity_immutable', 'user_id', 'org_id', 'created_at');
@@ -474,17 +504,19 @@ CREATE TRIGGER rooms_identity_immutable BEFORE UPDATE ON rooms
 CREATE TRIGGER room_slots_identity_immutable BEFORE UPDATE ON room_slots
   FOR EACH ROW EXECUTE FUNCTION control_guard_columns('room_slots_identity_immutable', 'room_id', 'slot');
 
-CREATE TRIGGER external_identities_retired_once BEFORE UPDATE ON external_identities
+CREATE TRIGGER external_identities_retired_once BEFORE INSERT OR UPDATE ON external_identities
   FOR EACH ROW EXECUTE FUNCTION control_guard_retired();
-CREATE TRIGGER devices_retired_once BEFORE UPDATE ON devices
+CREATE TRIGGER devices_retired_once BEFORE INSERT OR UPDATE ON devices
   FOR EACH ROW EXECUTE FUNCTION control_guard_retired();
-CREATE TRIGGER agents_retired_once BEFORE UPDATE ON agents
+CREATE TRIGGER agents_retired_once BEFORE INSERT OR UPDATE ON agents
   FOR EACH ROW EXECUTE FUNCTION control_guard_retired();
-CREATE TRIGGER bindings_retired_once BEFORE UPDATE ON bindings
+CREATE TRIGGER bindings_retired_once BEFORE INSERT OR UPDATE ON bindings
   FOR EACH ROW EXECUTE FUNCTION control_guard_retired();
 CREATE TRIGGER bindings_identity_immutable BEFORE UPDATE ON bindings
   FOR EACH ROW EXECUTE FUNCTION control_guard_columns('bindings_identity_immutable', 'binding_id', 'org_id', 'room_id', 'slot', 'generation', 'agent_id', 'created_at');
 
+CREATE TRIGGER room_slots_head_insert BEFORE INSERT ON room_slots
+  FOR EACH ROW EXECUTE FUNCTION room_slots_insert_guard();
 CREATE TRIGGER room_slots_head_check BEFORE UPDATE ON room_slots
   FOR EACH ROW EXECUTE FUNCTION room_slots_head_guard();
 
