@@ -87,6 +87,7 @@ func (e *Engine) initLAN() {
 // clocks can repeat or regress and request IDs carry no chronological meaning.
 func PruneLANRequests(requests map[string]LANJoinRequest, latest map[string]string, invites map[string]LANInvite, admitted map[string]bool, member *LANMember, now time.Time) {
 	if len(requests) == 0 {
+		clear(latest)
 		return
 	}
 	for id, j := range requests {
@@ -104,8 +105,10 @@ func PruneLANRequests(requests map[string]LANJoinRequest, latest map[string]stri
 	}
 	// An expired newest attempt need not keep a key entry alive. Earlier admitted
 	// requests are protected independently above, including future replay facts.
+	// A pruned pending ID may later be reused by a different key, so existence
+	// alone does not mean this key still owns the indexed request after replay.
 	for key, id := range latest {
-		if _, ok := requests[id]; !ok {
+		if request, ok := requests[id]; !ok || request.Key != key {
 			delete(latest, key)
 		}
 	}
