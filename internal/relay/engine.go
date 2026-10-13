@@ -253,10 +253,20 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 	return nil
 }
 func (e *Engine) apply(ev model.Event) error {
+	if e.enterprise && (ev.Kind == EventBinding || ev.Kind == EventLANInvite || ev.Kind == EventLANJoin || ev.Kind == EventLANMember) {
+		return errors.New("enterprise Room cannot replay Local or LAN binding authority")
+	}
+	if !e.enterprise && ev.Kind == model.EnterpriseBindingUpdatedKind {
+		return errors.New("Local or LAN Room cannot replay enterprise Binding authority")
+	}
 	e.sequence = ev.Seq
 	e.initIndexes()
 	detail := ""
 	switch ev.Kind {
+	case model.EnterpriseBindingUpdatedKind:
+		if err := e.applyEnterpriseBinding(ev); err != nil {
+			return err
+		}
 	case EventBinding:
 		var b bindingFact
 		if err := json.Unmarshal(ev.Data, &b); err != nil {
@@ -414,16 +424,38 @@ func (e *Engine) apply(ev model.Event) error {
 	return nil
 }
 func (e *Engine) applyBinding(ev model.Event, b bindingFact) error {
+	if e.enterprise || b.enterprise != nil {
+		return errors.New("Local or LAN binding codec cannot carry enterprise identity")
+	}
 	if !b.Slot.ValidParticipant() || b.Generation == 0 || !validID(b.BindID) || (b.Active && b.RemoteKey == "" && !validHash(b.CredentialHash)) {
 		return errors.New("invalid native binding fact")
 	}
 	old := e.bindings[b.Slot]
-	if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
-		return errors.New("native binding generation regressed")
+	if err := e.validateBindingGenerationLocked(b, old); err != nil {
+		return err
 	}
 	if err := e.validateDynamicBinding(b, old); err != nil {
 		return err
 	}
+	return e.applyBindingProjection(ev, b)
+}
+
+// validateBindingGenerationLocked is shared by the Local/LAN and enterprise
+// fact codecs. Identity validation stays at each codec's own boundary.
+func (e *Engine) validateBindingGenerationLocked(b, old bindingFact) error {
+	if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
+		return errors.New("native binding generation regressed")
+	}
+	if e.cfg.DynamicBindings && b.Generation > old.Generation && (b.Generation != old.Generation+1 || !b.Active || e.seenBinds[b.BindID]) {
+		return errors.New("dynamic Native binding requires a fresh active generation")
+	}
+	return nil
+}
+
+// applyBindingProjection is the one binding/inbox transition implementation.
+// Both codecs reach it only after their identities and generation validate.
+func (e *Engine) applyBindingProjection(ev model.Event, b bindingFact) error {
+	old := e.bindings[b.Slot]
 	if !b.Active || b.Generation != old.Generation || b.SessionID != old.SessionID {
 		// A replaced, unbound or re-associated session cannot consume a
 		// nudge queued for its predecessor, nor end its Turn.

@@ -17,6 +17,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Changed
 
+- Pin the reviewed enterprise OIDC dependencies: `github.com/coreos/go-oidc/v3` v3.21.0, `golang.org/x/oauth2` v0.37.0 and `github.com/go-jose/go-jose/v4` v4.1.5, with their license notices and unchanged existing SQLite/PostgreSQL module versions. The enterprise service remains under implementation.
+
 - Preserve existing typed Native Rooms on v8 with their runtime-derived handles and Embedded on v7. `pairroom protocol` defaults to v9; `--legacy-native` prints the old Native contract. Native creation no longer reads saved Agent pairs or Provider catalogs, and `--peer-runtime` is removed. Embedded selection and configuration behavior remains unchanged.
 - Write new Rooms with Store 14/provisioning 7 and Registry checkpoint 5, while retaining Store 12/provisioning 5, Store 13/provisioning 6 and checkpoint 3/4 reads without rewriting historical Room facts. Explicit replacement advances the generation, invalidates old credentials and retains old journal/work evidence; it cannot stop a native process or retract accepted work.
 

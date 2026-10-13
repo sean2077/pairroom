@@ -141,12 +141,16 @@ type dependencyState struct {
 	roomMissing    bool
 	currentSeq     uint64
 	revision       uint64
+	ownerUserID    string
+	orgID          string
+	target         membershipTargetState
 }
 
 func (d dependencyState) equal(other dependencyState) bool {
 	return d.userMissing == other.userMissing && d.userDisabled == other.userDisabled &&
 		d.memberMissing == other.memberMissing && d.memberDisabled == other.memberDisabled &&
-		d.memberRole == other.memberRole && d.roomMissing == other.roomMissing
+		d.memberRole == other.memberRole && d.roomMissing == other.roomMissing &&
+		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.target == other.target
 }
 
 // readAllowed reports live read authorization: the user and the membership
@@ -189,7 +193,7 @@ func (s *Store) readDependencies(ctx context.Context, q rowQuerier, roomID, user
 // with the requested lock clause, in the documented position after the
 // authorization rows.
 func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *dependencyState, lock string) error {
-	err := q.QueryRow(ctx, `SELECT current_seq, revision FROM `+s.table("rooms")+` WHERE room_id = $1`+lock, roomID).Scan(&d.currentSeq, &d.revision)
+	err := q.QueryRow(ctx, `SELECT current_seq, revision, owner_user_id, org_id FROM `+s.table("rooms")+` WHERE room_id = $1`+lock, roomID).Scan(&d.currentSeq, &d.revision, &d.ownerUserID, &d.orgID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.roomMissing = true
 	} else if err != nil {
@@ -199,8 +203,8 @@ func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *de
 }
 
 // opPlan is the operation-specific half of the shared transaction state
-// machine: append_fact, human_send and room_create each supply one, and the
-// machine below is the only transition implementation. The encoding budget is
+// machine: append_fact, human_send, room_create and room_membership each supply
+// one, and the machine below is the only transition implementation. The encoding budget is
 // per operation: append_fact keeps its original 262144-byte gate unchanged,
 // while human_send carries an explicitly bounded larger budget for its
 // worst-case-escaped text.
@@ -212,13 +216,15 @@ type opPlan struct {
 	expectedRevision uint64
 	encodingBudget   int
 	roomCreate       *model.EnterpriseRoomIntent
+	roomMembership   *model.EnterpriseMembershipIntent
 }
 
 // ownershipLock is fixed before any row is locked. Room creation and its
 // resolution must exclude each other even when the target Room does not yet
-// exist; existing operations retain their shared ownership guard.
+// exist. Membership controls use the same exclusive guard while their target
+// row can be absent; ordinary appends retain their shared ownership guard.
 func (p opPlan) ownershipLock() string {
-	if p.roomCreate != nil {
+	if p.roomCreate != nil || p.roomMembership != nil {
 		return lockExclusive
 	}
 	return lockShare
@@ -283,7 +289,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	var discovered dependencyState
 	// No transaction of this operation has started while reading, so a failure
 	// here is a definite non-commit.
-	if err := s.readDependencies(ctx, s.work, plan.key.RoomID, plan.userID, &discovered, lockNone); err != nil {
+	if err := s.readPlanDependencies(ctx, s.work, plan, &discovered, lockNone); err != nil {
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
@@ -311,7 +317,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		return s.postBeginFailure(ctx, err)
 	}
 	var locked dependencyState
-	if err := s.readDependencies(ctx, tx, plan.key.RoomID, plan.userID, &locked, lockShare); err != nil {
+	if err := s.readPlanDependencies(ctx, tx, plan, &locked, lockShare); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	if err := s.readRoom(ctx, tx, plan.key.RoomID, &locked, lockExclusive); err != nil {
@@ -384,6 +390,11 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 				return refused3(ClassStoredFactUnreadable, err)
 			}
 		}
+		if plan.roomMembership != nil {
+			if err := validateRoomMembershipReplay(plan, original); err != nil {
+				return refused3(ClassStoredFactUnreadable, err)
+			}
+		}
 		// Replayed returns the original stored result, including the Room
 		// revision that original commit defined — never the current revision,
 		// which may have advanced past it.
@@ -399,6 +410,10 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 			// No matching operation exists: an existing ID is never adopted,
 			// upserted or disclosed, including for its current owner.
 			return refused3(ClassRoomTaken, nil)
+		}
+	} else if plan.roomMembership != nil {
+		if !locked.readAllowed() || locked.memberRole != "owner" || locked.ownerUserID != plan.userID {
+			return refused3(ClassAuthorization, nil)
 		}
 	} else if !locked.writeAllowed() {
 		// A new operation on an existing Room requires a writer role.
@@ -426,6 +441,16 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 			return s.postBeginFailure(ctx, err)
 		}
 	}
+	if plan.roomMembership != nil {
+		var class string
+		fact, class, err = s.prepareMembership(ctx, tx, plan, locked)
+		if class != "" {
+			return refused3(class, err)
+		}
+		if err != nil {
+			return s.postBeginFailure(ctx, err)
+		}
+	}
 	stored := fact
 	stored.Seq = locked.currentSeq + 1
 	encoding, err := json.Marshal(stored)
@@ -434,6 +459,11 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	}
 	if plan.roomCreate != nil {
 		if err := s.insertCreatedRoom(ctx, tx, plan, createOrg, stored.CreatedAt); err != nil {
+			return s.postBeginFailure(ctx, err)
+		}
+	}
+	if plan.roomMembership != nil {
+		if err := s.writeMembership(ctx, tx, plan, locked); err != nil {
 			return s.postBeginFailure(ctx, err)
 		}
 	}

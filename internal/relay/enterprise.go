@@ -253,6 +253,11 @@ func validateEnterpriseSnapshot(roomID, deploymentID string, snapshot Enterprise
 		if i > 0 && event.Kind == model.EnterpriseRoomCreatedKind {
 			return errors.New("relay: enterprise snapshot contains a duplicate creation fact")
 		}
+		if event.Kind == model.EnterpriseMembershipKind {
+			if _, err := model.DecodeEnterpriseMembershipChange(event); err != nil {
+				return fmt.Errorf("relay: enterprise membership history: %w", err)
+			}
+		}
 	}
 	creation, err := model.DecodeEnterpriseRoomCreation(snapshot.Events[0])
 	if err != nil {
@@ -276,6 +281,7 @@ func (e *Engine) replaySnapshotLocked(snapshot EnterpriseRoomSnapshot) error {
 	cfg.DynamicBindings = true
 	initializeDynamicRuntimes(&cfg)
 	fresh := emptyEngine(cfg)
+	fresh.enterprise = true
 	fresh.replaying = true
 	for _, event := range snapshot.Events {
 		if err := fresh.apply(event); err != nil {

@@ -107,7 +107,8 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 	// The same global lock order and preselected ownership mode. Room-create
 	// resolution takes FOR UPDATE on ownership before any authorization row,
 	// so it waits for an uncertain creation even if no Room row exists yet.
-	// Other operations keep shared ownership and Room guards.
+	// Membership controls also preselect exclusive ownership and lock their
+	// sorted authorization set. Ordinary appends retain their shared guards.
 	var ownerEpoch int64
 	var ownerPID int32
 	var ownerStart time.Time
@@ -119,7 +120,7 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		return resolveIncomplete(ctx, err)
 	}
 	var locked dependencyState
-	if err := s.readDependencies(ctx, tx, plan.key.RoomID, plan.userID, &locked, lockShare); err != nil {
+	if err := s.readPlanDependencies(ctx, tx, plan, &locked, lockShare); err != nil {
 		return resolveIncomplete(ctx, err)
 	}
 	if err := s.readRoom(ctx, tx, plan.key.RoomID, &locked, lockShare); err != nil {
@@ -167,7 +168,7 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		}
 		original, err := s.loadFact(ctx, tx, plan.key.RoomID, uint64(resultSeq))
 		if err != nil {
-			if plan.roomCreate != nil && isStoredFactCorruption(err) {
+			if (plan.roomCreate != nil || plan.roomMembership != nil) && isStoredFactCorruption(err) {
 				return refused(ClassStoredFactUnreadable, err)
 			}
 			return resolveIncomplete(ctx, err)
@@ -180,6 +181,11 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 				return resolveIncomplete(ctx, err)
 			}
 		}
+		if plan.roomMembership != nil {
+			if err := validateRoomMembershipReplay(plan, original); err != nil {
+				return refused(ClassStoredFactUnreadable, err)
+			}
+		}
 		// The original stored result, including the Room revision that the
 		// original commit defined — never the current revision.
 		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: uint64(resultRevision), Fact: original}, nil
@@ -188,6 +194,9 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 			// This exact creation operation is absent. Resolving it never
 			// adopts or discloses an unrelated existing Room, including its
 			// revision. Only Commit classifies that ID as room_taken.
+			return Result{Outcome: OutcomeNotCommitted}, nil
+		}
+		if plan.roomMembership != nil {
 			return Result{Outcome: OutcomeNotCommitted}, nil
 		}
 		return Result{Outcome: OutcomeNotCommitted, Revision: locked.revision}, nil

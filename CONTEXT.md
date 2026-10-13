@@ -9,7 +9,7 @@ A Service registration of a canonical local Git workspace, not a copied reposito
 _Equivalent (zh-CN)_: 项目
 
 **Room**:
-A durable two-participant collaboration context belonging to a Project, with immutable host mode, stored collaboration instructions, Bindings, and messages.
+A durable two-participant collaboration context with immutable host mode, stored collaboration instructions, Bindings, and messages. Local Rooms belong to a Project; an enterprise Room may have no logical Project.
 _Equivalent (zh-CN)_: 协作房间
 
 **Participant slot**:
@@ -116,6 +116,8 @@ _Equivalent (zh-CN)_: 评审版本
 
 ## LAN collaboration
 
+The following terms describe the existing LAN mode. Enterprise authority uses the separate definitions below and does not reinterpret LAN membership keys.
+
 **LAN sharing**:
 A native Room created with `sharing: "lan"` and one local `owner_slot`, hosted on the separate LAN listener for exactly one admitted remote member; only the host needs a Service.
 _Equivalent (zh-CN)_: 局域网共享
@@ -147,3 +149,47 @@ _Equivalent (zh-CN)_: 退出
 **Detach locally**:
 Retires the local joined-Room record and its identity reservation without claiming the host received a leave.
 _Equivalent (zh-CN)_: 本机断开
+
+## Enterprise identity and authority
+
+These terms belong to the approved enterprise service design; definitions alone do not claim the service or its acceptance gates are complete.
+
+**Organization**:
+The single configured identity and resource scope of an enterprise deployment. Sharing an Organization does not grant access to another User's Rooms.
+_Equivalent (zh-CN)_: 组织
+
+**User**:
+A stable internal human principal mapped from a configured OIDC connection and exact issuer/subject. Email, display name and an identity provider's role claim do not establish application authority.
+_Equivalent (zh-CN)_: 用户
+
+**Admission**:
+An explicit application decision permitting an authenticated identity, device or Room member to enter its named scope. Authentication alone is not admission, and Room admission discloses full-history visibility.
+_Equivalent (zh-CN)_: 准入
+
+**Device registration**:
+An application-authorized endpoint installation and OS-user context belonging to a User, without a claim of hardware attestation.
+_Equivalent (zh-CN)_: 设备注册
+
+**Agent instance**:
+A stable native-session record within one Device registration, identified remotely by an opaque source key. The raw vendor session identity remains on the endpoint, and Runtime is metadata rather than authority.
+_Equivalent (zh-CN)_: Agent 实例
+
+**Browser session**:
+PairRoom's revocable authenticated browser authority for one deployment and User. It is distinct from the identity provider's tokens, device grants and Binding grants.
+_Equivalent (zh-CN)_: 浏览器会话
+
+**Device grant**:
+Application-issued CLI authority bound to the deployment, trusted origin, User, Device and an explicit scope, after browser-approved enrollment.
+_Equivalent (zh-CN)_: 设备授权
+
+**Binding grant**:
+Narrow enterprise authority for one Room, slot, Binding and generation. Current User, Device, membership and Binding state are checked before operations or receipt disclosure.
+_Equivalent (zh-CN)_: 绑定授权
+
+**Ownership pending recovery**:
+The state of a Room whose Owner is disabled: ownership and history remain, members retain only their existing ACL, and ordinary Owner actions are unavailable. Re-enabling the User restores only untransferred ownership, while revoked credentials stay revoked.
+_Equivalent (zh-CN)_: 所有权待恢复
+
+**Governance recovery**:
+The separately authorized, freshly reauthenticated administrator action that transfers a disabled Owner's Room to an existing eligible active Member, with atomic audit and no administrator content access.
+_Equivalent (zh-CN)_: 治理恢复
