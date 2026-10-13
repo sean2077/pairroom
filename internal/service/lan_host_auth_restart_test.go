@@ -46,7 +46,7 @@ func restartLANAuthorizationFixture(t *testing.T, old *lanHostFixture) *lanHostF
 		t.Error("cold LAN admission attempted to start a vendor adapter")
 		return Binding{}, nil, errors.New("unexpected adapter")
 	})
-	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn"}, nativeWake: nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return context.Canceled }}})
+	factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn"}, nativeWake: nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return context.Canceled }}})
 	manager, err := NewRuntimeManager(registry, factory, RuntimeManagerConfig{Limit: 5, IdleTimeout: time.Hour})
 	if err != nil {
 		t.Fatal(err)

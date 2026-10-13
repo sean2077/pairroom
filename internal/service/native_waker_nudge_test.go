@@ -66,7 +66,7 @@ func (f *nudgeFixture) open() {
 	}
 	f.t.Cleanup(func() { _ = engine.Close() })
 	f.engine = engine
-	f.waker = newNativeWaker(nativeWakerConfig{
+	f.waker = newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Relay: engine,
 		Now:   clock,
 		Wait:  func(context.Context, time.Duration) error { return nil },

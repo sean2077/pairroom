@@ -42,6 +42,8 @@ idle Runtime separately from admitting a wake leaves a gap in which suspension
 can cancel an already authorized effect. The shared admission boundary and short
 effect lease close those races. Grace and capability checks hold no possible
 external effect, so making them pin a Runtime would keep unavailable peers alive.
+A confirmed native queue entry is different from a capability probe in progress: the already-existing nudge covers unattempted FIFO input. That waiting-input lease survives until effect admission or ordinary queue/lifecycle cleanup, with bounded probe backoff even if the native application stays closed. A failed inspection does not gain this lease.
+
 The [Protocol](../PROTOCOL.md#automatic-idle-peer-wake) owns the exact rechecks,
 lock order, maintenance, timing and shutdown rules.
 

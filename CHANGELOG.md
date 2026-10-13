@@ -4,6 +4,12 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- Check the bound Codex session's native queue before submitting a wake, so a prompt still queued during a long Desktop turn prevents another identical prompt after relay suppression expires or infers progress. Recheck an unchanged pending head with exponential backoff from 30 seconds to five minutes without spending wake reservations or rate budget; unavailable queue inspection fails closed and leaves foreground collection available. Back off repeated inspection failures, expose the actual queue suppression in read-only diagnostics, and retain bounded support for large queue responses and explicit probe deadlines.
+
+## [v5.16.0] — 2026-10-12
+
 ### Added
 
 - Add the enterprise service candidate: explicit operator initialization, configured OIDC, persistent browser and Device authorization, symmetric remote Native Bindings, shared Relay transactions and new-epoch delivery recovery. Add logical Projects, authorized administration and Room/Device/Agent/session management, account-isolated browser recovery, and restricted fresh-authentication ownership transfer. Add verified private attachments, full paginated history, stable human authors, bounded resource admission, metadata health/diagnostics and offline SQL/object backup with pristine-target restore. Authority changes invalidate affected approvals; restore and revocation retire their scoped credentials without rewriting history. Operational and capacity evidence remains scoped to its tested environment; this is not a release, simultaneous-500-Room throughput promise or authenticated vendor acceptance claim.

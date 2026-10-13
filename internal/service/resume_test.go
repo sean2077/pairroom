@@ -67,7 +67,7 @@ func TestResumePendingRoomsActivatesOnlyRoomsWithWakeWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			factory := EmbeddedRuntimeFactory(f.registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn-claude"}, Codex: agent.Config{Command: "missing-do-not-spawn-codex"}, nativeWake: nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return context.Canceled }}})
+			factory := EmbeddedRuntimeFactory(f.registry, EmbeddedRuntimeConfig{Claude: agent.Config{Command: "missing-do-not-spawn-claude"}, Codex: agent.Config{Command: "missing-do-not-spawn-codex"}, nativeWake: nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return context.Canceled }}})
 			restarted, err := NewRuntimeManager(f.registry, factory, RuntimeManagerConfig{Limit: 5, IdleTimeout: time.Hour})
 			if err != nil {
 				t.Fatal(err)
@@ -165,7 +165,7 @@ func TestResumePendingNativeRoomsWithoutExternalWakeStillNotify(t *testing.T) {
 			}
 			notifier := NewNotifier(NotifierConfig{})
 			t.Cleanup(notifier.Close)
-			factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Notifier: notifier, nativeWake: nativeWakerConfig{
+			factory := EmbeddedRuntimeFactory(registry, EmbeddedRuntimeConfig{Notifier: notifier, nativeWake: nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 				Run: func(context.Context, string, ...string) error {
 					t.Error("unsupported runtime submitted an external wake")
 					return errors.New("must not wake")

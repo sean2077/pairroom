@@ -81,7 +81,7 @@ func (r heldWakeReservation) ReserveWake(id string, target model.ActorID) error 
 }
 
 func TestNativeIdleCloseCannotCrossAdmittedReservation(t *testing.T) {
-	manager, rt, id, m, clock := newIdleBoundaryFixture(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { return nil }})
+	manager, rt, id, m, clock := newIdleBoundaryFixture(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { return nil }})
 	committed, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
@@ -113,7 +113,7 @@ func TestNativeAdmittedIdleCloseBlocksUnattemptedProbe(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	var calls atomic.Int64
-	manager, rt, id, m, clock := newIdleBoundaryFixture(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { close(entered); <-release; return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	manager, rt, id, m, clock := newIdleBoundaryFixture(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { close(entered); <-release; return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	defer unblock()
 	rt.scheduleWake(m.ID)
 	select {
@@ -147,7 +147,7 @@ func TestNativeIdleCloseRechecksStaleManagerObservation(t *testing.T) {
 	started, finish := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(finish) }) }
-	manager, rt, id, m, clock := newIdleBoundaryFixture(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return nil }, Run: func(ctx context.Context, _ string, _ ...string) error {
+	manager, rt, id, m, clock := newIdleBoundaryFixture(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(ctx context.Context, _ string, _ ...string) error {
 		close(started)
 		select {
 		case <-finish:
@@ -179,7 +179,7 @@ func TestNativeIdleCloseRechecksStaleManagerObservation(t *testing.T) {
 }
 
 func TestNativeIdleCloseRechecksRecentHTTPUse(t *testing.T) {
-	_, rt, _, _, clock := newIdleBoundaryFixture(t, nativeWakerConfig{})
+	_, rt, _, _, clock := newIdleBoundaryFixture(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue})
 	release := rt.acquire()
 	if rt.TryBeginIdleClose(time.Unix(clock.Load()+120, 0)) {
 		t.Fatal("idle close crossed HTTP request")
