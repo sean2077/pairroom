@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,11 +86,14 @@ type EnterpriseSendResult struct {
 // EnterpriseRoomSnapshot is the authenticated read-only snapshot the
 // constructor and rebuild path consume.
 type EnterpriseRoomSnapshot struct {
-	RoomID   string
-	HostMode string
-	Events   []model.Event
-	Seq      uint64
-	Revision uint64
+	DeploymentID   string
+	OrgID          string
+	CreationUserID string
+	RoomID         string
+	HostMode       string
+	Events         []model.Event
+	Seq            uint64
+	Revision       uint64
 }
 
 // EnterpriseCommandError carries the port's stable outcome and class.
@@ -111,8 +115,12 @@ func (e *EnterpriseCommandError) Unwrap() error { return e.Err }
 // enterpriseDeployment is fixed at construction; the acting user is per
 // command. openAuth is used for the initial snapshot only.
 type enterpriseState struct {
-	deployment string
-	openAuth   EnterpriseAuth
+	deployment          string
+	orgID               string
+	creationUserID      string
+	creationEventID     string
+	creationPayloadHash [sha256.Size]byte
+	openAuth            EnterpriseAuth
 }
 
 // EnterprisePort is implemented by the SQL command port (the sqlstore
@@ -182,26 +190,36 @@ func OpenEnterprise(ctx context.Context, cfg Config, port EnterprisePort, auth E
 	if cfg.RoomID == "" || auth.Deployment == "" || auth.UserID == "" {
 		return nil, errors.New("relay: enterprise Room, deployment and user are required")
 	}
+	if cfg.SharedSlot != "" {
+		return nil, errors.New("relay: enterprise Room cannot inherit LAN sharing")
+	}
+	for slot, runtime := range cfg.Runtimes {
+		if !slot.ValidParticipant() || runtime != "" && runtime != model.RuntimeAwaitingBinding {
+			return nil, errors.New("relay: enterprise Room cannot inherit Runtime selections")
+		}
+	}
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Now().UTC() }
 	}
 	if cfg.Lease <= 0 {
 		cfg.Lease = DeliveryLease
 	}
-	initializeDynamicRuntimes(&cfg)
 	openCtx, cancel := context.WithTimeout(ctx, enterpriseOpenBudget)
 	defer cancel()
 	snapshot, err := port.ReadonlySnapshot(openCtx, auth, cfg.RoomID)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateEnterpriseSnapshot(cfg.RoomID, snapshot); err != nil {
+	if err := validateEnterpriseSnapshot(cfg.RoomID, auth.Deployment, snapshot); err != nil {
 		return nil, err
 	}
 	e := emptyEngine(cfg)
 	e.enterprise = true
 	e.enterprisePort = port
-	e.enterpriseState = enterpriseState{deployment: auth.Deployment, openAuth: auth}
+	e.enterpriseState = enterpriseState{
+		deployment: auth.Deployment, orgID: snapshot.OrgID, creationUserID: snapshot.CreationUserID, openAuth: auth,
+		creationEventID: snapshot.Events[0].ID, creationPayloadHash: sha256.Sum256(snapshot.Events[0].Data),
+	}
 	e.gate = make(chan struct{}, 1)
 	if err := e.replaySnapshotLocked(snapshot); err != nil {
 		return nil, err
@@ -212,12 +230,18 @@ func OpenEnterprise(ctx context.Context, cfg Config, port EnterprisePort, auth E
 
 // validateEnterpriseSnapshot refuses a snapshot that is not this Room's
 // native-hosted, contiguous log — before any projection is built.
-func validateEnterpriseSnapshot(roomID string, snapshot EnterpriseRoomSnapshot) error {
+func validateEnterpriseSnapshot(roomID, deploymentID string, snapshot EnterpriseRoomSnapshot) error {
 	if snapshot.RoomID != roomID {
 		return fmt.Errorf("relay: enterprise snapshot Room %q does not match %q", snapshot.RoomID, roomID)
 	}
 	if snapshot.HostMode != string(model.HostNative) {
 		return fmt.Errorf("relay: enterprise snapshot host mode %q is not native", snapshot.HostMode)
+	}
+	if snapshot.DeploymentID != deploymentID || snapshot.OrgID == "" || snapshot.CreationUserID == "" {
+		return errors.New("relay: enterprise snapshot is missing or conflicts with trusted origin metadata")
+	}
+	if len(snapshot.Events) == 0 {
+		return errors.New("relay: enterprise snapshot requires a creation fact")
 	}
 	if uint64(len(snapshot.Events)) != snapshot.Seq {
 		return fmt.Errorf("relay: enterprise snapshot carries %d events for sequence %d", len(snapshot.Events), snapshot.Seq)
@@ -226,6 +250,16 @@ func validateEnterpriseSnapshot(roomID string, snapshot EnterpriseRoomSnapshot) 
 		if event.RoomID != roomID || event.Seq != uint64(i+1) {
 			return fmt.Errorf("relay: enterprise snapshot event %d is not the contiguous fact %d of %q", i, i+1, roomID)
 		}
+		if i > 0 && event.Kind == model.EnterpriseRoomCreatedKind {
+			return errors.New("relay: enterprise snapshot contains a duplicate creation fact")
+		}
+	}
+	creation, err := model.DecodeEnterpriseRoomCreation(snapshot.Events[0])
+	if err != nil {
+		return fmt.Errorf("relay: enterprise creation: %w", err)
+	}
+	if creation.Enterprise.DeploymentID != snapshot.DeploymentID || creation.Enterprise.OrgID != snapshot.OrgID || creation.Enterprise.InitialOwnerUserID != snapshot.CreationUserID {
+		return errors.New("relay: enterprise creation conflicts with trusted origin metadata")
 	}
 	return nil
 }
@@ -236,7 +270,12 @@ func validateEnterpriseSnapshot(roomID string, snapshot EnterpriseRoomSnapshot) 
 // the replayed configuration) only after the whole projection validated; a
 // failure leaves the existing projection untouched.
 func (e *Engine) replaySnapshotLocked(snapshot EnterpriseRoomSnapshot) error {
-	fresh := emptyEngine(e.cfg)
+	// Creation validation already fixed Native v9 and vacant slots. Start every
+	// replay from those durable choices, never the previous projection's Runtime.
+	cfg := cloneConfig(e.cfg)
+	cfg.DynamicBindings = true
+	initializeDynamicRuntimes(&cfg)
+	fresh := emptyEngine(cfg)
 	fresh.replaying = true
 	for _, event := range snapshot.Events {
 		if err := fresh.apply(event); err != nil {
@@ -258,6 +297,7 @@ func (e *Engine) replaySnapshotLocked(snapshot EnterpriseRoomSnapshot) error {
 // and the replayed configuration. Process-local observations (waiters,
 // nudges, turn ends, the change channel and the gate) are preserved.
 func (e *Engine) adoptDurableLocked(fresh *Engine) {
+	e.cfg.DynamicBindings = fresh.cfg.DynamicBindings
 	e.cfg.Runtimes = fresh.cfg.Runtimes
 	e.lanWakeResults = fresh.lanWakeResults
 	e.lanInvites = fresh.lanInvites
@@ -540,7 +580,15 @@ func (e *Engine) rebuildEnterpriseLocked(ctx context.Context, auth EnterpriseAut
 		e.mu.Unlock()
 		return err
 	}
-	if err := validateEnterpriseSnapshot(e.cfg.RoomID, snapshot); err != nil {
+	if err := validateEnterpriseSnapshot(e.cfg.RoomID, e.enterpriseState.deployment, snapshot); err != nil {
+		e.mu.Lock()
+		e.fatal = err
+		e.signal()
+		e.mu.Unlock()
+		return err
+	}
+	if snapshot.OrgID != e.enterpriseState.orgID || snapshot.CreationUserID != e.enterpriseState.creationUserID || snapshot.Events[0].ID != e.enterpriseState.creationEventID || sha256.Sum256(snapshot.Events[0].Data) != e.enterpriseState.creationPayloadHash {
+		err := errors.New("relay: enterprise rebuild changed the Room origin")
 		e.mu.Lock()
 		e.fatal = err
 		e.signal()

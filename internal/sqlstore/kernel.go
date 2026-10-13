@@ -199,7 +199,7 @@ func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *de
 }
 
 // opPlan is the operation-specific half of the shared transaction state
-// machine: the append_fact and human_send entries each supply one, and the
+// machine: append_fact, human_send and room_create each supply one, and the
 // machine below is the only transition implementation. The encoding budget is
 // per operation: append_fact keeps its original 262144-byte gate unchanged,
 // while human_send carries an explicitly bounded larger budget for its
@@ -211,6 +211,17 @@ type opPlan struct {
 	hash             [32]byte
 	expectedRevision uint64
 	encodingBudget   int
+	roomCreate       *model.EnterpriseRoomIntent
+}
+
+// ownershipLock is fixed before any row is locked. Room creation and its
+// resolution must exclude each other even when the target Room does not yet
+// exist; existing operations retain their shared ownership guard.
+func (p opPlan) ownershipLock() string {
+	if p.roomCreate != nil {
+		return lockExclusive
+	}
+	return lockShare
 }
 
 // Commit runs the transaction state machine for one append_fact command and
@@ -296,7 +307,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	var ownerEpoch int64
 	var ownerPID int32
 	var ownerStart time.Time
-	if err := tx.QueryRow(ctx, `SELECT epoch, lease_pid, lease_backend_start FROM `+s.table("ownership")+` WHERE id FOR SHARE`).Scan(&ownerEpoch, &ownerPID, &ownerStart); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT epoch, lease_pid, lease_backend_start FROM `+s.table("ownership")+` WHERE id`+plan.ownershipLock()).Scan(&ownerEpoch, &ownerPID, &ownerStart); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	var locked dependencyState
@@ -327,11 +338,19 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	// Live read authorization gates every disclosure, including a replay of
 	// the caller's own accepted operation. A disabled or removed principal is
 	// refused before any stored result is shown.
-	switch {
-	case locked.roomMissing:
-		return refused3(ClassRoomNotFound, nil)
-	case !locked.readAllowed():
-		return refused3(ClassAuthorization, nil)
+	if plan.roomCreate != nil {
+		// A new Room has no membership yet. Every creation still requires an
+		// admitted, enabled User before even a body-free conflict is shown.
+		if locked.userMissing || locked.userDisabled {
+			return refused3(ClassAuthorization, nil)
+		}
+	} else {
+		switch {
+		case locked.roomMissing:
+			return refused3(ClassRoomNotFound, nil)
+		case !locked.readAllowed():
+			return refused3(ClassAuthorization, nil)
+		}
 	}
 
 	// Idempotency: same key and identical stable mutation replays the original
@@ -347,6 +366,11 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
 	switch {
 	case err == nil:
+		if plan.roomCreate != nil && !locked.readAllowed() {
+			// A receipt belongs to the principal, but current Room read
+			// permission is still required before hash or result disclosure.
+			return refused3(ClassAuthorization, nil)
+		}
 		if !bytes.Equal(storedHash, plan.hash[:]) {
 			kerr := &KernelError{Outcome: OutcomeConflict, Class: ClassPayloadConflict}
 			return Result{Outcome: OutcomeConflict, Class: ClassPayloadConflict, Err: kerr, Revision: uint64(resultRevision)}, kerr, false
@@ -354,6 +378,11 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		original, err := s.loadFact(ctx, tx, plan.key.RoomID, uint64(resultSeq))
 		if err != nil {
 			return refused3(ClassStoredFactUnreadable, err)
+		}
+		if plan.roomCreate != nil {
+			if err := s.validateRoomCreateReplay(ctx, tx, plan, original); err != nil {
+				return refused3(ClassStoredFactUnreadable, err)
+			}
 		}
 		// Replayed returns the original stored result, including the Room
 		// revision that original commit defined — never the current revision,
@@ -365,8 +394,14 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		return s.postBeginFailure(ctx, err)
 	}
 
-	// A new operation additionally requires a writer role.
-	if !locked.writeAllowed() {
+	if plan.roomCreate != nil {
+		if !locked.roomMissing {
+			// No matching operation exists: an existing ID is never adopted,
+			// upserted or disclosed, including for its current owner.
+			return refused3(ClassRoomTaken, nil)
+		}
+	} else if !locked.writeAllowed() {
+		// A new operation on an existing Room requires a writer role.
 		return refused3(ClassAuthorization, nil)
 	}
 
@@ -384,11 +419,23 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		return refused3(ClassRangeExceeded, nil)
 	}
 
+	var createOrg string
+	if plan.roomCreate != nil {
+		fact, createOrg, err = s.creationFact(ctx, tx, plan)
+		if err != nil {
+			return s.postBeginFailure(ctx, err)
+		}
+	}
 	stored := fact
 	stored.Seq = locked.currentSeq + 1
 	encoding, err := json.Marshal(stored)
 	if err != nil || len(encoding) > plan.encodingBudget {
 		return refused3(ClassInvalidFact, err)
+	}
+	if plan.roomCreate != nil {
+		if err := s.insertCreatedRoom(ctx, tx, plan, createOrg, stored.CreatedAt); err != nil {
+			return s.postBeginFailure(ctx, err)
+		}
 	}
 	now := time.Now().UTC()
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("room_events")+` (room_id, seq, event_id, fact_version, event_encoding, kind, actor, created_at, origin_user) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,

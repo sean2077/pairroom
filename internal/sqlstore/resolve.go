@@ -104,13 +104,14 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		_ = tx.Rollback(rctx)
 	}()
 
-	// The same global lock order; reads only, so FOR SHARE throughout. The
-	// absence proof is sound because the only writer is the lease holder and
-	// this Store serializes Commit and Resolve.
+	// The same global lock order and preselected ownership mode. Room-create
+	// resolution takes FOR UPDATE on ownership before any authorization row,
+	// so it waits for an uncertain creation even if no Room row exists yet.
+	// Other operations keep shared ownership and Room guards.
 	var ownerEpoch int64
 	var ownerPID int32
 	var ownerStart time.Time
-	if err := tx.QueryRow(ctx, `SELECT epoch, lease_pid, lease_backend_start FROM `+s.table("ownership")+` WHERE id FOR SHARE`).Scan(&ownerEpoch, &ownerPID, &ownerStart); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT epoch, lease_pid, lease_backend_start FROM `+s.table("ownership")+` WHERE id`+plan.ownershipLock()).Scan(&ownerEpoch, &ownerPID, &ownerStart); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			s.poisoned = errLeaseLost
 			return refused(ClassLeaseLost, errLeaseLost)
@@ -132,11 +133,17 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		return resolveIncomplete(ctx, err)
 	}
 
-	switch {
-	case locked.roomMissing:
-		return refused(ClassRoomNotFound, nil)
-	case !locked.readAllowed():
-		return refused(ClassAuthorization, nil)
+	if plan.roomCreate != nil {
+		if locked.userMissing || locked.userDisabled {
+			return refused(ClassAuthorization, nil)
+		}
+	} else {
+		switch {
+		case locked.roomMissing:
+			return refused(ClassRoomNotFound, nil)
+		case !locked.readAllowed():
+			return refused(ClassAuthorization, nil)
+		}
 	}
 
 	var storedHash []byte
@@ -149,6 +156,9 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal).Scan(&storedHash, &resultSeq, &resultRevision)
 	switch {
 	case err == nil:
+		if plan.roomCreate != nil && !locked.readAllowed() {
+			return refused(ClassAuthorization, nil)
+		}
 		if !bytes.Equal(storedHash, plan.hash[:]) {
 			// The stored payload hash is authoritative; a differing mutation
 			// under the same key is a definite conflict.
@@ -157,12 +167,23 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		}
 		original, err := s.loadFact(ctx, tx, plan.key.RoomID, uint64(resultSeq))
 		if err != nil {
+			if plan.roomCreate != nil {
+				return refused(ClassStoredFactUnreadable, err)
+			}
 			return resolveIncomplete(ctx, err)
+		}
+		if plan.roomCreate != nil {
+			if err := s.validateRoomCreateReplay(ctx, tx, plan, original); err != nil {
+				return refused(ClassStoredFactUnreadable, err)
+			}
 		}
 		// The original stored result, including the Room revision that the
 		// original commit defined — never the current revision.
 		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: uint64(resultRevision), Fact: original}, nil
 	case errors.Is(err, pgx.ErrNoRows):
+		if plan.roomCreate != nil && !locked.roomMissing {
+			return refused(ClassRoomTaken, nil)
+		}
 		return Result{Outcome: OutcomeNotCommitted, Revision: locked.revision}, nil
 	default:
 		return resolveIncomplete(ctx, err)

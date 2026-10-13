@@ -15,11 +15,14 @@ import (
 // Room: the authoritative room row (host mode, sequence, revision) plus the
 // complete contiguous event log.
 type RoomSnapshot struct {
-	RoomID   string
-	HostMode string
-	Events   []model.Event
-	Seq      uint64
-	Revision uint64
+	RoomID         string
+	DeploymentID   string
+	OrgID          string
+	CreationUserID string
+	HostMode       string
+	Events         []model.Event
+	Seq            uint64
+	Revision       uint64
 }
 
 // ReadonlySnapshot serves the authenticated read side. It runs under the same
@@ -103,8 +106,8 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 	if err := s.readDependencies(ctx, tx, roomID, auth.UserID, &locked, lockShare); err != nil {
 		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
-	var hostMode string
-	err = tx.QueryRow(ctx, `SELECT host_mode, current_seq, revision FROM `+s.table("rooms")+` WHERE room_id = $1 FOR SHARE`, roomID).Scan(&hostMode, &locked.currentSeq, &locked.revision)
+	var hostMode, orgID string
+	err = tx.QueryRow(ctx, `SELECT host_mode, current_seq, revision, org_id FROM `+s.table("rooms")+` WHERE room_id = $1 FOR SHARE`, roomID).Scan(&hostMode, &locked.currentSeq, &locked.revision, &orgID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		locked.roomMissing = true
 	} else if err != nil {
@@ -126,7 +129,7 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 		return RoomSnapshot{}, refusedError(ClassAuthorization, nil)
 	}
 
-	rows, err := tx.Query(ctx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
+	rows, err := tx.Query(ctx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding, origin_user FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
 	if err != nil {
 		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
@@ -135,13 +138,14 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 	// sequence counter is validated, never trusted as an allocation hint, so a
 	// corrupt-but-bigint-valid counter cannot panic or exhaust memory.
 	var events []model.Event
+	var creationUserID string
 	var expected uint64 = 1
 	for rows.Next() {
 		var seq int64
-		var eventID, kind, actor string
+		var eventID, kind, actor, originUser string
 		var factVersion int
 		var encoding []byte
-		if err := rows.Scan(&seq, &eventID, &factVersion, &kind, &actor, &encoding); err != nil {
+		if err := rows.Scan(&seq, &eventID, &factVersion, &kind, &actor, &encoding, &originUser); err != nil {
 			return RoomSnapshot{}, incompleteError(ctx, err)
 		}
 		if uint64(seq) != expected {
@@ -152,6 +156,9 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 			return RoomSnapshot{}, refusedError(ClassStateInvalid, err)
 		}
 		events = append(events, event)
+		if seq == 1 {
+			creationUserID = originUser
+		}
 		expected++
 	}
 	if err := rows.Err(); err != nil {
@@ -160,7 +167,8 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 	if expected-1 != locked.currentSeq {
 		return RoomSnapshot{}, refusedError(ClassStateInvalid, fmt.Errorf("event log ends at %d but the room row records sequence %d", expected-1, locked.currentSeq))
 	}
-	return RoomSnapshot{RoomID: roomID, HostMode: hostMode, Events: events, Seq: locked.currentSeq, Revision: locked.revision}, nil
+	return RoomSnapshot{RoomID: roomID, DeploymentID: s.cfg.DeploymentID, OrgID: orgID, CreationUserID: creationUserID,
+		HostMode: hostMode, Events: events, Seq: locked.currentSeq, Revision: locked.revision}, nil
 }
 
 // refusedError is the error form of a definite refusal for read-only APIs

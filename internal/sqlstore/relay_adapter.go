@@ -48,11 +48,14 @@ func (p *RoomPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseAu
 		return relay.EnterpriseRoomSnapshot{}, adaptPortError(err)
 	}
 	return relay.EnterpriseRoomSnapshot{
-		RoomID:   snapshot.RoomID,
-		HostMode: snapshot.HostMode,
-		Events:   snapshot.Events,
-		Seq:      snapshot.Seq,
-		Revision: snapshot.Revision,
+		RoomID:         snapshot.RoomID,
+		DeploymentID:   snapshot.DeploymentID,
+		OrgID:          snapshot.OrgID,
+		CreationUserID: snapshot.CreationUserID,
+		HostMode:       snapshot.HostMode,
+		Events:         snapshot.Events,
+		Seq:            snapshot.Seq,
+		Revision:       snapshot.Revision,
 	}, nil
 }
 

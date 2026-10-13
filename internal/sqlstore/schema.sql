@@ -246,7 +246,7 @@ CREATE TABLE operations (
   room_id           text NOT NULL,
   binding_id        text NOT NULL DEFAULT '' CHECK (binding_id = ''),
   generation        bigint NOT NULL DEFAULT 0 CHECK (generation = 0),
-  op_kind           text NOT NULL CHECK (op_kind IN ('append_fact', 'human_send')),
+  op_kind           text NOT NULL CONSTRAINT operations_op_kind_check CHECK (op_kind IN ('append_fact', 'human_send', 'room_create')),
   identifier        text NOT NULL CHECK (identifier <> ''),
   principal         text NOT NULL CHECK (principal <> ''),
   intent_hash       bytea NOT NULL CHECK (octet_length(intent_hash) = 32),

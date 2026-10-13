@@ -186,7 +186,7 @@ func runS3cHelperProcess() {
 			return engine, nil
 		}
 		auth := relay.EnterpriseAuth{Deployment: command.Deployment, UserID: command.UserID}
-		engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: command.Room, Runtimes: roomRuntimes()}, port, auth)
+		engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: command.Room}, port, auth)
 		if err != nil {
 			return nil, err
 		}
@@ -560,7 +560,8 @@ func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 	for _, mode := range []string{"drop-response", "break-on-commit"} {
 		t.Run(mode, func(t *testing.T) {
 			schema, _ := sqltest.CreateSchema(t, dsn)
-			admin := sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+			admin := sqltest.SeedEnterpriseRoom(t, dsn, schema, "u-owner2")
+			birthCounts := rowCounts3c(t, admin, "room-1")
 			proxy := sqltest.StartProxy(t, mode)
 
 			// The caller retains the original typed request — Room, principal,
@@ -592,16 +593,16 @@ func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 			switch mode {
 			case "drop-response":
 				// The server accepted the commit before the response was lost.
-				if before != [3]int64{1, 1, 1} {
+				if before != [3]int64{birthCounts[0] + 1, birthCounts[1] + 1, birthCounts[2] + 1} {
 					t.Fatalf("accepted-then-lost rows: %v", before)
 				}
-				originalID, originalCreated, originalText, _ = storedFactMessage(t, admin, "room-1", 1)
+				originalID, originalCreated, originalText, _ = storedFactMessage(t, admin, "room-1", birthCounts[0]+1)
 				if originalText != request.Text {
 					t.Fatal("the accepted fact did not store the complete original text")
 				}
 			case "break-on-commit":
 				// The COMMIT never reached the server: the operation is absent.
-				if before != [3]int64{0, 0, 0} {
+				if before != birthCounts {
 					t.Fatalf("broken-commit rows: %v", before)
 				}
 			}
@@ -680,7 +681,7 @@ func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 				if after[0] != before[0]+1 || after[1] != before[1]+1 || after[2] != before[2]+1 {
 					t.Fatalf("explicit re-send did not add exactly one fact/operation/audit: %v -> %v", before, after)
 				}
-				storedID, _, storedText, _ := storedFactMessage(t, admin, "room-1", 1)
+				storedID, _, storedText, _ := storedFactMessage(t, admin, "room-1", birthCounts[0]+1)
 				if storedID != sent.MessageID || storedText != request.Text {
 					t.Fatalf("the stored fact is %q/%q, want the explicit request %q", storedID, sent.MessageID, request.Text)
 				}
@@ -696,11 +697,11 @@ func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 			if accepted.Ops != "send" || accepted.Outcome != s3cOutcomeAccepted || accepted.To != "slot1" || accepted.Commits != 2 {
 				t.Fatalf("second-identity send: %+v", accepted)
 			}
-			storedID, _, _, storedTo := storedFactMessage(t, admin, "room-1", 2)
+			storedID, _, _, storedTo := storedFactMessage(t, admin, "room-1", birthCounts[0]+2)
 			if storedID != accepted.MessageID || storedTo != "slot1" {
 				t.Fatalf("stored fact %q to %q, want %q to slot1", storedID, storedTo, accepted.MessageID)
 			}
-			if origin := storedOriginUser(t, admin, "room-1", 2); origin != "u-owner2" {
+			if origin := storedOriginUser(t, admin, "room-1", birthCounts[0]+2); origin != "u-owner2" {
 				t.Fatalf("stored principal = %q, want u-owner2", origin)
 			}
 			if storedHash := eventEncodingsHash(t, admin, "room-1"); storedHash == roomOneHash {
@@ -726,7 +727,8 @@ func TestS3cProcessRebuildBothUnknownShapes(t *testing.T) {
 func TestS3cSecondWriterRefusedWhileOldStoreLives(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
+	birthCounts := rowCounts3c(t, admin, "room-1")
 	proxy := sqltest.StartProxy(t, "break-on-commit")
 	request := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-1", ClientID: "s3c-1", To: "slot2", Text: "rebuild body"}
 
@@ -766,7 +768,7 @@ func TestS3cSecondWriterRefusedWhileOldStoreLives(t *testing.T) {
 		t.Fatalf("recovery send: %+v", accepted)
 	}
 	after := rowCounts3c(t, admin, "room-1")
-	if after != [3]int64{1, 1, 1} {
+	if after != [3]int64{birthCounts[0] + 1, birthCounts[1] + 1, birthCounts[2] + 1} {
 		t.Fatalf("recovery rows: %v", after)
 	}
 	replacement.exitAndWait(t)
@@ -782,14 +784,15 @@ func TestS3cSecondWriterRefusedWhileOldStoreLives(t *testing.T) {
 func TestS3cObjectLevelInstanceRebuildIsSimulationOnly(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
+	birthCounts := rowCounts3c(t, admin, "room-1")
 	proxy := sqltest.StartProxy(t, "drop-response")
 	ctx := context.Background()
 	auth := executeAuth("u-owner")
 
 	dbStore := openSQLStore(t, proxy.DSN(dsn), schema)
 	counting := &countingPort{inner: sqlstore.NewRoomPort(dbStore)}
-	oldEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, counting, auth)
+	oldEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1"}, counting, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,7 +807,7 @@ func TestS3cObjectLevelInstanceRebuildIsSimulationOnly(t *testing.T) {
 
 	freshStore := deployRebuild(t, dsn, schema, []*relay.Engine{oldEngine}, dbStore)
 	rowsBefore := rowCounts3c(t, admin, "room-1")
-	if rowsBefore != [3]int64{1, 1, 1} {
+	if rowsBefore != [3]int64{birthCounts[0] + 1, birthCounts[1] + 1, birthCounts[2] + 1} {
 		t.Fatalf("the rebuild changed the accepted fact rows: %v", rowsBefore)
 	}
 	commits, resolves := counting.commits.Load(), counting.resolves.Load()
@@ -819,7 +822,7 @@ func TestS3cObjectLevelInstanceRebuildIsSimulationOnly(t *testing.T) {
 	}
 
 	newPort := &countingPort{inner: sqlstore.NewRoomPort(freshStore)}
-	newEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, newPort, auth)
+	newEngine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1"}, newPort, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +849,7 @@ func TestS3cObjectLevelInstanceRebuildIsSimulationOnly(t *testing.T) {
 func TestS3cSyntheticUnverifiableVerificationSendsNothing(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
 	before := rowCounts3c(t, admin, "room-1")
 
 	stub := &syntheticUnverifiablePort{}
@@ -882,7 +885,7 @@ func (s *syntheticUnverifiablePort) ReadonlySnapshot(context.Context, relay.Ente
 func TestS3cRebuildVerificationRefusalsNeverSend(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
 	proxy := sqltest.StartProxy(t, "drop-response")
 	request := s3cCommand{Op: "send", Deployment: "dep-test", UserID: "u-owner", Room: "room-1", ClientID: "s3c-1", To: "slot2", Text: "rebuild body"}
 
@@ -961,18 +964,12 @@ func mustResolve(request s3cCommand) s3cCommand {
 func TestS3cRebuildInterruptsBothRoomsPreservingHistory(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
+	birthCounts := rowCounts3c(t, admin, "room-1")
 	ctx := context.Background()
-	if _, err := admin.Exec(ctx, `INSERT INTO rooms (room_id, org_id, host_mode, owner_user_id) VALUES ('room-2', 'org-test', 'native', 'u-owner')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := admin.Exec(ctx, `INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-2', 'org-test', 'u-owner', 'owner')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := admin.Exec(ctx, `INSERT INTO slot_generations (org_id, room_id, slot, generation) VALUES ('org-test', 'room-2', 'slot1', 1), ('org-test', 'room-2', 'slot2', 1)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := admin.Exec(ctx, `INSERT INTO room_slots (room_id, slot, current_generation) VALUES ('room-2', 'slot1', 1), ('room-2', 'slot2', 1)`); err != nil {
+	seedStore := openSQLStore(t, dsn, schema)
+	sqltest.CreateEnterpriseRoom(t, seedStore, "room-2", "u-owner")
+	if err := seedStore.Close(); err != nil {
 		t.Fatal(err)
 	}
 	proxy := sqltest.StartProxy(t, "drop-response")
@@ -1006,11 +1003,11 @@ func TestS3cRebuildInterruptsBothRoomsPreservingHistory(t *testing.T) {
 	// Room-1's accepted-then-lost fact is now durable; this is the state the
 	// rebuild must leave untouched.
 	roomOneBefore := rowCounts3c(t, admin, "room-1")
-	if roomOneBefore != [3]int64{1, 1, 1} {
+	if roomOneBefore != [3]int64{birthCounts[0] + 1, birthCounts[1] + 1, birthCounts[2] + 1} {
 		t.Fatalf("room-1 accepted-then-lost rows: %v", roomOneBefore)
 	}
 	roomOneHashBefore := eventEncodingsHash(t, admin, "room-1")
-	originalID, _, originalText, _ := storedFactMessage(t, admin, "room-1", 1)
+	originalID, _, originalText, _ := storedFactMessage(t, admin, "room-1", birthCounts[0]+1)
 	if originalText != request.Text {
 		t.Fatal("the accepted fact did not store the complete original text")
 	}

@@ -39,15 +39,38 @@ func openSQLStore(t *testing.T, dsn, schema string) *sqlstore.Store {
 func openRoom(t *testing.T, dbStore *sqlstore.Store, cfg relay.Config) *relay.Engine {
 	t.Helper()
 	cfg.RoomID = "room-1"
-	if cfg.Runtimes == nil {
-		cfg.Runtimes = roomRuntimes()
-	}
 	engine, err := relay.OpenEnterprise(context.Background(), cfg, sqlstore.NewRoomPort(dbStore), executeAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	return engine
+}
+
+// The SQL creation fact, rather than process configuration, supplies the
+// Native v9 identity. Opening it leaves both participant slots unbound.
+func TestEnterpriseTypedCreationOpensVacantNativeV9(t *testing.T) {
+	dsn := sqltest.RequireDSN(t)
+	schema, _ := sqltest.CreateSchema(t, dsn)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
+	before := rowCounts3c(t, admin, "room-1")
+	if before != [3]int64{1, 1, 1} {
+		t.Fatalf("birth prefix: %v", before)
+	}
+	engine := openRoom(t, openSQLStore(t, dsn, schema), relay.Config{})
+	snapshot := engine.Snapshot()
+	if snapshot.HostMode != model.HostNative || !snapshot.DynamicBindings || snapshot.Protocol != "pairroom-protocol/v9" || snapshot.Sequence != 1 || len(snapshot.Messages) != 0 {
+		t.Fatalf("creation projection: %+v", snapshot)
+	}
+	for _, slot := range []model.ActorID{model.ActorSlot1, model.ActorSlot2} {
+		binding := snapshot.Bindings[slot]
+		if engine.Runtimes()[slot] != model.RuntimeAwaitingBinding || snapshot.TargetGenerations[slot] != 1 || binding.Active || binding.BindID != "" || binding.SessionID != "" {
+			t.Fatalf("slot %s inferred a binding: %+v runtimes=%v targets=%v", slot, binding, engine.Runtimes(), snapshot.TargetGenerations)
+		}
+	}
+	if got := rowCounts3c(t, admin, "room-1"); got != before {
+		t.Fatalf("opening creation wrote state: %v -> %v", before, got)
+	}
 }
 
 // craftHumanSendCandidate builds a kernel-admissible candidate fact for the
@@ -78,7 +101,8 @@ func craftHumanSendCandidate(userID, clientID, to, text string) model.Event {
 func TestEnterpriseHumanSendOverRealPostgres(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema, "u-owner2")
+	beforeCounts := rowCounts3c(t, admin, "room-1")
 	engine := openRoom(t, openSQLStore(t, dsn, schema), relay.Config{})
 	ctx := context.Background()
 
@@ -102,7 +126,7 @@ func TestEnterpriseHumanSendOverRealPostgres(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM room_events), (SELECT count(*) FROM operations), (SELECT count(*) FROM audit)`).Scan(&events, &operations, &audits); err != nil {
 		t.Fatal(err)
 	}
-	if events != 1 || operations != 1 || audits != 1 {
+	if events != beforeCounts[0]+1 || operations != beforeCounts[1]+1 || audits != beforeCounts[2]+1 {
 		t.Fatalf("rows: events=%d operations=%d audits=%d", events, operations, audits)
 	}
 
@@ -139,7 +163,7 @@ func TestEnterpriseHumanSendOverRealPostgres(t *testing.T) {
 func TestEnterpriseCloseLeavesTheStoreUsable(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema)
+	sqltest.SeedEnterpriseRoom(t, dsn, schema)
 	dbStore := openSQLStore(t, dsn, schema)
 	ctx := context.Background()
 
@@ -171,7 +195,7 @@ func TestEnterpriseCloseLeavesTheStoreUsable(t *testing.T) {
 func TestEnterpriseUnknownFailsClosedWithProxy(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema)
+	sqltest.SeedEnterpriseRoom(t, dsn, schema)
 	proxy := sqltest.StartProxy(t, "drop-response")
 	dbStore := openSQLStore(t, proxy.DSN(dsn), schema)
 	engine := openRoom(t, dbStore, relay.Config{})
@@ -234,7 +258,7 @@ func (g *gatedPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseA
 func TestEnterprisePostcommitWindowHoldsTheGate(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+	sqltest.SeedEnterpriseRoom(t, dsn, schema, "u-owner2")
 	dbStore := openSQLStore(t, dsn, schema)
 
 	port := &gatedPort{inner: sqlstore.NewRoomPort(dbStore)}
@@ -244,11 +268,12 @@ func TestEnterprisePostcommitWindowHoldsTheGate(t *testing.T) {
 		close(aArrived)
 		<-releaseA
 	}
-	engine, err := relay.OpenEnterprise(context.Background(), relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
+	engine, err := relay.OpenEnterprise(context.Background(), relay.Config{RoomID: "room-1"}, port, executeAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	baseSeq := engine.Snapshot().Sequence
 
 	aDone := make(chan error, 1)
 	go func() {
@@ -282,7 +307,7 @@ func TestEnterprisePostcommitWindowHoldsTheGate(t *testing.T) {
 	if got := port.entered.Load(); got != 2 {
 		t.Fatalf("port entries after both commands: %d", got)
 	}
-	if snapshot := engine.Snapshot(); len(snapshot.Messages) != 2 || snapshot.Sequence != 2 {
+	if snapshot := engine.Snapshot(); len(snapshot.Messages) != 2 || snapshot.Sequence != baseSeq+2 {
 		t.Fatalf("snapshot: messages=%d sequence=%d", len(snapshot.Messages), snapshot.Sequence)
 	}
 }
@@ -293,7 +318,7 @@ func TestEnterprisePostcommitWindowHoldsTheGate(t *testing.T) {
 func TestEnterpriseReplayDoesNotRewindOrNotify(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema)
+	sqltest.SeedEnterpriseRoom(t, dsn, schema)
 
 	var appends atomic.Int64
 	var attentions atomic.Int64
@@ -302,6 +327,7 @@ func TestEnterpriseReplayDoesNotRewindOrNotify(t *testing.T) {
 		OnAttention: func(relay.Attention) { attentions.Add(1) },
 	})
 	ctx := context.Background()
+	baseSeq := engine.Snapshot().Sequence
 
 	first, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: "h1", Text: "one", To: model.ActorSlot2})
 	if err != nil {
@@ -322,7 +348,7 @@ func TestEnterpriseReplayDoesNotRewindOrNotify(t *testing.T) {
 	if appends.Load() != appendsBefore || attentions.Load() != attentionsBefore {
 		t.Fatalf("replay notified: appends %d->%d attentions %d->%d", appendsBefore, appends.Load(), attentionsBefore, attentions.Load())
 	}
-	if snapshot := engine.Snapshot(); snapshot.Sequence != 2 {
+	if snapshot := engine.Snapshot(); snapshot.Sequence != baseSeq+2 {
 		t.Fatalf("replay rewound the cursor: %d", snapshot.Sequence)
 	}
 }
@@ -333,10 +359,11 @@ func TestEnterpriseReplayDoesNotRewindOrNotify(t *testing.T) {
 func TestEnterpriseStaleCASRebuildsFromSnapshot(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+	sqltest.SeedEnterpriseRoom(t, dsn, schema, "u-owner2")
 	dbStore := openSQLStore(t, dsn, schema)
 	engine := openRoom(t, dbStore, relay.Config{})
 	ctx := context.Background()
+	baseSeq := engine.Snapshot().Sequence
 
 	if _, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: "s1", Text: "one", To: model.ActorSlot2}); err != nil {
 		t.Fatal(err)
@@ -349,8 +376,8 @@ func TestEnterpriseStaleCASRebuildsFromSnapshot(t *testing.T) {
 		Intent:   sqlstore.HumanSendIntent{To: "slot2", Text: "direct body"},
 		Fact:     craftHumanSendCandidate("u-owner", "direct-1", "slot2", "direct body"),
 	}
-	direct.ExpectedRevision = 1
-	if result, err := dbStore.CommitHumanSend(ctx, direct); err != nil || result.Seq != 2 {
+	direct.ExpectedRevision = baseSeq + 1
+	if result, err := dbStore.CommitHumanSend(ctx, direct); err != nil || result.Seq != baseSeq+2 {
 		t.Fatalf("direct kernel commit: %+v %v", result, err)
 	}
 
@@ -362,7 +389,7 @@ func TestEnterpriseStaleCASRebuildsFromSnapshot(t *testing.T) {
 		t.Fatalf("message: %+v", message)
 	}
 	snapshot := engine.Snapshot()
-	if snapshot.Sequence != 3 || len(snapshot.Messages) != 3 {
+	if snapshot.Sequence != baseSeq+3 || len(snapshot.Messages) != 3 {
 		t.Fatalf("after rebuild+commit: messages=%d sequence=%d", len(snapshot.Messages), snapshot.Sequence)
 	}
 }
@@ -373,7 +400,7 @@ func TestEnterpriseStaleCASRebuildsFromSnapshot(t *testing.T) {
 func TestEnterpriseLocalSQLFactParity(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema)
+	sqltest.SeedEnterpriseRoom(t, dsn, schema)
 
 	// Local producer.
 	dir := t.TempDir()
@@ -401,7 +428,7 @@ func TestEnterpriseLocalSQLFactParity(t *testing.T) {
 	}
 	admin := sqltest.Connect(t, dsn, schema)
 	var encoding []byte
-	if err := admin.QueryRow(context.Background(), `SELECT event_encoding FROM room_events WHERE room_id = 'room-1' AND seq = 1`).Scan(&encoding); err != nil {
+	if err := admin.QueryRow(context.Background(), `SELECT event_encoding FROM room_events WHERE room_id = 'room-1' AND seq = 2`).Scan(&encoding); err != nil {
 		t.Fatal(err)
 	}
 	var sqlFact model.Event
@@ -447,7 +474,7 @@ func TestEnterpriseLocalSQLFactParity(t *testing.T) {
 func TestEnterpriseDeliveringHistoryReplayAndCloseNoReap(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema)
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema)
 	dbStore := openSQLStore(t, dsn, schema)
 	ctx := context.Background()
 
@@ -465,7 +492,8 @@ func TestEnterpriseDeliveringHistoryReplayAndCloseNoReap(t *testing.T) {
 		Key:      sqlstore.OpKey{Namespace: "human", Deployment: "dep-test", RoomID: "room-1", OpKind: "append_fact", Identifier: "fixture-1", Principal: "u-owner"},
 		Mutation: sqlstore.Mutation{Version: 1, Fact: model.Event{ID: "evt-fixture-1", RoomID: "room-1", Kind: "native.message.updated", Actor: model.ActorUser, CreatedAt: now, Data: payload}, Audit: sqlstore.AuditRecord{Kind: "fact.append", Outcome: "accepted"}},
 	}
-	if result, err := dbStore.Commit(ctx, fixture); err != nil || result.Seq != 1 {
+	fixture.ExpectedRevision = 1 // room.created is the existing prefix.
+	if result, err := dbStore.Commit(ctx, fixture); err != nil || result.Seq != 2 {
 		t.Fatalf("fixture commit: %+v %v", result, err)
 	}
 
@@ -536,7 +564,7 @@ func (p *conflictHookPort) ReadonlySnapshot(ctx context.Context, auth relay.Ente
 func TestEnterpriseRebuildAuthorizationRefusalDoesNotPoisonRoom(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	admin := sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+	admin := sqltest.SeedEnterpriseRoom(t, dsn, schema, "u-owner2")
 	dbStore := openSQLStore(t, dsn, schema)
 	ctx := context.Background()
 
@@ -547,11 +575,12 @@ func TestEnterpriseRebuildAuthorizationRefusalDoesNotPoisonRoom(t *testing.T) {
 		}
 	}
 	port.armed.Store(true)
-	engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1", Runtimes: roomRuntimes()}, port, executeAuth("u-owner"))
+	engine, err := relay.OpenEnterprise(ctx, relay.Config{RoomID: "room-1"}, port, executeAuth("u-owner"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	baseSeq := engine.Snapshot().Sequence
 
 	if _, err := engine.ExecuteHumanSend(ctx, executeAuth("u-owner"), relay.SendRequest{ID: "p1", Text: "first", To: model.ActorSlot2}); err != nil {
 		t.Fatal(err)
@@ -563,10 +592,10 @@ func TestEnterpriseRebuildAuthorizationRefusalDoesNotPoisonRoom(t *testing.T) {
 		RoomID:           "room-1",
 		ClientID:         "direct-2",
 		Intent:           sqlstore.HumanSendIntent{To: "slot2", Text: "direct body"},
-		ExpectedRevision: 1,
+		ExpectedRevision: baseSeq + 1,
 		Fact:             craftHumanSendCandidate("u-owner", "direct-2", "slot2", "direct body"),
 	}
-	if result, err := dbStore.CommitHumanSend(ctx, direct); err != nil || result.Seq != 2 {
+	if result, err := dbStore.CommitHumanSend(ctx, direct); err != nil || result.Seq != baseSeq+2 {
 		t.Fatalf("direct kernel commit: %+v %v", result, err)
 	}
 
@@ -597,7 +626,7 @@ func TestEnterpriseRebuildAuthorizationRefusalDoesNotPoisonRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a live member could not continue after a peer's revocation: %v", err)
 	}
-	if message.ID == "" || engine.Snapshot().Sequence != 3 {
+	if message.ID == "" || engine.Snapshot().Sequence != baseSeq+3 {
 		t.Fatalf("continuation: message=%+v sequence=%d", message, engine.Snapshot().Sequence)
 	}
 }
@@ -607,7 +636,7 @@ func TestEnterpriseRebuildAuthorizationRefusalDoesNotPoisonRoom(t *testing.T) {
 func TestEnterpriseDoubleConcurrencyOrderedByGate(t *testing.T) {
 	dsn := sqltest.RequireDSN(t)
 	schema, _ := sqltest.CreateSchema(t, dsn)
-	sqltest.SeedRoom(t, dsn, schema, "u-owner2")
+	sqltest.SeedEnterpriseRoom(t, dsn, schema, "u-owner2")
 
 	var mu sync.Mutex
 	var applied []uint64
@@ -616,6 +645,7 @@ func TestEnterpriseDoubleConcurrencyOrderedByGate(t *testing.T) {
 		applied = append(applied, event.Seq)
 		mu.Unlock()
 	}})
+	baseSeq := engine.Snapshot().Sequence
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
@@ -637,10 +667,10 @@ func TestEnterpriseDoubleConcurrencyOrderedByGate(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(applied) != 2 || applied[0] != 1 || applied[1] != 2 {
-		t.Fatalf("apply order = %v, want [1 2]", applied)
+	if len(applied) != 2 || applied[0] != baseSeq+1 || applied[1] != baseSeq+2 {
+		t.Fatalf("apply order = %v, want [2 3] after room.created", applied)
 	}
-	if snapshot := engine.Snapshot(); len(snapshot.Messages) != 2 || snapshot.Sequence != 2 {
+	if snapshot := engine.Snapshot(); len(snapshot.Messages) != 2 || snapshot.Sequence != baseSeq+2 {
 		t.Fatalf("snapshot: messages=%d sequence=%d", len(snapshot.Messages), snapshot.Sequence)
 	}
 }

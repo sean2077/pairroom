@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/sqlstore"
 )
 
@@ -105,6 +106,73 @@ func SeedRoom(t *testing.T, dsn, schema string, extraUsers ...string) *pgx.Conn 
 		}
 	}
 	return conn
+}
+
+// SeedEnterpriseRoom supplies control identities, then creates room-1 through
+// the typed transaction. The temporary Store is closed before returning so a
+// test can open the deployment itself. Extra users are admitted as members;
+// the viewer membership is installed only after creation, as fixture setup.
+// SeedRoom remains the independent low-level primitive fixture.
+func SeedEnterpriseRoom(t *testing.T, dsn, schema string, extraUsers ...string) *pgx.Conn {
+	t.Helper()
+	ctx := context.Background()
+	conn := Connect(t, dsn, schema)
+	if err := sqlstore.ApplySchema(ctx, conn, schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		`INSERT INTO organizations (org_id) VALUES ('org-test')`,
+		`INSERT INTO configured_org (org_id) VALUES ('org-test')`,
+		`INSERT INTO deployment (deployment_id, org_id) VALUES ('dep-test', 'org-test')`,
+		`INSERT INTO users (user_id, org_id) VALUES ('u-owner', 'org-test'), ('u-viewer', 'org-test')`,
+	} {
+		if _, err := conn.Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, user := range extraUsers {
+		if _, err := conn.Exec(ctx, `INSERT INTO users (user_id, org_id) VALUES ($1, 'org-test')`, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := sqlstore.Open(ctx, sqlstore.Config{DSN: dsn, Schema: schema, DeploymentID: "dep-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Also close on a Fatal from the helper; Close is idempotent.
+	t.Cleanup(func() { _ = store.Close() })
+	CreateEnterpriseRoom(t, store, "room-1", "u-owner")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-1', 'org-test', 'u-viewer', 'viewer')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range extraUsers {
+		if _, err := conn.Exec(ctx, `INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-1', 'org-test', $1, 'member')`, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return conn
+}
+
+// CreateEnterpriseRoom uses the public typed kernel operation with a frozen
+// default collaboration. It requires the supplied owner to be admitted by the
+// test fixture and returns the accepted event/receipt for independent checks.
+func CreateEnterpriseRoom(t *testing.T, store *sqlstore.Store, roomID, ownerID string) sqlstore.Result {
+	t.Helper()
+	intent, err := model.PrepareEnterpriseRoomIntent(roomID, model.Collaboration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.CommitRoomCreate(context.Background(), sqlstore.RoomCreateCommand{
+		Auth: sqlstore.AuthContext{Deployment: "dep-test", UserID: ownerID}, RoomID: roomID,
+		ClientID: "create-" + roomID, Intent: intent,
+	})
+	if err != nil || result.Outcome != sqlstore.OutcomeCommitted {
+		t.Fatalf("create enterprise room: outcome=%s class=%s err=%v", result.Outcome, result.Class, err)
+	}
+	return result
 }
 
 // WaitForLockWait polls pg_stat_activity until the given backend is waiting on
