@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/claudewake"
+	"github.com/sean2077/pairroom/internal/codexwake"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -20,6 +21,7 @@ const (
 	nativeWakeMinimumInterval = time.Minute
 	nativeWakeHourlyLimit     = 10
 	nativeWakeCommandTimeout  = 10 * time.Second
+	nativeWakeQueueRecheck    = 30 * time.Second
 )
 
 var errNativeWakeAudit = errors.New("native wake audit is unavailable")
@@ -40,6 +42,7 @@ type nativeWakePrepare func(relay.WakeCandidate) (claudewake.Send, error)
 
 type nativeWakeRun func(context.Context, string, ...string) error
 type nativeWakeWait func(context.Context, time.Duration) error
+type nativeWakeQueuePending func(context.Context, string, string, string) (bool, error)
 
 type nativeWakerConfig struct {
 	CodexCommand string
@@ -53,6 +56,7 @@ type nativeWakerConfig struct {
 	Timeout      time.Duration
 	Run          nativeWakeRun
 	Wait         nativeWakeWait
+	QueuePending nativeWakeQueuePending
 }
 
 // nativeWaker belongs to one active native Room runtime. Its durable
@@ -71,6 +75,7 @@ type nativeWaker struct {
 	timeout      time.Duration
 	run          nativeWakeRun
 	wait         nativeWakeWait
+	queuePending nativeWakeQueuePending
 	attempts     []relay.WakeReservation
 	pending      map[model.ActorID]struct{}
 	// attempting covers reservation admission through outcome recording, so a
@@ -106,6 +111,9 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 	if cfg.Wait == nil {
 		cfg.Wait = waitNativeWake
 	}
+	if cfg.QueuePending == nil {
+		cfg.QueuePending = codexwake.Pending
+	}
 	w := &nativeWaker{
 		codexCommand: cfg.CodexCommand,
 		mock:         cfg.Mock,
@@ -118,6 +126,7 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 		timeout:      cfg.Timeout,
 		run:          cfg.Run,
 		wait:         cfg.Wait,
+		queuePending: cfg.QueuePending,
 		pending:      map[model.ActorID]struct{}{},
 		attempting:   map[model.ActorID]struct{}{},
 		deferred:     map[model.ActorID]nativeWakeDeferred{},
@@ -220,7 +229,8 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 
 // A deferred rate-limited head holds the Native runtime lease until it can be
 // reconsidered (the Room hourly budget may exceed the ordinary idle timeout), as
-// does a nudge_pending head for at most WakeRenewAfter, and
+// does a nudge_pending head for at most WakeRenewAfter or a Codex queue_pending
+// head until its existing native prompt leaves the queue, and
 // a wake's reservation admission holds it until its outcome settles. Unsupported, unbound
 // or capability-missing sessions never pin idle runtimes: their periodic probe
 // carries no reservation and no pending vendor effect.
@@ -238,7 +248,7 @@ func (w *nativeWaker) inUseLocked() bool {
 		return true
 	}
 	for _, d := range w.deferred {
-		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" || d.Reason == "nudge_pending" {
+		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" || d.Reason == "nudge_pending" || d.Reason == "queue_pending" {
 			return true
 		}
 	}
@@ -327,6 +337,27 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 			return "failed", reason
 		}
 	case model.NativeWakeCodexQueue:
+		// Relay activity and the renewal clock cannot observe the native queue.
+		// Even after either releases Engine suppression, a long-running Desktop
+		// turn may still hold the original prompt. Never append another one or
+		// spend a reservation/rate slot until the queue was read successfully.
+		if !w.mock {
+			command := w.codexCommand
+			if strings.TrimSpace(command) == "" {
+				command = "codex"
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, w.timeout)
+			pending, err := w.queuePending(probeCtx, command, candidate.SessionID, nativeWakeNudge)
+			cancel()
+			if err != nil {
+				w.deferCandidate(candidate, w.now().Add(nativeWakeQueueRecheck), "capability_unavailable")
+				return w.record("suppressed", "capability_unavailable", candidate.Target)
+			}
+			if pending {
+				w.deferCandidate(candidate, w.now().Add(nativeWakeQueueRecheck), "queue_pending")
+				return w.record("suppressed", "nudge_pending", candidate.Target)
+			}
+		}
 		attempt = func(ctx context.Context) (string, string) {
 			err := w.run(ctx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
 			commandContextErr := ctx.Err()

@@ -50,7 +50,7 @@ func TestNativeWakeDeferredHeadsProgressWithoutNewTraffic(t *testing.T) {
 	var clock, calls atomic.Int64
 	clock.Store(1800000000)
 	e, a, _ := wakeEngine(t, &clock)
-	w := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	defer w.Close()
 	reconcile := func() { w.Reconcile(context.Background()); w.workers.Wait() }
 	send := func(slot model.ActorID, id string) relay.Message {
@@ -102,7 +102,7 @@ func TestNativeWakeDeferredHeadsProgressWithoutNewTraffic(t *testing.T) {
 		t.Fatal("wake consumed body")
 	}
 	// Accepted-but-uncollected wake never repeats, including in a new waker.
-	again := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0) }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	again := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0) }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	clock.Add(3601)
 	again.Reconcile(context.Background())
 	again.Close()
@@ -115,7 +115,7 @@ func TestNativeWakeHourlyDeferralSurvivesReplay(t *testing.T) {
 	var clock, calls atomic.Int64
 	clock.Store(1800000000)
 	e, a, dir := wakeEngine(t, &clock)
-	config := nativeWakerConfig{Relay: e, HourlyLimit: 1, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }}
+	config := nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, HourlyLimit: 1, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }}
 	w := newNativeWaker(config)
 	endTurn(t, e, a[model.ActorSlot2])
 	first, _ := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "one", Text: "one"})
@@ -173,7 +173,7 @@ func TestNativeWakeRechecksCancelledHeadAndDisabledRoom(t *testing.T) {
 	first, _ := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "one", Text: "one"})
 	e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "two", Text: "two"})
 	var firstGrace atomic.Bool
-	w := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error {
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error {
 		if firstGrace.CompareAndSwap(false, true) {
 			return e.Cancel(first.ID)
 		}
@@ -252,7 +252,7 @@ func TestNativeCapabilityProbeDoesNotHoldTheRuntimeLease(t *testing.T) {
 		}
 	}
 	// No Claude capability is wired, so the probe can only end in a deferral.
-	w := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() },
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() },
 		Wait: func(context.Context, time.Duration) error { note(); <-release; return nil },
 		Run:  func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	// Release the grace delay before Close: a failing assertion must not hang.
@@ -285,7 +285,7 @@ func TestNativeWakeSuppressionDoesNotFloodAudit(t *testing.T) {
 	var clock atomic.Int64
 	clock.Store(1800000000)
 	e, a, _ := wakeEngine(t, &clock)
-	w := newNativeWaker(nativeWakerConfig{Relay: e, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { return nil }})
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { return nil }})
 	defer w.Close()
 	_ = e.SetWakeEnabled(false)
 	m, _ := e.Send(a[model.ActorSlot1], relay.SendRequest{ID: "one", Text: "one"})
@@ -309,7 +309,7 @@ func TestNativeWakeCollectorExitRechecksWithoutAnotherPublication(t *testing.T) 
 	var clock, calls atomic.Int64
 	clock.Store(1800000000)
 	e, a, _ := wakeEngine(t, &clock)
-	w := newNativeWaker(nativeWakerConfig{Relay: e, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	defer w.Close()
 	// A readiness probe waits only for an outstanding peer reply; deliver the
 	// question so it leaves no queued head of its own to wake.
@@ -384,7 +384,7 @@ func TestNativeWakeRenewsForInputBehindAnUncollectedAttempt(t *testing.T) {
 	var clock, calls atomic.Int64
 	clock.Store(1800000000)
 	e, a, _ := wakeEngine(t, &clock)
-	w := newNativeWaker(nativeWakerConfig{Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: e, Now: func() time.Time { return time.Unix(clock.Load(), 0).UTC() }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { calls.Add(1); return nil }})
 	defer w.Close()
 	reconcile := func() { w.Reconcile(context.Background()); w.workers.Wait() }
 	send := func(id string) relay.Message {

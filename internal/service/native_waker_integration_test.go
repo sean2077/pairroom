@@ -19,7 +19,7 @@ type nativeWakeCommand struct {
 
 func TestNativeRelaySendSchedulesRedactedCodexWake(t *testing.T) {
 	commands := make(chan nativeWakeCommand, 1)
-	f := nativeHTTPWithWake(t, nativeWakerConfig{
+	f := nativeHTTPWithWake(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Grace: time.Millisecond,
 		Wait:  func(context.Context, time.Duration) error { return nil },
 		Run: func(_ context.Context, name string, args ...string) error {
@@ -83,7 +83,7 @@ func TestNativeRelaySendSchedulesRedactedCodexWake(t *testing.T) {
 // vocabulary must accept every current-schema native wake fact the Engine can
 // append, or a Room that ever reserved a wake fails closed on the next start.
 func TestRegistryRebuildAcceptsNativeWakeFacts(t *testing.T) {
-	f := nativeHTTPWithWake(t, nativeWakerConfig{
+	f := nativeHTTPWithWake(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Grace: time.Millisecond,
 		Wait:  func(context.Context, time.Duration) error { return nil },
 		Run:   func(context.Context, string, ...string) error { return nil },

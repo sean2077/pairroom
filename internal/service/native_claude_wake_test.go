@@ -38,7 +38,7 @@ func TestNativeClaudeWakeSubmissionFailureAndNoRetry(t *testing.T) {
 			state := &fakeNativeWakeRelay{candidates: map[string]relay.WakeCandidate{"m": claudeCandidate("m")}}
 			now := time.Now().UTC()
 			calls := 0
-			cfg := nativeWakerConfig{Relay: state, Now: func() time.Time { return now }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { t.Fatal("Claude wake spawned a CLI"); return nil },
+			cfg := nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: state, Now: func() time.Time { return now }, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { t.Fatal("Claude wake spawned a CLI"); return nil },
 				Claude: func(c relay.WakeCandidate) (claudewake.Send, error) {
 					if c.BindID != "claude-bind" || c.Generation != 3 {
 						t.Fatal("lost binding identity")
@@ -93,7 +93,7 @@ func TestNativeClaudeWakeSuppressesBeforeReadingSecrets(t *testing.T) {
 			c := claudeCandidate("m")
 			tc.change(&c)
 			state := &fakeNativeWakeRelay{candidates: map[string]relay.WakeCandidate{"m": c}}
-			w := newNativeWaker(nativeWakerConfig{Relay: state, Claude: func(relay.WakeCandidate) (claudewake.Send, error) {
+			w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: state, Claude: func(relay.WakeCandidate) (claudewake.Send, error) {
 				t.Fatal("read suppressed capability")
 				return nil, nil
 			}})
@@ -119,7 +119,7 @@ func TestNativeClaudeWakeCapabilityAndReservationRecheck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := &fakeNativeWakeRelay{candidates: map[string]relay.WakeCandidate{"m": claudeCandidate("m")}, reserveErr: tc.reserveErr}
-			w := newNativeWaker(nativeWakerConfig{Relay: state, Wait: func(context.Context, time.Duration) error { return nil }, Claude: func(relay.WakeCandidate) (claudewake.Send, error) {
+			w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: state, Wait: func(context.Context, time.Duration) error { return nil }, Claude: func(relay.WakeCandidate) (claudewake.Send, error) {
 				return func(context.Context, string) error { t.Fatal("ineligible socket write"); return nil }, tc.prepareErr
 			}})
 			if err := w.Wake(context.Background(), "m"); err != nil {

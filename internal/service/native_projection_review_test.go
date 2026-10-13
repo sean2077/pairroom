@@ -151,7 +151,7 @@ func TestNativeWakerRejectsChangeAtReservationBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	w := newNativeWaker(nativeWakerConfig{
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Relay: invalidatedWakeRelay{Engine: f.native.engine, before: func() error { return f.native.engine.Cancel(message.ID) }},
 		Wait:  func(context.Context, time.Duration) error { return nil },
 		Run:   func(context.Context, string, ...string) error { calls++; return nil },

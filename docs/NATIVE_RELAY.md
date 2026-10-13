@@ -198,6 +198,8 @@ For a locally hosted binding, update CLI and Service, then run `pairroom relay b
 
 A wake-enabled Room (default on; changed through Management at an idle boundary) can nudge an eligible existing Claude inbox or Codex queue with fixed, body-free text. Live collectors take precedence. The minimum interval is per receiving slot, with a shared Room hourly budget. Unattempted rate-limited heads are rechecked when eligible; a reserved or possibly submitted wake is never automatically retried. [Automatic wake](PROTOCOL.md#automatic-idle-peer-wake) owns the exact limits and audit vocabulary.
 
+Codex wake also requires experimental `thread/queue/list` support in the configured CLI's `app-server --stdio` transport. PairRoom checks for its exact pending wake prompt before appending another, including after the ten-minute relay suppression window. A still-queued prompt is rechecked every 30 seconds; an unreadable queue reports `capability_unavailable` and leaves input for foreground `wait` or a human nudge. Existing stacked prompts are not deleted by this check; they can be removed in Codex's queue controls. This applies both to a locally hosted Codex binding and the optional LAN guest observer.
+
 Claude's inbound policy remains authoritative: `hold`/`refuse`, missing capability, another OS/network namespace, or a stale socket can prevent continuation. A complete write is only `submitted`. Use foreground `wait` or a human nudge when automatic wake is unavailable. [Claude inbox design](design/claude-inbox-wake.md) covers private capability storage and failure categories.
 
 ## Verified vendor wake surfaces

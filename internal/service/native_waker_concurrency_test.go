@@ -37,7 +37,7 @@ func TestNativeWakerSerializesSuppressionBeforeAudit(t *testing.T) {
 	}
 	var release sync.Once
 	defer release.Do(func() { close(state.finish) })
-	w := newNativeWaker(nativeWakerConfig{
+	w := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Relay: state,
 		Run: func(context.Context, string, ...string) error {
 			t.Error("suppressed head invoked a vendor")
