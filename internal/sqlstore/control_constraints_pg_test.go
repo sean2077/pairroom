@@ -1042,6 +1042,7 @@ func TestControlSchemaLoadAndRollback(t *testing.T) {
 			"bindings_active_generation_check": true, "owner_record_consistency_check": true,
 			"browser_session_revoke_once": true, "identity_bootstrap_once": true,
 			"control_columns_once": true, "project_owner_record_consistency_check": true,
+			"device_enrollments_guard": true,
 		}
 		rows, err := f.admin.Query(ctx, `
 			SELECT p.proname, COALESCE(p.proconfig @> ARRAY['search_path=pg_catalog'],false)
