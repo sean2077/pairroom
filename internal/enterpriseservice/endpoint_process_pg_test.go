@@ -40,6 +40,7 @@ type endpointProcessConfig struct {
 	Workspace, DeviceDirectory, Home, Session, BeforeStdout    string
 	Args                                                       []string
 	ObjectDirectory                                            string
+	AfterStdout                                                string
 }
 
 type endpointStoppedWriter struct{ marker string }
@@ -49,6 +50,21 @@ func (w endpointStoppedWriter) Write([]byte) (int, error) {
 		return 0, err
 	}
 	// Parent terminates this actual process at the durable-claim/stdout gap.
+	select {}
+}
+
+type endpointAfterStdoutWriter struct{ marker string }
+
+func (w endpointAfterStdoutWriter) Write(data []byte) (int, error) {
+	n, err := os.Stdout.Write(data)
+	if err != nil || n != len(data) {
+		return n, err
+	}
+	if err := os.WriteFile(w.marker, []byte("full stdout released; ACK not entered"), 0o600); err != nil {
+		return n, err
+	}
+	// The real stdout write has completed. Blocking before returning to the
+	// CLI prevents its subsequent ACK call without changing production code.
 	select {}
 }
 
@@ -73,6 +89,9 @@ func TestEnterpriseEndpointProcessHelper(t *testing.T) {
 		var out io.Writer = os.Stdout
 		if cfg.BeforeStdout != "" {
 			out = endpointStoppedWriter{cfg.BeforeStdout}
+		}
+		if cfg.AfterStdout != "" {
+			out = endpointAfterStdoutWriter{cfg.AfterStdout}
 		}
 		if err := relayclient.Run(ctx, cfg.Args, os.Stdin, out, os.Stderr); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
@@ -550,6 +569,59 @@ func TestEnterpriseEndpointProcessesSurviveServiceKillWithoutReprintingClaims(t 
 	}
 	if !strings.Contains(wait(), "uncertain process envelope") {
 		t.Fatal("explicit inspected retry was not delivered")
+	}
+	// MSG-06 is an actual OS kill after complete stdout, before entering ACK.
+	// It is deliberately separate from the lost-ACK-response case above.
+	send("kill-after-full-stdout", "full envelope before real endpoint kill")
+	printedConfig := endpoints[1]
+	printedConfig.AfterStdout = filepath.Join(t.TempDir(), "after-stdout")
+	printedConfig.Args = []string{"wait", "--repo", printedConfig.Workspace, "--timeout", "10"}
+	printedProcess := endpointStart(t, printedConfig, false)
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		if _, err := os.Stat(printedConfig.AfterStdout); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			printedProcess.kill(t)
+			t.Fatal("endpoint never completed stdout before ACK")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	printedProcess.kill(t)
+	if strings.Count(printedProcess.stdout.String(), "full envelope before real endpoint kill") != 1 {
+		t.Fatal("post-stdout kill did not release exactly one complete envelope")
+	}
+	_, beforeRecovery := readRoom()
+	var postStdoutID string
+	for _, message := range beforeRecovery.Messages {
+		if message.Text == "full envelope before real endpoint kill" {
+			if message.State != "delivering" {
+				t.Fatal("endpoint kill incorrectly acknowledged delivery")
+			}
+			postStdoutID = message.ID
+		}
+	}
+	if postStdoutID == "" {
+		t.Fatal("post-stdout durable claim disappeared")
+	}
+	service.kill(t)
+	service = endpointStart(t, serviceConfig, true)
+	_, afterRecovery := readRoom()
+	var postStdoutState string
+	for _, message := range afterRecovery.Messages {
+		if message.ID == postStdoutID {
+			postStdoutState = message.State
+		}
+	}
+	if postStdoutState != "unknown" {
+		t.Fatalf("post-stdout service recovery classified delivery as %q", postStdoutState)
+	}
+	if strings.Contains(endpointRun(t, endpoints[1], "reconcile", "--repo", endpoints[1].Workspace), "full envelope before real endpoint kill") {
+		t.Fatal("post-stdout original claim reconciliation reprinted envelope")
+	}
+	if strings.Contains(wait(), "full envelope before real endpoint kill") {
+		t.Fatal("post-stdout restart automatically redelivered uncertain output")
 	}
 	revision, _ = readRoom()
 	status, _ = f.post(owner, "/enterprise/api/v1/rooms/"+room+"/memberships", map[string]any{"client_id": "process-member-revoke", "expected_revision": revision, "intent": map[string]string{"action": "remove", "target_user_id": memberSession.UserID}}, ownerSession.CSRF)
