@@ -167,22 +167,28 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		}
 		original, err := s.loadFact(ctx, tx, plan.key.RoomID, uint64(resultSeq))
 		if err != nil {
-			if plan.roomCreate != nil {
+			if plan.roomCreate != nil && isStoredFactCorruption(err) {
 				return refused(ClassStoredFactUnreadable, err)
 			}
 			return resolveIncomplete(ctx, err)
 		}
 		if plan.roomCreate != nil {
 			if err := s.validateRoomCreateReplay(ctx, tx, plan, original); err != nil {
-				return refused(ClassStoredFactUnreadable, err)
+				if isStoredFactCorruption(err) {
+					return refused(ClassStoredFactUnreadable, err)
+				}
+				return resolveIncomplete(ctx, err)
 			}
 		}
 		// The original stored result, including the Room revision that the
 		// original commit defined — never the current revision.
 		return Result{Outcome: OutcomeReplayed, Seq: uint64(resultSeq), Revision: uint64(resultRevision), Fact: original}, nil
 	case errors.Is(err, pgx.ErrNoRows):
-		if plan.roomCreate != nil && !locked.roomMissing {
-			return refused(ClassRoomTaken, nil)
+		if plan.roomCreate != nil {
+			// This exact creation operation is absent. Resolving it never
+			// adopts or discloses an unrelated existing Room, including its
+			// revision. Only Commit classifies that ID as room_taken.
+			return Result{Outcome: OutcomeNotCommitted}, nil
 		}
 		return Result{Outcome: OutcomeNotCommitted, Revision: locked.revision}, nil
 	default:

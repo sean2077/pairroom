@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -128,12 +129,59 @@ func TestRoomCreateChangedIntentAndTakenRoomNeverTakeOver(t *testing.T) {
 			t.Fatal("taken Room disclosed another operation's original fact")
 		}
 		res, err = f.store.ResolveRoomCreate(ctx, other.Auth, other.RoomID, other.ClientID, other.Intent)
-		if kerr := kernelErr(t, res, err); kerr.Class != ClassRoomTaken {
-			t.Fatalf("taken resolve: %+v", res)
+		if err != nil || res.Outcome != OutcomeNotCommitted || res.Seq != 0 || res.Revision != 0 || !reflect.DeepEqual(res.Fact, model.Event{}) {
+			t.Fatalf("absent-key resolve disclosed unrelated Room state: %+v %v", res, err)
 		}
 	}
 	if got := creationCounts(t, f, cmd.RoomID); got != before {
 		t.Fatalf("refusals modified creation: %v -> %v", before, got)
+	}
+}
+
+// Resolving an absent exact creation key reports only that operation's
+// absence. Even a valid Room ID reveals no result metadata to a nonmember.
+func TestRoomCreateResolveAbsentKeyHidesTakenRoom(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cmd := roomCreateCommand(t)
+	if _, err := f.store.CommitRoomCreate(ctx, cmd); err != nil {
+		t.Fatal(err)
+	}
+	// Make the unrelated Room revision nonzero and distinguish it from its
+	// birth result; neither cursor may be copied into an absent-key result.
+	later := f.command("after-create-absence-proof")
+	later.Key.RoomID, later.Mutation.Fact.RoomID, later.ExpectedRevision = cmd.RoomID, cmd.RoomID, 1
+	if result, err := f.store.Commit(ctx, later); err != nil || result.Revision != 2 {
+		t.Fatalf("advance existing Room: %+v %v", result, err)
+	}
+	var viewerMemberships int
+	if err := f.admin.QueryRow(ctx, `SELECT count(*) FROM room_members WHERE room_id = $1 AND user_id = 'u-viewer'`, cmd.RoomID).Scan(&viewerMemberships); err != nil {
+		t.Fatal(err)
+	}
+	if viewerMemberships != 0 {
+		t.Fatal("nonmember counterexample unexpectedly has Room access")
+	}
+	before := creationCounts(t, f, cmd.RoomID)
+	for _, userID := range []string{"u-owner", "u-viewer"} {
+		auth := AuthContext{Deployment: cmd.Auth.Deployment, UserID: userID}
+		resolved, err := f.store.ResolveRoomCreate(ctx, auth, cmd.RoomID, "absent-creation-key", cmd.Intent)
+		if err != nil || resolved.Outcome != OutcomeNotCommitted || resolved.Class != "" || resolved.Seq != 0 || resolved.Revision != 0 || !reflect.DeepEqual(resolved.Fact, model.Event{}) {
+			t.Fatalf("absent key for %s disclosed unrelated Room metadata: %+v %v", userID, resolved, err)
+		}
+		if got := creationCounts(t, f, cmd.RoomID); got != before {
+			t.Fatalf("absent-key resolve mutated state for %s: %v -> %v", userID, before, got)
+		}
+		// Submitting that new key is a different question: the occupied ID
+		// is definitely unavailable, and still discloses no original fact.
+		other := cmd
+		other.Auth, other.ClientID = auth, "absent-creation-key"
+		result, err := f.store.CommitRoomCreate(ctx, other)
+		if got := kernelErr(t, result, err); got.Outcome != OutcomeRefused || got.Class != ClassRoomTaken || result.Seq != 0 || result.Revision != 0 || !reflect.DeepEqual(result.Fact, model.Event{}) {
+			t.Fatalf("new-key commit for %s: %+v", userID, result)
+		}
+		if got := creationCounts(t, f, cmd.RoomID); got != before {
+			t.Fatalf("taken-room commit mutated state for %s: %v -> %v", userID, before, got)
+		}
 	}
 }
 
@@ -261,6 +309,63 @@ func TestRoomCreateUnknownCommitBothRealProxyOutcomes(t *testing.T) {
 			}
 			if got := creationCounts(t, f, cmd.RoomID); got != before {
 				t.Fatalf("verification mutated state: %v -> %v", before, got)
+			}
+
+			// An explicit same-key retry happens only after the old Store is
+			// retired and a new incarnation opens. Stop fault injection before
+			// that Open's ownership transaction; reuse the exact Store config.
+			oldStore := f.store
+			var oldInstance string
+			var oldEpoch int64
+			if err := f.admin.QueryRow(context.Background(), `SELECT instance_id, epoch FROM ownership WHERE id`).Scan(&oldInstance, &oldEpoch); err != nil {
+				t.Fatal(err)
+			}
+			if err := oldStore.Close(); err != nil {
+				t.Fatal(err)
+			}
+			proxy.armed.Store(false)
+			reopened, err := Open(context.Background(), oldStore.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This cleanup closes only the new incarnation; the fixture still
+			// owns its original Store, admin connection and unique test schema.
+			t.Cleanup(func() { _ = reopened.Close() })
+			var newInstance string
+			var newEpoch int64
+			if err := f.admin.QueryRow(context.Background(), `SELECT instance_id, epoch FROM ownership WHERE id`).Scan(&newInstance, &newEpoch); err != nil {
+				t.Fatal(err)
+			}
+			if newInstance == oldInstance || newEpoch != oldEpoch+1 || reopened.lease.epoch != newEpoch || reopened.lease.pid == oldStore.lease.pid && reopened.lease.start.Equal(oldStore.lease.start) {
+				t.Fatalf("restart reused its lease identity: epoch %d -> %d, instance changed=%v", oldEpoch, newEpoch, newInstance != oldInstance)
+			}
+			if got := creationCounts(t, f, cmd.RoomID); got != before {
+				t.Fatalf("Store restart retried an effect: %v -> %v", before, got)
+			}
+			retried, err := reopened.CommitRoomCreate(context.Background(), cmd)
+			want := OutcomeCommitted
+			if mode == "drop-response" {
+				want = OutcomeReplayed
+			}
+			if err != nil || retried.Outcome != want || retried.Seq != 1 || retried.Revision != 1 || retried.Fact.Seq != 1 || retried.Fact.ID == "" {
+				t.Fatalf("explicit same-key retry after restart: %+v %v", retried, err)
+			}
+			if mode == "drop-response" && (retried.Fact.ID != resolved.Fact.ID || !retried.Fact.CreatedAt.Equal(resolved.Fact.CreatedAt) || !bytes.Equal(retried.Fact.Data, resolved.Fact.Data)) {
+				t.Fatal("explicit retry replaced an already accepted creation")
+			}
+			replayed, err := reopened.CommitRoomCreate(context.Background(), cmd)
+			if err != nil || replayed.Outcome != OutcomeReplayed || replayed.Seq != 1 || replayed.Revision != 1 || replayed.Fact.ID != retried.Fact.ID || !replayed.Fact.CreatedAt.Equal(retried.Fact.CreatedAt) || !bytes.Equal(replayed.Fact.Data, retried.Fact.Data) {
+				t.Fatalf("repeated explicit same-key retry: %+v %v", replayed, err)
+			}
+			if got := creationCounts(t, f, cmd.RoomID); got != [7]int64{1, 1, 2, 2, 1, 1, 1} {
+				t.Fatalf("explicit retries duplicated the Room birth: %v", got)
+			}
+			var seq, revision int64
+			if err := f.admin.QueryRow(context.Background(), `SELECT current_seq, revision FROM rooms WHERE room_id = $1`, cmd.RoomID).Scan(&seq, &revision); err != nil {
+				t.Fatal(err)
+			}
+			if seq != 1 || revision != 1 {
+				t.Fatalf("explicit retries moved Room cursors: seq=%d revision=%d", seq, revision)
 			}
 		})
 	}

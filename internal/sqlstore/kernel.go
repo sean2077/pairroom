@@ -531,9 +531,29 @@ func (s *Store) loadFact(ctx context.Context, q rowQuerier, roomID string, seq u
 	err := q.QueryRow(ctx, `SELECT event_id, fact_version, kind, actor, event_encoding FROM `+s.table("room_events")+` WHERE room_id = $1 AND seq = $2`, roomID, int64(seq)).
 		Scan(&eventID, &factVersion, &kind, &actor, &encoding)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Event{}, &storedFactCorruption{err: err}
+		}
 		return model.Event{}, err
 	}
-	return decodeStoredFact(roomID, seq, eventID, factVersion, kind, actor, encoding)
+	event, err := decodeStoredFact(roomID, seq, eventID, factVersion, kind, actor, encoding)
+	if err != nil {
+		return model.Event{}, &storedFactCorruption{err: err}
+	}
+	return event, nil
+}
+
+// storedFactCorruption identifies a completed read whose bytes or invariants
+// are invalid. It is deliberately distinct from an interrupted SQL read,
+// which proves neither corruption nor an operation's final outcome.
+type storedFactCorruption struct{ err error }
+
+func (e *storedFactCorruption) Error() string { return e.err.Error() }
+func (e *storedFactCorruption) Unwrap() error { return e.err }
+
+func isStoredFactCorruption(err error) bool {
+	var corrupt *storedFactCorruption
+	return errors.As(err, &corrupt)
 }
 
 // decodeStoredFact is the one stored-fact decoder: it validates the fact

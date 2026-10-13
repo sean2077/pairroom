@@ -109,7 +109,7 @@ func (s *Store) creationFact(ctx context.Context, tx pgx.Tx, plan opPlan) (model
 func (s *Store) validateRoomCreateReplay(ctx context.Context, tx pgx.Tx, plan opPlan, fact model.Event) error {
 	creation, err := model.DecodeEnterpriseRoomCreation(fact)
 	if err != nil {
-		return err
+		return &storedFactCorruption{err: err}
 	}
 	var orgID string
 	if err := tx.QueryRow(ctx, `SELECT org_id FROM `+s.table("deployment")+` WHERE deployment_id = $1`, s.cfg.DeploymentID).Scan(&orgID); err != nil {
@@ -118,7 +118,7 @@ func (s *Store) validateRoomCreateReplay(ctx context.Context, tx pgx.Tx, plan op
 	if fact.RoomID != plan.key.RoomID || creation.Enterprise.DeploymentID != plan.key.Deployment ||
 		creation.Enterprise.OrgID != orgID || creation.Enterprise.InitialOwnerUserID != plan.key.Principal ||
 		creation.Name != plan.roomCreate.Name || *creation.Collaboration != plan.roomCreate.Collaboration {
-		return fmt.Errorf("stored Room creation disagrees with its accepted operation or configured organization")
+		return &storedFactCorruption{err: fmt.Errorf("stored Room creation disagrees with its accepted operation or configured organization")}
 	}
 	return nil
 }
