@@ -268,8 +268,8 @@ func (w *nativeWaker) deferCandidate(c relay.WakeCandidate, at time.Time, reason
 
 // A prompt held in the native queue may outlive Desktop itself. Keep the
 // waiting input reachable, but exponentially back off read-only subprocesses
-// for this unchanged head. A different head or an empty/failed probe resets
-// the delay; this is scheduling state, never permission to submit an effect.
+// for this unchanged head. A different head, failed probe or admitted wake
+// decision resets the delay; this is never permission to submit an effect.
 func (w *nativeWaker) deferQueuedPrompt(c relay.WakeCandidate) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -389,11 +389,9 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 				w.deferQueuedPrompt(candidate)
 				return w.record("suppressed", "nudge_pending", candidate.Target)
 			}
-			w.mu.Lock()
-			if next := w.deferred[candidate.Target]; next.MessageID == candidate.MessageID && next.Reason == "queue_pending" {
-				delete(w.deferred, candidate.Target)
-			}
-			w.mu.Unlock()
+			// Keep an existing waiting-input lease until beginAttempt and
+			// reserveRate transfer it below. An empty probe followed by caller
+			// cancellation must not let idle close strand unattempted input.
 		}
 		attempt = func(ctx context.Context) (string, string) {
 			err := w.run(ctx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)

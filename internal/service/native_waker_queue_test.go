@@ -246,3 +246,37 @@ func TestNativeCodexQueueBackoffClearsWithWaitingInput(t *testing.T) {
 		t.Fatal("fresh queue head did not reset the pending backoff")
 	}
 }
+
+func TestNativeCodexQueueEmptyProbeCancellationRetainsWaitingLease(t *testing.T) {
+	f := newNudgeFixture(t)
+	f.waker.queuePending = func(context.Context, string, string, string) (bool, error) { return true, nil }
+	id := f.send("waiting")
+	f.advance(30 * time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.waker.queuePending = func(context.Context, string, string, string) (bool, error) {
+		// The old prompt has left the native queue, but the current worker is
+		// canceled before it can acquire the effect lease and reserve a wake.
+		cancel()
+		return false, nil
+	}
+	if err := f.waker.Wake(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(0, 0)
+	if !f.waker.InUse() {
+		t.Fatal("empty probe dropped the waiting lease before effect admission")
+	}
+	if f.waker.tryBeginIdleClose(func() bool { return true }) {
+		t.Fatal("idle close stranded unattempted input after a canceled empty probe")
+	}
+	// The expired deferral must retain liveness without postponing the next
+	// maintenance pass or requiring another peer publication.
+	f.waker.queuePending = emptyNativeWakeQueue
+	f.waker.Reconcile(context.Background())
+	f.waker.workers.Wait()
+	f.expect(1, 1)
+	if f.waker.InUse() {
+		t.Fatal("completed effect retained the waiting lease")
+	}
+}
