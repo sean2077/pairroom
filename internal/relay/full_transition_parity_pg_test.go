@@ -31,6 +31,7 @@ type transitionTrace struct {
 	binding                map[model.ActorID]sqlstore.BindingCredential
 	localAuth              map[model.ActorID]relay.Auth
 	ids, receipts          [2]map[string]string
+	bodies                 map[string]string
 	localCursor, sqlCursor int
 	step                   int
 }
@@ -50,7 +51,7 @@ func newTransitionTrace(t *testing.T) *transitionTrace {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &transitionTrace{t: t, db: db, cfg: cfg, directory: t.TempDir(), binding: map[model.ActorID]sqlstore.BindingCredential{}, localAuth: map[model.ActorID]relay.Auth{}, ids: [2]map[string]string{{}, {}}, receipts: [2]map[string]string{{}, {}}}
+	f := &transitionTrace{t: t, db: db, cfg: cfg, directory: t.TempDir(), binding: map[model.ActorID]sqlstore.BindingCredential{}, localAuth: map[model.ActorID]relay.Auth{}, ids: [2]map[string]string{{}, {}}, receipts: [2]map[string]string{{}, {}}, bodies: map[string]string{}}
 	t.Cleanup(func() {
 		_ = f.db.Close()
 		if f.local != nil {
@@ -198,6 +199,7 @@ func (f *transitionTrace) id(side int, label string) string {
 	return ""
 }
 func (f *transitionTrace) send(slot model.ActorID, label, text string, peer uint64) {
+	f.bodies[label] = text
 	local, err := f.local.Send(f.localAuth[slot], relay.SendRequest{ID: label, Text: text, ExpectedPeerGeneration: peer})
 	if err != nil {
 		f.t.Fatal(err)
@@ -205,17 +207,19 @@ func (f *transitionTrace) send(slot model.ActorID, label, text string, peer uint
 	sql := f.sqlCommit(slot, label, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, Text: text, ExpectedPeerGeneration: peer})
 	f.alias(local.ID, sql.Relay.Message.ID, label)
 }
-func (f *transitionTrace) claim(slot model.ActorID, label string) (string, string) {
+func (f *transitionTrace) claim(slot model.ActorID, label string, stopPark ...bool) (string, string) {
 	ctx, cancel := context.WithTimeout(f.t.Context(), time.Second)
 	defer cancel()
-	local, err := f.local.Claim(ctx, f.localAuth[slot], false)
+	park := len(stopPark) == 1 && stopPark[0]
+	local, err := f.local.Claim(ctx, f.localAuth[slot], park)
 	if err != nil || local == nil {
 		f.t.Fatal("Local claim failed", err)
 	}
-	sql := f.sqlCommit(slot, "claim-"+label, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim}).Relay.Claim
+	sql := f.sqlCommit(slot, "claim-"+label, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim, ParkEnabled: park}).Relay.Claim
 	if sql == nil || local.ID != f.id(0, label) || sql.ID != f.id(1, label) || local.PeerGeneration != sql.PeerGeneration {
 		f.t.Fatal("FIFO claim or peer generation disagreed")
 	}
+	f.assertEnvelope(slot, label, *local, *sql)
 	for side, receipt := range []string{local.Receipt, sql.Receipt} {
 		if receipt == "" {
 			f.t.Fatal("claim lacks receipt")
@@ -234,6 +238,9 @@ func (f *transitionTrace) ack(slot model.ActorID, label, lReceipt, sReceipt, id 
 	f.sqlCommit(slot, id, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationAck, MessageID: f.id(1, label), Receipt: sReceipt})
 }
 func (f *transitionTrace) restart() {
+	f.restartWithReaped(1)
+}
+func (f *transitionTrace) restartWithReaped(wantReaped uint64) {
 	if err := f.local.Close(); err != nil {
 		f.t.Fatal(err)
 	}
@@ -247,8 +254,108 @@ func (f *transitionTrace) restart() {
 	}
 	f.db = db
 	report, err := db.RecoverDeliveries(f.t.Context())
-	if err != nil || !report.Complete || report.Reaped != 1 {
-		f.t.Fatal("SQL restart must reap exactly one actual delivery", err)
+	if err != nil || !report.Complete || report.Reaped != wantReaped {
+		f.t.Fatalf("SQL restart reaped=%d want=%d error=%v", report.Reaped, wantReaped, err)
+	}
+}
+
+// This text-only trace's envelopes carry no random IDs or timestamps. Compare
+// the actual full strings without normalization and against an independent
+// literal envelope oracle; do not substitute a body-only or nonempty check.
+func (f *transitionTrace) assertEnvelope(slot model.ActorID, label string, local, sql relay.Claim) {
+	f.t.Helper()
+	body, ok := f.bodies[label]
+	if !ok {
+		f.t.Fatal("claim lacks its original caller body oracle")
+	}
+	from, runtime, generation := "@agent1", "claude", uint64(1)
+	if label == "historical-source" {
+		from, runtime = "@agent2", "codex"
+	}
+	peer := "@agent1"
+	if slot == model.ActorSlot1 {
+		peer = "@agent2"
+		generation = 2 // replacement changes the current peer, not the original source.
+	}
+	want := fmt.Sprintf("[PairRoom message]\nfrom: %s (%s, generation 1)\npeer: %s, generation %d\n\n%s", from, runtime, peer, generation, body)
+	if local.Envelope != sql.Envelope || local.Envelope != want {
+		f.t.Fatalf("%s full envelope mismatch: Local=%q SQL=%q want=%q", label, local.Envelope, sql.Envelope, want)
+	}
+	for other, text := range f.bodies {
+		if other != label && text != body && strings.Contains(local.Envelope, text) {
+			f.t.Fatal("claim recursively forwarded unrelated retained history")
+		}
+	}
+	if strings.Count(local.Envelope, "[PairRoom message]") != 1 || strings.Contains(local.Envelope, "private late output") {
+		f.t.Fatal("claim included nested relay envelope or retained private late output")
+	}
+}
+
+func (f *transitionTrace) park(slot model.ActorID, enabled bool, id string, changed bool) {
+	f.t.Helper()
+	localBefore := len(f.localEvents)
+	sqlBefore := f.sqlSnapshot()
+	auth, credential := f.localAuth[slot], f.binding[slot]
+	var oldSQL model.EnterpriseBinding
+	for _, event := range sqlBefore.Events {
+		if event.Kind == model.EnterpriseBindingUpdatedKind {
+			binding, err := model.DecodeEnterpriseBindingUpdate(event)
+			if err != nil {
+				f.t.Fatal(err)
+			}
+			if binding.Slot == slot {
+				oldSQL = binding
+			}
+		}
+	}
+	if err := f.local.ParkAs(auth, enabled); err != nil {
+		f.t.Fatal(err)
+	}
+	command := f.sqlCommand(slot, id, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationPark, ParkEnabled: enabled})
+	result, err := f.db.CommitRelayOperation(f.t.Context(), command)
+	if err != nil || result.Outcome != sqlstore.OutcomeCommitted || result.Relay == nil || result.Relay.Binding == nil {
+		f.t.Fatal("typed Park failed", err)
+	}
+	wantDelta := 0
+	if changed {
+		wantDelta = 1
+	}
+	sqlAfter := f.sqlSnapshot()
+	if len(f.localEvents)-localBefore != wantDelta || len(sqlAfter.Events)-len(sqlBefore.Events) != wantDelta || len(result.Facts) != wantDelta {
+		f.t.Fatal("Park raw binding fact delta was not exactly changed=1/noop=0")
+	}
+	wantSQL := oldSQL
+	wantSQL.ParkEnabled = enabled
+	if !reflect.DeepEqual(*result.Relay.Binding, wantSQL) || wantSQL.AgentID != credential.AgentID || !wantSQL.Active || wantSQL.Runtime != model.RuntimeCodex || wantSQL.Generation != 1 {
+		f.t.Fatal("Park changed original Agent/Binding/runtime/generation/active identity")
+	}
+	if changed {
+		localFact, sqlFact := f.localEvents[localBefore], result.Facts[0]
+		var localBinding struct {
+			relay.Binding
+			CredentialHash string `json:"credential_hash"`
+		}
+		if localFact.Kind != relay.EventBinding || localFact.Actor != slot || json.Unmarshal(localFact.Data, &localBinding) != nil || localBinding.ParkEnabled != enabled || localBinding.BindID != auth.BindID || localBinding.Runtime != auth.Runtime || localBinding.Generation != auth.Generation || !localBinding.Active || localBinding.SessionID != auth.SessionID || localBinding.CredentialHash != relay.Digest(auth.Secret) {
+			f.t.Fatal("Local Park binding fact changed a credential or original identity")
+		}
+		binding, err := model.DecodeEnterpriseBindingUpdate(sqlFact)
+		if err != nil || sqlFact.Kind != model.EnterpriseBindingUpdatedKind || sqlFact.Actor != slot || !reflect.DeepEqual(binding, wantSQL) {
+			f.t.Fatal("SQL Park binding fact changed original identity", err)
+		}
+	}
+	current, err := f.local.Inspect(auth)
+	if err != nil || current.ParkEnabled != enabled || current.BindID != auth.BindID || current.Generation != auth.Generation {
+		f.t.Fatal("Local Park lost live original credential", err)
+	}
+	if _, err := f.db.ReadonlySnapshot(f.t.Context(), credential.Auth, "trace-room"); err != nil {
+		f.t.Fatal("SQL Park lost original narrow credential", err)
+	}
+	replayed, err := f.db.ResolveRelayOperation(f.t.Context(), command)
+	if err != nil || replayed.Outcome != sqlstore.OutcomeReplayed || !reflect.DeepEqual(replayed.Relay, result.Relay) || !reflect.DeepEqual(replayed.Facts, result.Facts) || replayed.Seq != result.Seq || replayed.Revision != result.Revision {
+		f.t.Fatal("Park original changed/noop accepted receipt did not replay exactly", err)
+	}
+	if f.local.Snapshot().Bindings[slot].ParkEnabled != enabled {
+		f.t.Fatal("independent literal Park policy oracle failed")
 	}
 }
 
@@ -410,6 +517,54 @@ func TestLocalSQLFullNativeTransitionTraceParity(t *testing.T) {
 	f.check("bind-slot1-claude-gen1", 0, states)
 	f.bind(model.ActorSlot2, model.RuntimeCodex, "b", false)
 	f.check("bind-slot2-codex-gen1", 0, states)
+	f.park(model.ActorSlot2, false, "park-off", true)
+	f.check("park-off-binding-fact-changed-one", 0, states)
+	f.park(model.ActorSlot2, false, "park-off-noop", false)
+	f.check("park-off-noop-original-receipt", 0, states)
+	f.send(model.ActorSlot1, "park-foreground", "PARK-FOREGROUND full body 中文\nsecond line END-FOREGROUND", 1)
+	states["park-foreground"] = "queued"
+	f.check("queued-while-stop-park-disabled", 1, states)
+	localBefore := len(f.localEvents)
+	sqlBefore := f.sqlSnapshot()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	empty, err := f.local.Claim(ctx, f.localAuth[model.ActorSlot2], true)
+	cancel()
+	if err != nil || empty != nil {
+		t.Fatal("disabled Local Stop park consumed queued work", err)
+	}
+	emptySQL := f.sqlCommit(model.ActorSlot2, "disabled-stop-park-claim", relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim, ParkEnabled: true})
+	if !emptySQL.Relay.Empty || emptySQL.Relay.Claim != nil || len(emptySQL.Facts) != 0 || len(f.localEvents) != localBefore || len(f.sqlSnapshot().Events) != len(sqlBefore.Events) {
+		t.Fatal("disabled SQL/Local Stop park emitted a claim/envelope or raw fact")
+	}
+	f.check("disabled-stop-park-empty-zero-raw-facts", 0, states)
+	f.restartWithReaped(0)
+	if f.local.Snapshot().Bindings[model.ActorSlot2].ParkEnabled {
+		t.Fatal("Local reopen forgot persisted disabled policy")
+	}
+	parkProjection, err := relay.ProjectEnterpriseSnapshot(f.sqlSnapshot())
+	if err != nil || parkProjection.Bindings[model.ActorSlot2].ParkEnabled {
+		t.Fatal("SQL reopen forgot persisted disabled policy", err)
+	}
+	f.check("reopen-no-delivery-disabled-policy-preserved", 0, states)
+	parkLocalReceipt, parkSQLReceipt := f.claim(model.ActorSlot2, "park-foreground")
+	states["park-foreground"] = "delivering"
+	f.check("foreground-claim-works-while-park-disabled", 1, states)
+	f.ack(model.ActorSlot2, "park-foreground", parkLocalReceipt, parkSQLReceipt, "park-foreground-ack")
+	states["park-foreground"] = "handed_off"
+	f.check("foreground-ack-while-park-disabled", 1, states)
+	f.park(model.ActorSlot2, true, "park-on", true)
+	f.check("park-on-binding-fact-changed-one", 0, states)
+	f.park(model.ActorSlot2, true, "park-on-noop", false)
+	f.check("park-on-noop-original-receipt", 0, states)
+	f.send(model.ActorSlot1, "park-stop", "PARK-STOP full body 中文\nsecond line END-STOP", 1)
+	states["park-stop"] = "queued"
+	f.check("queued-while-stop-park-enabled", 1, states)
+	parkLocalReceipt, parkSQLReceipt = f.claim(model.ActorSlot2, "park-stop", true)
+	states["park-stop"] = "delivering"
+	f.check("enabled-stop-park-claims-full-envelope", 1, states)
+	f.ack(model.ActorSlot2, "park-stop", parkLocalReceipt, parkSQLReceipt, "park-stop-ack")
+	states["park-stop"] = "handed_off"
+	f.check("enabled-stop-park-ack", 1, states)
 	f.send(model.ActorSlot1, "first", "first native send", 1)
 	states["first"] = "queued"
 	f.check("send", 1, states)
@@ -432,6 +587,7 @@ func TestLocalSQLFullNativeTransitionTraceParity(t *testing.T) {
 		t.Fatal("SQL frozen original send receipt changed")
 	}
 	f.check("same-id-send-no-duplicate-original-receipt", 0, states)
+	f.bodies["report"] = "@agent2 full report body"
 	localReport, err := f.local.Report(f.localAuth[model.ActorSlot1], 1, "@agent2 full report body", 1)
 	if err != nil {
 		t.Fatal(err)
@@ -482,6 +638,7 @@ func TestLocalSQLFullNativeTransitionTraceParity(t *testing.T) {
 	}
 	sqlRetry := f.sqlCommit("", "retry-owner", relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationRetry, MessageID: f.id(1, "retry-original")})
 	f.alias(localRetry.ID, sqlRetry.Relay.Message.ID, "retry")
+	f.bodies["retry"] = f.bodies["retry-original"]
 	states["retry"] = "queued"
 	f.check("owner-explicit-retry", 1, states)
 	before := f.local.Sequence()
