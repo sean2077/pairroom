@@ -963,10 +963,16 @@ func TestS3cRebuildInterruptsBothRoomsPreservingHistory(t *testing.T) {
 	schema, _ := sqltest.CreateSchema(t, dsn)
 	admin := sqltest.SeedRoom(t, dsn, schema)
 	ctx := context.Background()
-	if _, err := admin.Exec(ctx, `INSERT INTO rooms (room_id, host_mode) VALUES ('room-2', 'native')`); err != nil {
+	if _, err := admin.Exec(ctx, `INSERT INTO rooms (room_id, org_id, host_mode, owner_user_id) VALUES ('room-2', 'org-test', 'native', 'u-owner')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, `INSERT INTO room_members (room_id, user_id, role) VALUES ('room-2', 'u-owner', 'owner')`); err != nil {
+	if _, err := admin.Exec(ctx, `INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-2', 'org-test', 'u-owner', 'owner')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO slot_generations (org_id, room_id, slot, generation) VALUES ('org-test', 'room-2', 'slot1', 1), ('org-test', 'room-2', 'slot2', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO room_slots (room_id, slot, current_generation) VALUES ('room-2', 'slot1', 1), ('room-2', 'slot2', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	proxy := sqltest.StartProxy(t, "drop-response")

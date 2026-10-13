@@ -72,8 +72,11 @@ func Connect(t *testing.T, dsn, schema string) *pgx.Conn {
 	return conn
 }
 
-// SeedRoom applies the kernel schema and seeds one deployment, an owner, a
-// viewer, an optional second writer and a native Room.
+// SeedRoom applies the kernel schema and seeds one deployment, the configured
+// organization anchor, an owner, a viewer, an optional second writer and one
+// native Room with its durable owner record and both slot heads at generation
+// one. The statement order is the schema's insertion order: the organization
+// anchor, then the resources it is referenced by.
 func SeedRoom(t *testing.T, dsn, schema string, extraUsers ...string) *pgx.Conn {
 	t.Helper()
 	ctx := context.Background()
@@ -82,15 +85,19 @@ func SeedRoom(t *testing.T, dsn, schema string, extraUsers ...string) *pgx.Conn 
 		t.Fatal(err)
 	}
 	seeds := []string{
+		`INSERT INTO organizations (org_id) VALUES ('org-test')`,
+		`INSERT INTO configured_org (org_id) VALUES ('org-test')`,
 		`INSERT INTO deployment (deployment_id, org_id) VALUES ('dep-test', 'org-test')`,
-		`INSERT INTO users (user_id) VALUES ('u-owner'), ('u-viewer')`,
-		`INSERT INTO rooms (room_id, host_mode) VALUES ('room-1', 'native')`,
-		`INSERT INTO room_members (room_id, user_id, role) VALUES ('room-1', 'u-owner', 'owner'), ('room-1', 'u-viewer', 'viewer')`,
+		`INSERT INTO users (user_id, org_id) VALUES ('u-owner', 'org-test'), ('u-viewer', 'org-test')`,
+		`INSERT INTO rooms (room_id, org_id, host_mode, owner_user_id) VALUES ('room-1', 'org-test', 'native', 'u-owner')`,
+		`INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-1', 'org-test', 'u-owner', 'owner'), ('room-1', 'org-test', 'u-viewer', 'viewer')`,
+		`INSERT INTO slot_generations (org_id, room_id, slot, generation) VALUES ('org-test', 'room-1', 'slot1', 1), ('org-test', 'room-1', 'slot2', 1)`,
+		`INSERT INTO room_slots (room_id, slot, current_generation) VALUES ('room-1', 'slot1', 1), ('room-1', 'slot2', 1)`,
 	}
 	for _, user := range extraUsers {
 		seeds = append(seeds,
-			`INSERT INTO users (user_id) VALUES ('`+user+`')`,
-			`INSERT INTO room_members (room_id, user_id, role) VALUES ('room-1', '`+user+`', 'member')`)
+			`INSERT INTO users (user_id, org_id) VALUES ('`+user+`', 'org-test')`,
+			`INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-1', 'org-test', '`+user+`', 'member')`)
 	}
 	for _, seed := range seeds {
 		if _, err := conn.Exec(ctx, seed); err != nil {

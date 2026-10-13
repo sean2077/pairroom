@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -91,10 +90,12 @@ func ApplySchema(ctx context.Context, conn *pgx.Conn, schema string) error {
 		defer ccancel()
 		_ = tx.Rollback(cctx)
 	}()
-	for _, statement := range splitStatements(schemaSQL) {
-		if _, err := tx.Exec(ctx, statement); err != nil {
-			return fmt.Errorf("sqlstore: apply schema: %w", err)
-		}
+	// The embedded DDL is static and parameterless, so it is sent as one
+	// simple-protocol query: a statement splitter would break the
+	// dollar-quoted trigger function bodies (internal semicolons and "--"
+	// text inside them are data, not separators).
+	if _, err := tx.Exec(ctx, schemaSQL); err != nil {
+		return fmt.Errorf("sqlstore: apply schema: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO `+qualified(schema, "schema_meta")+` (version) VALUES ($1)`, sqlstoreSchemaVersion); err != nil {
 		return fmt.Errorf("sqlstore: record schema version: %w", err)
@@ -138,24 +139,3 @@ func verifyDeployment(ctx context.Context, q rowQuerier, schema, want string) er
 // schemaBudget bounds the whole schema application, which is slower than an
 // ordinary operation.
 const schemaBudget = 60 * time.Second
-
-// splitStatements strips line comments, then splits the embedded DDL on
-// semicolons. The DDL must not contain a literal "--" (it has none).
-func splitStatements(sql string) []string {
-	var uncommented strings.Builder
-	for _, line := range strings.Split(sql, "\n") {
-		if idx := strings.Index(line, "--"); idx >= 0 {
-			line = line[:idx]
-		}
-		uncommented.WriteString(line)
-		uncommented.WriteString("\n")
-	}
-	var statements []string
-	for _, chunk := range strings.Split(uncommented.String(), ";") {
-		trimmed := strings.TrimSpace(chunk)
-		if trimmed != "" {
-			statements = append(statements, trimmed)
-		}
-	}
-	return statements
-}

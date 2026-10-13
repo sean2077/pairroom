@@ -28,8 +28,13 @@ const (
 	// are refused; future versions change this constant and add a new encoding.
 	mutationVersionV1 = 1
 	// sqlstoreSchemaVersion is the SQL schema version this build applies and
-	// accepts. It is independent of the Local store's format window.
-	sqlstoreSchemaVersion = 1
+	// accepts. It is independent of the Local store's format window. Version 2
+	// adds the enterprise control model (organization anchor, identities,
+	// devices, agents, projects, owners, slot generations and bindings) and is
+	// the only supported version: version 1 schemas are refused, and a schema
+	// is never evolved in place once any persistent external deployment or
+	// released version supports it.
+	sqlstoreSchemaVersion = 2
 	// factCodecVersion versions the stored event encoding. It is independent of
 	// the Local Store version (which also covers provisioning and windows).
 	factCodecVersion = 1

@@ -40,6 +40,12 @@ func TestOpenRefusesUnappliedSchemaAndWrongDeployment(t *testing.T) {
 	if err := ApplySchema(ctx, conn, schema); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := conn.Exec(ctx, `INSERT INTO organizations (org_id) VALUES ('org-test')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO configured_org (org_id) VALUES ('org-test')`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.Exec(ctx, `INSERT INTO deployment (deployment_id, org_id) VALUES ('dep-test', 'org-test')`); err != nil {
 		t.Fatal(err)
 	}

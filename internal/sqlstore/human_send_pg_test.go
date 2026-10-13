@@ -69,10 +69,10 @@ func TestCommitHumanSendAndReplay(t *testing.T) {
 func TestHumanSendPrincipalIsolation(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	if _, err := f.admin.Exec(ctx, `INSERT INTO users (user_id) VALUES ('u-owner2')`); err != nil {
+	if _, err := f.admin.Exec(ctx, `INSERT INTO users (user_id, org_id) VALUES ('u-owner2', 'org-test')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.admin.Exec(ctx, `INSERT INTO room_members (room_id, user_id, role) VALUES ('room-1', 'u-owner2', 'member')`); err != nil {
+	if _, err := f.admin.Exec(ctx, `INSERT INTO room_members (room_id, org_id, user_id, role) VALUES ('room-1', 'org-test', 'u-owner2', 'member')`); err != nil {
 		t.Fatal(err)
 	}
 	resA, err := f.store.CommitHumanSend(ctx, humanSendCommand("u-owner", "shared-id", "slot2", "from owner"))
