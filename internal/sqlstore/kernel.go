@@ -383,7 +383,11 @@ func (s *Store) commitWithRestarts(ctx context.Context, plan opPlan, fact model.
 		return refused(ClassLeaseLost, s.poisoned)
 	}
 	// Reconnection belongs to this new explicit request, never to an effect retry.
-	if err := s.replaceClosedWork(opCtx); err != nil {
+	if err := s.replaceClosedWork(opCtx, plan); err != nil {
+		var admission *KernelError
+		if errors.As(err, &admission) && admission.Outcome == OutcomeRefused {
+			return refused(admission.Class, admission.Err)
+		}
 		return s.preEffectFailure(opCtx, err)
 	}
 	for restarts := 0; ; restarts++ {
