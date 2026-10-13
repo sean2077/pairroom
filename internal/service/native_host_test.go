@@ -33,7 +33,7 @@ type nativeFixture struct {
 }
 
 func nativeHTTP(t *testing.T) *nativeFixture {
-	return nativeHTTPWithWake(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return context.Canceled }})
+	return nativeHTTPWithWake(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return context.Canceled }})
 }
 
 func nativeHTTPWithWake(t *testing.T, wakeConfig nativeWakerConfig) *nativeFixture {
@@ -43,7 +43,7 @@ func nativeHTTPWithWake(t *testing.T, wakeConfig nativeWakerConfig) *nativeFixtu
 
 func nativeHTTPWithNotifier(t *testing.T, notifier *Notifier) *nativeFixture {
 	t.Helper()
-	return nativeHTTPWith(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return context.Canceled }}, notifier)
+	return nativeHTTPWith(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return context.Canceled }}, notifier)
 }
 
 func nativeHTTPWith(t *testing.T, wakeConfig nativeWakerConfig, notifier *Notifier) *nativeFixture {

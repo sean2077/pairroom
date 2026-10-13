@@ -129,7 +129,7 @@ func assertLegacyRoomsPreserved(t *testing.T, fixtureName string, checkpointSche
 		if !ok {
 			t.Fatal("legacy Room lost its Project")
 		}
-		runtime, err := startNativeHostRuntime(context.Background(), registry, project, room, "127.0.0.1", nativeWakerConfig{Mock: true}, nil)
+		runtime, err := startNativeHostRuntime(context.Background(), registry, project, room, "127.0.0.1", nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Mock: true}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

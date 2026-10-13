@@ -123,7 +123,7 @@ func (f *lanWakeFixture) reopened(t *testing.T) *lanGuestWakeRelay {
 func TestLANGuestWakeCommitsBothReservationsBeforeLocalEffectAndRestart(t *testing.T) {
 	f := newLANGuestWakeFixture(t)
 	effects := 0
-	waker := newNativeWaker(nativeWakerConfig{Relay: f.adapter,
+	waker := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Relay: f.adapter,
 		Wait: func(context.Context, time.Duration) error { return nil },
 		Run: func(_ context.Context, command string, args ...string) error {
 			// A separately opened Store must read the spent fact before effect.
