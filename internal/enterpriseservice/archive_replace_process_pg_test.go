@@ -26,6 +26,7 @@ import (
 	"github.com/sean2077/pairroom/internal/enterpriseauth"
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/relayclient"
 	"github.com/sean2077/pairroom/internal/sqlstore"
 	"golang.org/x/oauth2"
 )
@@ -33,6 +34,11 @@ import (
 type archiveReplaceProcessConfig struct {
 	endpointProcessConfig
 	Marker, Requests string
+}
+
+type archiveSessionHostConfig struct {
+	endpointProcessConfig
+	ExpectedBindingID string
 }
 
 // This child is a real SQL-backed Service. Only the response boundary is
@@ -177,22 +183,62 @@ func archiveReplaceStart(t *testing.T, cfg archiveReplaceProcessConfig) *endpoin
 }
 
 // This is deliberately a controlled session host, not a vendor process or a
-// relay wait. Its IPC echo proves the same independent OS process survives.
+// relay wait. It drives real CLI status from the bound Workspace/Home and
+// official session metadata. Private CLI output never enters the IPC stream.
 func TestArchiveNativeSessionHostProcessHelper(t *testing.T) {
-	if os.Getenv("PAIRROOM_ARCHIVE_SESSION_HOST") != "1" {
+	path := os.Getenv("PAIRROOM_ARCHIVE_SESSION_HOST")
+	if path == "" {
 		return
+	}
+	var cfg archiveSessionHostConfig
+	if err := privatefile.ReadJSON(path, 64<<10, &cfg); err != nil {
+		t.Fatal("session host config unavailable")
+	}
+	relayclient.IsolateNativeCaller(t)
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData", "USERPROFILE"} {
+		t.Setenv(key, cfg.Home)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg.Home, "claude"))
+	t.Setenv("CLAUDE_CODE_SESSION_ID", cfg.Session)
+	_, journal := processBindingJournal(t, cfg.DeviceDirectory, false)
+	if journal["bind_id"] != cfg.ExpectedBindingID || journal["session_hash"] != relay.Digest("claude\x00"+cfg.Session) || journal["workspace"] != cfg.Workspace {
+		t.Fatal("session host official source differs from frozen Binding")
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var privateOut, privateErr bytes.Buffer
+		err := relayclient.Run(ctx, []string{"status", "--repo", cfg.Workspace}, strings.NewReader(""), &privateOut, &privateErr)
+		cancel()
+		var wire struct {
+			Relay relay.Summary `json:"relay"`
+			Local struct {
+				Workspace string `json:"binding_workspace"`
+			} `json:"local"`
+		}
+		if err != nil || json.Unmarshal(privateOut.Bytes(), &wire) != nil || !wire.Relay.Bindings["slot1"].Associated || wire.Relay.Bindings["slot1"].Generation != 1 || wire.Relay.Bindings["slot1"].Runtime != "claude" || wire.Local.Workspace != cfg.Workspace {
+			_, _ = fmt.Fprintln(os.Stdout, "status-failed")
+			continue
+		}
 		_, _ = fmt.Fprintln(os.Stdout, scanner.Text())
 	}
 	os.Exit(0)
 }
 
-func archiveSessionHost(t *testing.T) func(string) {
+func archiveSessionHost(t *testing.T, cfg endpointProcessConfig) func(string) {
 	t.Helper()
+	dir := filepath.Join(t.TempDir(), "session-host")
+	if err := privatefile.Mkdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	_, journal := processBindingJournal(t, cfg.DeviceDirectory, false)
+	if err := privatefile.WriteJSON(path, archiveSessionHostConfig{cfg, journal["bind_id"].(string)}); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestArchiveNativeSessionHostProcessHelper$")
-	cmd.Env = append(os.Environ(), "PAIRROOM_ARCHIVE_SESSION_HOST=1")
+	cmd.Env = append(os.Environ(), "PAIRROOM_ARCHIVE_SESSION_HOST="+path)
+	cmd.Dir = cfg.Workspace
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -345,14 +391,30 @@ func (x *archiveReplaceFixture) counts(t *testing.T) [4]int64 {
 }
 func (x *archiveReplaceFixture) restart(t *testing.T) {
 	t.Helper()
-	var before, after int64
-	if err := x.f.admin.QueryRow(context.Background(), `SELECT epoch FROM ownership`).Scan(&before); err != nil {
-		t.Fatal(err)
+	type owner struct {
+		epoch    int64
+		instance string
+		backend  int
+		start    time.Time
 	}
+	read := func() owner {
+		var value owner
+		if err := x.f.admin.QueryRow(context.Background(), `SELECT epoch,instance_id,lease_pid,lease_backend_start FROM ownership`).Scan(&value.epoch, &value.instance, &value.backend, &value.start); err != nil {
+			t.Fatal("ownership observation unavailable")
+		}
+		return value
+	}
+	before := read()
+	old := x.service
+	oldPID := old.command.Process.Pid
 	x.service.kill(t)
+	if !old.finished || old.command.ProcessState == nil || old.command.ProcessState.Success() {
+		t.Fatal("old Service lacks actual abnormal terminal process state")
+	}
 	x.service = archiveReplaceStart(t, x.cfg)
-	if err := x.f.admin.QueryRow(context.Background(), `SELECT epoch FROM ownership`).Scan(&after); err != nil || after != before+1 {
-		t.Fatal("Service restart did not increment exact epoch")
+	after := read()
+	if after.epoch != before.epoch+1 || after.instance == before.instance || after.instance == "" || after.backend == before.backend && after.start.Equal(before.start) || x.service.command.Process.Pid == oldPID {
+		t.Fatal("Service restart did not replace OS process, instance and lease identity at exact next epoch")
 	}
 }
 
@@ -384,7 +446,7 @@ func processBindingJournal(t *testing.T, directory string, replace bool) (string
 
 func TestEnterpriseArchiveActualServiceKillKeepsNativeSessionHostAndBindings(t *testing.T) {
 	x := newArchiveReplaceFixture(t)
-	echo := archiveSessionHost(t)
+	echo := archiveSessionHost(t, x.endpoints[0])
 	echo("before-archive-7d41")
 	e := x.endpoints[0]
 	endpointRun(t, e, "send", "--repo", e.Workspace, "--id", "before-archive-send", "--text", "retained archive history", "--peer-generation", "1")
