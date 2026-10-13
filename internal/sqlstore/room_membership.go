@@ -63,7 +63,7 @@ func (s *Store) roomMembershipPlan(cmd RoomMembershipCommand) (opPlan, string) {
 	}
 	key := OpKey{Namespace: namespaceHuman, Deployment: cmd.Auth.Deployment, RoomID: cmd.RoomID,
 		OpKind: opKindRoomMembership, Identifier: cmd.ClientID, Principal: cmd.Auth.UserID}
-	return opPlan{key: key, userID: cmd.Auth.UserID, expectedRevision: cmd.ExpectedRevision,
+	return opPlan{auth: cmd.Auth, key: key, userID: cmd.Auth.UserID, expectedRevision: cmd.ExpectedRevision,
 		audit: AuditRecord{Kind: "room.membership." + string(cmd.Intent.Action), Outcome: auditOutcomeAccepted},
 		hash:  roomMembershipHash(key, cmd.Intent), encodingBudget: maxEncodingBytes, roomMembership: &cmd.Intent}, ""
 }
@@ -96,8 +96,13 @@ type membershipTargetState struct {
 // independently, and the target membership takes UPDATE from the outset;
 // there is no later lock upgrade, including when actor and target coincide.
 func (s *Store) readPlanDependencies(ctx context.Context, q rowQuerier, plan opPlan, d *dependencyState, lock string) error {
+	if plan.control != nil {
+		var err error
+		d.control, err = s.readControlDependencies(ctx, q, plan, lock)
+		return err
+	}
 	if plan.roomMembership == nil {
-		return s.readDependencies(ctx, q, plan.key.RoomID, plan.userID, d, lock)
+		return s.readDependencies(ctx, q, plan.key.RoomID, plan.auth, d, lock)
 	}
 	targetID := plan.roomMembership.TargetUserID
 	ids := []string{plan.userID}
@@ -119,6 +124,11 @@ func (s *Store) readPlanDependencies(ctx context.Context, q rowQuerier, plan opP
 		if id == targetID {
 			d.target.userMissing, d.target.userDisabled = missing, disabled
 		}
+	}
+	var err error
+	d.credential, err = s.readCredential(ctx, q, plan.auth, lock)
+	if err != nil {
+		return err
 	}
 	for _, id := range ids {
 		memberLock := lock
@@ -164,10 +174,14 @@ func (s *Store) prepareMembership(ctx context.Context, tx pgx.Tx, plan opPlan, l
 		if locked.target.memberMissing || locked.target.memberDisabled {
 			return model.Event{}, ClassInvalidControlState, nil
 		}
+	}
+	if intent.Action == MembershipRemove || intent.Role == RoomViewer {
 		// Until the full Binding/grant retirement plan is available, refuse
-		// this unsupported state instead of performing half a revocation.
+		// removal or viewer admission/demotion with an active Binding rather
+		// than preserving a grant that a later promotion could revive.
 		// The exclusive ownership guard excludes managed Binding mutations
-		// throughout this read and the commit; identity links are immutable.
+		// throughout this read and commit. Scope is strictly this Room; the
+		// same User's Bindings in other Rooms are unaffected.
 		var active bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.table("bindings")+` b JOIN `+s.table("agents")+` a ON a.agent_id = b.agent_id JOIN `+s.table("devices")+` d ON d.device_id = a.device_id WHERE b.room_id = $1 AND d.user_id = $2 AND b.retired_at IS NULL)`, plan.key.RoomID, intent.TargetUserID).Scan(&active); err != nil {
 			return model.Event{}, "", err

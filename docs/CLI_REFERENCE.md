@@ -10,6 +10,7 @@ The standalone `serve` command is Embedded-only; Native is the recommended defau
 |---|---|
 | `pairroom daemon` | Install and manage pairroom service in the OS service manager |
 | `pairroom service` | Start the multi-Project / multi-Room Management Shell |
+| `pairroom enterprise` | Explicitly initialize or serve the PostgreSQL-backed enterprise browser slice; see [current scope and configuration](OPERATIONS.md#enterprise-entrypoint-under-implementation) |
 | `pairroom serve` | Start a current-format standalone Embedded Room |
 | `pairroom doctor` | Validate Git and vendor CLI installation |
 | `pairroom providers` | Read and validate the sanitized CC Switch Profile catalog without changing current state |
@@ -79,6 +80,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--actor`
 - `--attach`
 - `--auto-start`
+- `--bootstrap-subject`
 - `--brief`
 - `--cc-switch-db`
 - `--claude-command`

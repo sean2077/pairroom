@@ -19,7 +19,7 @@ func (s *Store) Resolve(ctx context.Context, auth AuthContext, key OpKey, mutati
 	if auth.Deployment != s.cfg.DeploymentID {
 		return refused(ClassInvalidRequest, nil)
 	}
-	plan := opPlan{key: key, userID: auth.UserID, hash: canonicalHash(key, mutation)}
+	plan := opPlan{auth: auth, key: key, userID: auth.UserID, hash: canonicalHash(key, mutation)}
 	return s.resolveWithFallback(ctx, plan)
 }
 
@@ -123,7 +123,7 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 	if err := s.readPlanDependencies(ctx, tx, plan, &locked, lockShare); err != nil {
 		return resolveIncomplete(ctx, err)
 	}
-	if err := s.readRoom(ctx, tx, plan.key.RoomID, &locked, lockShare); err != nil {
+	if err := s.readPlannedRoom(ctx, tx, plan, &locked, lockShare); err != nil {
 		return resolveIncomplete(ctx, err)
 	}
 	if err := s.fenceHoldsLocked(ctx, tx, ownerEpoch, ownerPID, ownerStart); err != nil {
@@ -133,9 +133,12 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		}
 		return resolveIncomplete(ctx, err)
 	}
+	if plan.control != nil {
+		return s.resolveControlPlan(ctx, tx, plan, locked.control)
+	}
 
 	if plan.roomCreate != nil {
-		if locked.userMissing || locked.userDisabled {
+		if locked.userMissing || locked.userDisabled || !locked.credential.allowed() {
 			return refused(ClassAuthorization, nil)
 		}
 	} else {

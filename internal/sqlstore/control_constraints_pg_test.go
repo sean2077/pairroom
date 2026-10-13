@@ -1035,14 +1035,39 @@ func TestControlSchemaLoadAndRollback(t *testing.T) {
 		if position == 0 {
 			t.Fatal("the trigger function body lost its comment text")
 		}
-		var configured int
-		if err := f.admin.QueryRow(ctx, `
-			SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-			WHERE n.nspname = $1 AND p.proconfig @> ARRAY['search_path=pg_catalog']`, f.schema).Scan(&configured); err != nil {
+		expected := map[string]bool{
+			"control_reject_change": true, "control_reject_delete": true,
+			"control_guard_columns": true, "control_guard_retired": true,
+			"room_slots_insert_guard": true, "room_slots_head_guard": true,
+			"bindings_active_generation_check": true, "owner_record_consistency_check": true,
+			"browser_session_revoke_once": true, "identity_bootstrap_once": true,
+		}
+		rows, err := f.admin.Query(ctx, `
+			SELECT p.proname, COALESCE(p.proconfig @> ARRAY['search_path=pg_catalog'],false)
+			FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+			WHERE n.nspname = $1`, f.schema)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if configured != 8 {
-			t.Fatalf("trigger functions without a pinned search_path: %d of 8", configured)
+		for rows.Next() {
+			var name string
+			var pinned bool
+			if err := rows.Scan(&name, &pinned); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			if !expected[name] || !pinned {
+				rows.Close()
+				t.Fatalf("unexpected or unpinned trigger function: %s pinned=%v", name, pinned)
+			}
+			delete(expected, name)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if len(expected) != 0 {
+			t.Fatalf("missing trigger functions: %v", expected)
 		}
 		var deferrable int
 		if err := f.admin.QueryRow(ctx, `

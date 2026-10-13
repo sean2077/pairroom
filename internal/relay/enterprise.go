@@ -55,6 +55,9 @@ var ErrEnterpriseReadOnly = errors.New("relay: legacy mutators are unavailable o
 type EnterpriseAuth struct {
 	Deployment string
 	UserID     string
+	// SessionID is the enterprise application's authenticated session ID,
+	// never a vendor-native SessionID or a caller-supplied command field.
+	SessionID string
 }
 
 // EnterpriseSendIntent is the typed stable intent of one human send.

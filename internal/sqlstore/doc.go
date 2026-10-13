@@ -1,15 +1,19 @@
 // Package sqlstore is the enterprise transactional kernel for one deployment's
-// Rooms. It provides the single-writer SQL transaction boundary the enterprise
-// storage seam is built on: one Room fact, its audit record and its immutable
-// operation identity commit atomically under the ownership fence, a strict
-// expected-revision check and a live authorization check.
+// Rooms and identity control. It provides one SQL transaction boundary: a Room
+// fact or closed deployment-scoped control receipt, authoritative changes,
+// audit and immutable operation identity commit under the same ownership fence
+// and live authorization checks. Room writes also check the expected revision.
 //
 // The supported typed human operations are Room creation, text-only Human
 // Send and owner-authorized membership admission, role change and removal,
 // alongside the internal append_fact primitive. RoomPort connects the shared
 // Relay projection without exposing a public service surface. Membership
-// removal currently refuses an active target Binding rather than performing
-// partial revocation; grant and Binding retirement commands are separate work.
+// removal and viewer admission/demotion currently refuse an active target
+// Binding in that Room rather than performing partial revocation; grant and
+// Binding retirement commands are separate work.
+// Explicit operator identity initialization, admission, administrative status
+// and persistent browser sessions use the same runner; public Room commands
+// recheck their session inside the guarded transaction, not only in middleware.
 // The design contract lives in docs/design/enterprise-service.md §13.
 //
 // Transaction discipline: the caller's context bounds every statement and the

@@ -56,7 +56,7 @@ func (s *Store) roomCreatePlan(cmd RoomCreateCommand) (opPlan, string) {
 	}
 	key := OpKey{Namespace: namespaceHuman, Deployment: cmd.Auth.Deployment, RoomID: cmd.RoomID,
 		OpKind: opKindRoomCreate, Identifier: cmd.ClientID, Principal: cmd.Auth.UserID}
-	return opPlan{key: key, userID: cmd.Auth.UserID, audit: AuditRecord{Kind: "room.create", Outcome: auditOutcomeAccepted},
+	return opPlan{auth: cmd.Auth, key: key, userID: cmd.Auth.UserID, audit: AuditRecord{Kind: "room.create", Outcome: auditOutcomeAccepted},
 		hash: roomCreateHash(key, cmd.Intent), encodingBudget: maxEncodingBytes, roomCreate: &cmd.Intent}, ""
 }
 

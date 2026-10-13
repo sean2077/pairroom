@@ -1,0 +1,26 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #20312c; background: #f3f6f2; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(880px, calc(100% - 40px)); margin: 56px auto; }
+header { margin-bottom: 32px; }
+.eyebrow { color: #39765c; font-size: 12px; font-weight: 750; letter-spacing: .18em; }
+h1 { font-size: clamp(32px, 5vw, 48px); letter-spacing: -.04em; margin: 12px 0; }
+h2 { font-size: 19px; margin: 0 0 14px; }
+.intro, #account-state { color: #5b6a63; line-height: 1.6; }
+section { padding: 26px; background: #fff; border: 1px solid #dce5dd; border-radius: 16px; margin: 18px 0; }
+.account, .room-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.account p, .room-heading h2 { margin: 0; }
+.actions, .room-input { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+button, .actions a { font: inherit; font-size: 14px; border: 1px solid #c7d5cb; border-radius: 8px; padding: 10px 15px; background: #f4f8f3; color: #244c3c; cursor: pointer; text-decoration: none; }
+button:hover, .actions a:hover { background: #e9f1e8; }
+button:disabled { cursor: default; opacity: .45; }
+label { display: block; font-size: 14px; margin-bottom: 8px; color: #53665a; }
+input { flex: 1; min-width: 160px; font: inherit; padding: 11px; border: 1px solid #c7d5cb; border-radius: 8px; }
+#status { font-size: 14px; color: #667568; min-height: 20px; }
+#room-sequence { font-size: 13px; color: #68766c; }
+#messages { padding: 0; list-style: none; }
+#messages li { border-top: 1px solid #e6ece5; padding: 18px 0; }
+.message-label { color: #68806e; font-size: 12px; }
+.message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+[hidden] { display: none !important; }
+@media (max-width: 640px) { main { margin-top: 28px; } .account { align-items: flex-start; flex-direction: column; } section { padding: 20px; } }

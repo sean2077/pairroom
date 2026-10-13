@@ -96,7 +96,7 @@ check: lint coverage-contract env-check-contract test race vet agent-contract re
 # Discover owned scripts so a new client or regression cannot silently escape.
 js-check:
 	@command -v node >/dev/null 2>&1 || { printf '%s\n' 'make js-check requires Node.js on PATH; see CONTRIBUTING.md' >&2; exit 1; }
-	@set -e; for file in internal/webui/assets/*.js internal/server/assets/*.js internal/service/assets/*.js desktop/frontend/*.js scripts/*.js; do test -f "$$file" || continue; node --check "$$file"; done
+	@set -e; for file in internal/webui/assets/*.js internal/server/assets/*.js internal/service/assets/*.js internal/enterpriseservice/web/*.js desktop/frontend/*.js scripts/*.js; do test -f "$$file" || continue; node --check "$$file"; done
 	@set -e; for file in scripts/test_*.js; do node "$$file"; done
 
 agent-contract:

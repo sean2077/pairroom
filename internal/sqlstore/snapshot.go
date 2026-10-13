@@ -103,7 +103,7 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	var locked dependencyState
-	if err := s.readDependencies(ctx, tx, roomID, auth.UserID, &locked, lockShare); err != nil {
+	if err := s.readDependencies(ctx, tx, roomID, auth, &locked, lockShare); err != nil {
 		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
 	var hostMode, orgID string

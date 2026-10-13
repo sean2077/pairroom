@@ -76,6 +76,8 @@ func run(args []string) error {
 		return runDaemon(args[1:])
 	case "service":
 		return runService(args[1:])
+	case "enterprise":
+		return runEnterprise(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "doctor":
@@ -1136,6 +1138,7 @@ func printHelp() {
 Usage:
   pairroom daemon <command>      Install and manage pairroom service in the OS service manager
   pairroom service [options]     Start the multi-Project, multi-Room Management Shell
+  pairroom enterprise <command>  Initialize or serve the authenticated enterprise service
   pairroom serve [options]       Start a standalone Embedded Room and Room View
   pairroom doctor [options]      Verify Git and vendor CLI installations
   pairroom providers [options]   Inspect the read-only sanitized CC Switch Profile catalog

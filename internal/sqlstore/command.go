@@ -88,6 +88,7 @@ var (
 type AuthContext struct {
 	Deployment string
 	UserID     string
+	SessionID  string
 }
 
 // OpKey is the idempotency namespace of §13. The binding fields exist for the
@@ -157,6 +158,8 @@ type Result struct {
 	Seq      uint64
 	Revision uint64
 	Fact     model.Event
+	Control  *ControlReceipt
+	session  *BrowserSession
 }
 
 // KernelError is the error form of a non-committed outcome.

@@ -39,6 +39,9 @@ type Config struct {
 	DSN          string
 	Schema       string
 	DeploymentID string
+	// RequireSessionAuth forbids User-only authorization in public adapters.
+	// False is retained solely for existing trusted internal callers/fixtures.
+	RequireSessionAuth bool
 }
 
 // Store is the single-writer transaction kernel for one deployment. The lease
@@ -144,19 +147,24 @@ type dependencyState struct {
 	ownerUserID    string
 	orgID          string
 	target         membershipTargetState
+	credential     sessionDependency
+	control        *controlDependencies
 }
 
 func (d dependencyState) equal(other dependencyState) bool {
+	if d.control != nil || other.control != nil {
+		return equalControlDependencies(d.control, other.control)
+	}
 	return d.userMissing == other.userMissing && d.userDisabled == other.userDisabled &&
 		d.memberMissing == other.memberMissing && d.memberDisabled == other.memberDisabled &&
 		d.memberRole == other.memberRole && d.roomMissing == other.roomMissing &&
-		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.target == other.target
+		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.target == other.target && d.credential == other.credential
 }
 
 // readAllowed reports live read authorization: the user and the membership
 // must exist and be enabled, at any role.
 func (d dependencyState) readAllowed() bool {
-	return !d.userMissing && !d.userDisabled && !d.memberMissing && !d.memberDisabled
+	return !d.userMissing && !d.userDisabled && !d.memberMissing && !d.memberDisabled && d.credential.allowed()
 }
 
 // writeAllowed reports live write authorization for a new append.
@@ -173,11 +181,16 @@ const (
 // readDependencies reads the command's authorization dependencies in the
 // documented global order (users, then room_members) with the requested lock
 // clause.
-func (s *Store) readDependencies(ctx context.Context, q rowQuerier, roomID, userID string, d *dependencyState, lock string) error {
+func (s *Store) readDependencies(ctx context.Context, q rowQuerier, roomID string, auth AuthContext, d *dependencyState, lock string) error {
+	userID := auth.UserID
 	err := q.QueryRow(ctx, `SELECT disabled FROM `+s.table("users")+` WHERE user_id = $1`+lock, userID).Scan(&d.userDisabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.userMissing = true
 	} else if err != nil {
+		return err
+	}
+	d.credential, err = s.readCredential(ctx, q, auth, lock)
+	if err != nil {
 		return err
 	}
 	err = q.QueryRow(ctx, `SELECT role, disabled FROM `+s.table("room_members")+` WHERE room_id = $1 AND user_id = $2`+lock, roomID, userID).Scan(&d.memberRole, &d.memberDisabled)
@@ -217,6 +230,8 @@ type opPlan struct {
 	encodingBudget   int
 	roomCreate       *model.EnterpriseRoomIntent
 	roomMembership   *model.EnterpriseMembershipIntent
+	auth             AuthContext
+	control          *controlMutation
 }
 
 // ownershipLock is fixed before any row is locked. Room creation and its
@@ -224,6 +239,12 @@ type opPlan struct {
 // exist. Membership controls use the same exclusive guard while their target
 // row can be absent; ordinary appends retain their shared ownership guard.
 func (p opPlan) ownershipLock() string {
+	if p.control != nil {
+		if p.control.kind == controlAuthenticate || p.control.kind == controlReadiness {
+			return lockShare
+		}
+		return lockExclusive
+	}
 	if p.roomCreate != nil || p.roomMembership != nil {
 		return lockExclusive
 	}
@@ -240,6 +261,7 @@ func (s *Store) Commit(ctx context.Context, cmd Command) (Result, error) {
 		return refused(ClassInvalidRequest, nil)
 	}
 	plan := opPlan{
+		auth:             cmd.Auth,
 		key:              cmd.Key,
 		userID:           cmd.Auth.UserID,
 		audit:            cmd.Mutation.Audit,
@@ -293,7 +315,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
-	if err := s.readRoom(ctx, s.work, plan.key.RoomID, &discovered, lockNone); err != nil {
+	if err := s.readPlannedRoom(ctx, s.work, plan, &discovered, lockNone); err != nil {
 		result, err := s.preEffectFailure(ctx, err)
 		return result, err, false
 	}
@@ -320,7 +342,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	if err := s.readPlanDependencies(ctx, tx, plan, &locked, lockShare); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
-	if err := s.readRoom(ctx, tx, plan.key.RoomID, &locked, lockExclusive); err != nil {
+	if err := s.readPlannedRoom(ctx, tx, plan, &locked, lockExclusive); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 
@@ -341,13 +363,46 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 		return Result{}, nil, true
 	}
 
+	var result Result
+	if plan.control != nil {
+		result, err = s.applyControlPlan(ctx, tx, plan, locked.control)
+	} else {
+		var unusedRestart bool
+		result, err, unusedRestart = s.applyRoomPlan(ctx, tx, plan, fact, locked)
+		if unusedRestart {
+			return Result{}, nil, true
+		}
+	}
+	if err != nil || result.Outcome != OutcomeCommitted {
+		return result, err, false
+	}
+	// All operation scopes share this only COMMIT and its uncertainty
+	// classification. Scope-specific handlers prepare/write database rows;
+	// they never begin, commit, retry or publish an effect themselves.
+	if err := tx.Commit(ctx); err != nil {
+		return s.commitFailure(err)
+	}
+	return result, nil, false
+}
+
+func (s *Store) readPlannedRoom(ctx context.Context, q rowQuerier, plan opPlan, d *dependencyState, lock string) error {
+	if plan.control != nil {
+		return nil
+	}
+	return s.readRoom(ctx, q, plan.key.RoomID, d, lock)
+}
+
+// applyRoomPlan is the existing Room-domain decision/write body. The common
+// runner owns its transaction, discovery restart, fence and final COMMIT.
+func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact model.Event, locked dependencyState) (Result, error, bool) {
+
 	// Live read authorization gates every disclosure, including a replay of
 	// the caller's own accepted operation. A disabled or removed principal is
 	// refused before any stored result is shown.
 	if plan.roomCreate != nil {
 		// A new Room has no membership yet. Every creation still requires an
 		// admitted, enabled User before even a body-free conflict is shown.
-		if locked.userMissing || locked.userDisabled {
+		if locked.userMissing || locked.userDisabled || !locked.credential.allowed() {
 			return refused3(ClassAuthorization, nil)
 		}
 	} else {
@@ -365,7 +420,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	var storedHash []byte
 	var resultSeq int64
 	var resultRevision int64
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT intent_hash, result_seq, result_revision FROM `+s.table("operations")+`
 		 WHERE op_namespace = $1 AND deployment_id = $2 AND room_id = $3
 		   AND binding_id = $4 AND generation = $5 AND op_kind = $6 AND identifier = $7 AND principal = $8`,
@@ -483,9 +538,6 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	if _, err := tx.Exec(ctx, `UPDATE `+s.table("rooms")+` SET current_seq = $2, revision = $3 WHERE room_id = $1`,
 		plan.key.RoomID, int64(stored.Seq), int64(locked.revision+1)); err != nil {
 		return s.postBeginFailure(ctx, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return s.commitFailure(err)
 	}
 	return Result{Outcome: OutcomeCommitted, Seq: stored.Seq, Revision: locked.revision + 1, Fact: stored}, nil, false
 }

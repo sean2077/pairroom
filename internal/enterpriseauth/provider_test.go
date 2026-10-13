@@ -50,6 +50,7 @@ type testIDP struct {
 	userInfoSubject string
 	userInfoSigned  bool
 	tokenStatus     int
+	tokenErrorCode  string
 	tokenRedirect   string
 	tokenOversize   bool
 	discoveryModify func(map[string]any)
@@ -99,7 +100,7 @@ func (idp *testIDP) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if idp.tokenStatus != 0 {
 			w.WriteHeader(idp.tokenStatus)
-			_, _ = w.Write([]byte(`{"error":"private-provider-body"}`))
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": idp.tokenErrorCode, "error_description": "private-provider-body expired authorization code", "error_uri": "https://private.example.test/explanation"})
 			return
 		}
 		if err := r.ParseForm(); err != nil {
@@ -410,20 +411,35 @@ func TestOIDCUserInfoSubjectMustMatchVerifiedToken(t *testing.T) {
 }
 
 func TestOIDCExchangeErrorIsConsumedWithoutRetryOrSecretError(t *testing.T) {
-	idp := newTestIDP(t)
-	idp.tokenStatus = http.StatusUnauthorized
-	p := testProvider(t, idp.config())
-	store := testMemoryStore(t, 1)
-	browser, state, code, _ := beginTestLogin(t, p, idp, store, PurposeLogin)
-	_, err := p.Complete(context.Background(), store, browser, state, code)
-	if !errors.Is(err, ErrProviderUnavailable) || strings.Contains(err.Error(), "private-") {
-		t.Fatalf("unsafe exchange failure: %v", err)
-	}
-	if _, err := p.Complete(context.Background(), store, browser, state, code); !errors.Is(err, ErrTransactionInvalid) {
-		t.Fatalf("exchange failure replay: %v", err)
-	}
-	if idp.tokenCalls != 1 {
-		t.Fatalf("authorization code exchanged %d times", idp.tokenCalls)
+	for _, test := range []struct {
+		name, code string
+		status     int
+		want       error
+	}{
+		{"expired_code", "invalid_grant", http.StatusBadRequest, ErrIdentityInvalid},
+		{"denied", "access_denied", http.StatusForbidden, ErrIdentityInvalid},
+		{"invalid_client", "invalid_client", http.StatusUnauthorized, ErrProviderUnavailable},
+		{"provider_failure", "server_error", http.StatusServiceUnavailable, ErrProviderUnavailable},
+		{"unknown_response", "unexpected_error", http.StatusBadGateway, ErrProviderUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			idp := newTestIDP(t)
+			idp.tokenStatus = test.status
+			idp.tokenErrorCode = test.code
+			p := testProvider(t, idp.config())
+			store := testMemoryStore(t, 1)
+			browser, state, code, _ := beginTestLogin(t, p, idp, store, PurposeLogin)
+			_, err := p.Complete(context.Background(), store, browser, state, code)
+			if !errors.Is(err, test.want) || strings.Contains(err.Error(), "private-") || strings.Contains(err.Error(), code) {
+				t.Fatalf("unsafe exchange failure: %v", err)
+			}
+			if _, err := p.Complete(context.Background(), store, browser, state, code); !errors.Is(err, ErrTransactionInvalid) {
+				t.Fatalf("exchange failure replay: %v", err)
+			}
+			if idp.tokenCalls != 1 {
+				t.Fatalf("authorization code exchanged %d times", idp.tokenCalls)
+			}
+		})
 	}
 }
 

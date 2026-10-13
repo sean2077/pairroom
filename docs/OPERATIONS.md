@@ -18,6 +18,48 @@ Service lock acquisition, stale recovery, and release are serialized across curr
 
 Management, standalone and ordinary Room listeners require numeric loopback addresses. A token does not allow LAN, wildcard, or hostname binds on those surfaces. Deliberate remote access to the full local interface uses protected SSH local forwarding; treat access to that endpoint/bootstrap token as access to repositories, Agent credentials, and attachments.
 
+## Enterprise entrypoint under implementation
+
+The separate `pairroom enterprise` entrypoint serves the PostgreSQL-backed browser identity and Room control slice. Its complete first-phase delivery, native endpoint grants, attachment lifecycle, operational rehearsal and capacity gates are still in progress; [Enterprise Native service](design/enterprise-service.md) owns that scope and its remaining implementation boundaries. It does not reuse the Local Management listener, data root or setup credentials.
+
+An operator supplies one versioned JSON configuration. This example uses synthetic identity names and direct TLS; actual secret values are read only from the named process environment variables. Relative certificate paths resolve beside the configuration file. A private IdP may additionally use `oidc.ca_certificate_file`, which extends system roots and retains certificate/hostname verification.
+
+```json
+{
+  "version": 1,
+  "deployment_id": "pairroom-example",
+  "organization_id": "example",
+  "database_schema": "pairroom_enterprise",
+  "database_dsn_env": "PAIRROOM_ENTERPRISE_DATABASE_DSN",
+  "listen": "127.0.0.1:8443",
+  "public_origin": "https://pairroom.example.test:8443",
+  "tls_certificate_file": "server.pem",
+  "tls_key_file": "server-key.pem",
+  "oidc": {
+    "connection_id": "example-idp",
+    "issuer": "https://idp.example.test/realm",
+    "client_id": "pairroom",
+    "client_secret_env": "PAIRROOM_ENTERPRISE_OIDC_SECRET",
+    "client_auth_method": "basic",
+    "allowed_origins": ["https://idp.example.test"],
+    "admitted_subjects": ["synthetic-member"]
+  }
+}
+```
+
+Configure the IdP's exact callback as `<public_origin>/enterprise/auth/callback`. `client_auth_method` explicitly selects `basic` or `post`; automatic code-exchange probing is disabled. Omit `client_secret_env` only for a deliberately configured public client. The public origin is canonical HTTPS without a path or explicit default `:443`. Serving directly requires a matching, currently valid TLS certificate/key. TLS termination instead requires explicit canonical `trusted_proxy_prefixes`, an unchanged Host and exactly `X-Forwarded-Proto: https` from the immediate trusted peer; forwarded user/host fields confer no authority.
+
+Initialize a fresh supported schema explicitly, then start the foreground service:
+
+```sh
+pairroom enterprise init --config enterprise.json --bootstrap-subject synthetic-administrator
+pairroom enterprise serve --config enterprise.json
+```
+
+Initialization names the exact initial administrator identity; it does not create an application session. A normal first login cannot claim administrator status. Existing configuration must match, and initialization does not restore later-revoked authority. Serving requires initialized identity policy and exclusive database ownership; it never silently initializes or migrates an incompatible schema. The database must support the PostgreSQL 17 transaction budgets used by the kernel. Environment references, private keys and database credentials belong to the operator, and must not enter Room messages or diagnostics.
+
+Open `<public_origin>/enterprise/` for login, current session, known-Room history and logout. Session lifetime defaults to 12 hours, configurable with `session_ttl` between `5m` and `24h`; pending OIDC flows default to 1,024, with an explicit bounded `pending_login_limit`. Provider outage blocks new authentication while existing application sessions retain their own expiry and revocation policy. Shutdown drains HTTP work before releasing the deployment lease and does not control endpoint harnesses. This foreground command does not install a daemon or configure launch at login.
+
 ## LAN hosting and joined Rooms
 
 Native is the default and recommended Room mode. For colleague collaboration, the Room's host enables the separate **LAN sharing** listener in Service Settings and creates a Native LAN Room. Select a numeric private address assigned to the intended interface, allow the selected port in the host firewall, and exchange the invitation and exact join receipt through the colleagues' trusted channel.

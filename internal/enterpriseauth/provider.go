@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -236,6 +237,10 @@ func (p *Provider) Complete(ctx context.Context, store TransactionStore, browser
 	providerContext := oidc.ClientContext(ctx, p.client)
 	token, err := p.oauth.Exchange(providerContext, code, oauth2.VerifierOption(tx.PKCEVerifier))
 	if err != nil {
+		var response *oauth2.RetrieveError
+		if errors.As(err, &response) && (response.ErrorCode == "invalid_grant" || response.ErrorCode == "access_denied") {
+			return Completion{}, ErrIdentityInvalid
+		}
 		return Completion{}, ErrProviderUnavailable
 	}
 	rawToken, ok := token.Extra("id_token").(string)

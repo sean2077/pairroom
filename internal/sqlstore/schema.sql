@@ -71,7 +71,8 @@ CREATE TABLE trust_connections (
   CONSTRAINT trust_connections_org_anchor_fkey FOREIGN KEY (org_id) REFERENCES configured_org(org_id),
   issuer        text NOT NULL CHECK (issuer <> ''),
   created_at    timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT trust_connections_triple_key UNIQUE (org_id, connection_id, issuer)
+  CONSTRAINT trust_connections_triple_key UNIQUE (org_id, connection_id, issuer),
+  CONSTRAINT trust_connections_issuer_key UNIQUE (connection_id, issuer)
 );
 
 -- Exact identity mapping: a configured connection, the exact issuer it names
@@ -262,11 +263,77 @@ CREATE TABLE audit (
   audit_seq     bigserial PRIMARY KEY,
   deployment_id text NOT NULL REFERENCES deployment(deployment_id),
   room_id       text REFERENCES rooms,
-  user_id       text NOT NULL REFERENCES users(user_id),
+  user_id       text REFERENCES users(user_id),
+  actor_kind    text NOT NULL DEFAULT 'user' CHECK (actor_kind IN ('user', 'operator')),
+  CONSTRAINT audit_actor_check CHECK ((actor_kind = 'user' AND user_id IS NOT NULL) OR (actor_kind = 'operator' AND user_id IS NULL)),
   kind          text NOT NULL CHECK (kind <> ''),
   outcome       text NOT NULL CHECK (outcome <> ''),
   detail        text NOT NULL DEFAULT '',
   at            timestamptz NOT NULL DEFAULT now()
+);
+
+-- Deployment control has its own sequence and closed receipts. It never
+-- manufactures a Room or puts authentication credentials in Room history.
+CREATE TABLE identity_policy (
+  id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  config_hash bytea NOT NULL CHECK (octet_length(config_hash) = 32),
+  bootstrap_connection text NOT NULL,
+  bootstrap_issuer text NOT NULL,
+  bootstrap_subject text NOT NULL,
+  bootstrap_consumed_by text REFERENCES users(user_id),
+  restore_epoch text NOT NULL CHECK (restore_epoch <> ''),
+  revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  FOREIGN KEY (bootstrap_connection, bootstrap_issuer) REFERENCES trust_connections(connection_id, issuer)
+);
+
+CREATE TABLE identity_admissions (
+  connection_id text NOT NULL,
+  issuer text NOT NULL,
+  subject text NOT NULL CHECK (subject <> ''),
+  enabled boolean NOT NULL DEFAULT true,
+  PRIMARY KEY (connection_id, issuer, subject),
+  FOREIGN KEY (connection_id, issuer) REFERENCES trust_connections(connection_id, issuer)
+);
+
+CREATE TABLE organization_admins (
+  user_id text PRIMARY KEY REFERENCES users(user_id),
+  enabled boolean NOT NULL DEFAULT true
+);
+
+CREATE TABLE browser_sessions (
+  session_id text PRIMARY KEY CHECK (session_id <> ''),
+  user_id text NOT NULL REFERENCES users(user_id),
+  token_hash bytea NOT NULL UNIQUE CHECK (octet_length(token_hash) = 32),
+  csrf_hash bytea NOT NULL CHECK (octet_length(csrf_hash) = 32),
+  restore_epoch text NOT NULL CHECK (restore_epoch <> ''),
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz,
+  CHECK (expires_at > created_at)
+);
+CREATE INDEX browser_sessions_user_key ON browser_sessions (user_id);
+
+CREATE TABLE control_events (
+  seq bigint PRIMARY KEY CHECK (seq > 0),
+  event_id text NOT NULL UNIQUE CHECK (event_id <> ''),
+  codec_version integer NOT NULL,
+  kind text NOT NULL CHECK (kind <> ''),
+  actor_user_id text REFERENCES users(user_id),
+  receipt_encoding bytea NOT NULL CHECK (octet_length(receipt_encoding) > 0 AND octet_length(receipt_encoding) <= 16384),
+  created_at timestamptz NOT NULL
+);
+
+CREATE TABLE control_operations (
+  op_namespace text NOT NULL CHECK (op_namespace IN ('operator', 'oidc', 'human')),
+  deployment_id text NOT NULL REFERENCES deployment(deployment_id),
+  op_kind text NOT NULL CHECK (op_kind IN ('identity.configure', 'identity.login', 'session.revoke', 'identity.admission', 'user.status', 'administrator.set')),
+  identifier text NOT NULL CHECK (identifier <> ''),
+  principal text NOT NULL CHECK (principal <> ''),
+  intent_hash bytea NOT NULL CHECK (octet_length(intent_hash) = 32),
+  result_hash bytea NOT NULL CHECK (octet_length(result_hash) = 32),
+  result_seq bigint NOT NULL REFERENCES control_events(seq),
+  committed_at timestamptz NOT NULL,
+  PRIMARY KEY (op_namespace, deployment_id, op_kind, identifier, principal)
 );
 
 -- ---------------------------------------------------------------------------
@@ -356,6 +423,26 @@ BEGIN
       ERRCODE = '23514',
       CONSTRAINT = TG_TABLE_NAME || '_retired_reason',
       MESSAGE = format('%s retirement must state a non-blank reason', TG_TABLE_NAME);
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+
+CREATE FUNCTION browser_session_revoke_once() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog AS $fn$
+BEGIN
+  IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+    RAISE EXCEPTION USING ERRCODE = '23514', CONSTRAINT = 'browser_sessions_revoked_once', MESSAGE = 'a revoked browser credential cannot be restored';
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+
+CREATE FUNCTION identity_bootstrap_once() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog AS $fn$
+BEGIN
+  IF OLD.bootstrap_consumed_by IS NOT NULL AND NEW.bootstrap_consumed_by IS DISTINCT FROM OLD.bootstrap_consumed_by THEN
+    RAISE EXCEPTION USING ERRCODE = '23514', CONSTRAINT = 'identity_bootstrap_consumed_once', MESSAGE = 'bootstrap consumption cannot be reset or repointed';
   END IF;
   RETURN NEW;
 END
@@ -474,6 +561,20 @@ CREATE TRIGGER slot_generations_immutable BEFORE UPDATE OR DELETE ON slot_genera
   FOR EACH ROW EXECUTE FUNCTION control_reject_change();
 CREATE TRIGGER trust_connections_immutable BEFORE UPDATE OR DELETE ON trust_connections
   FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+CREATE TRIGGER identity_policy_no_delete BEFORE DELETE ON identity_policy
+  FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER identity_policy_configuration_immutable BEFORE UPDATE ON identity_policy
+  FOR EACH ROW EXECUTE FUNCTION control_guard_columns('identity_policy_configuration_immutable', 'config_hash', 'bootstrap_connection', 'bootstrap_issuer', 'bootstrap_subject');
+CREATE TRIGGER identity_bootstrap_once BEFORE UPDATE ON identity_policy
+  FOR EACH ROW EXECUTE FUNCTION identity_bootstrap_once();
+CREATE TRIGGER browser_sessions_no_delete BEFORE DELETE ON browser_sessions
+  FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER browser_sessions_identity_immutable BEFORE UPDATE ON browser_sessions
+  FOR EACH ROW EXECUTE FUNCTION control_guard_columns('browser_sessions_identity_immutable', 'session_id', 'user_id', 'token_hash', 'csrf_hash', 'restore_epoch', 'expires_at', 'created_at');
+CREATE TRIGGER browser_sessions_revoked_once BEFORE UPDATE ON browser_sessions
+  FOR EACH ROW EXECUTE FUNCTION browser_session_revoke_once();
+CREATE TRIGGER identity_admissions_key_immutable BEFORE UPDATE ON identity_admissions
+  FOR EACH ROW EXECUTE FUNCTION control_guard_columns('identity_admissions_key_immutable', 'connection_id', 'issuer', 'subject');
 
 CREATE TRIGGER users_no_delete BEFORE DELETE ON users
   FOR EACH ROW EXECUTE FUNCTION control_reject_delete();

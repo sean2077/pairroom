@@ -90,6 +90,24 @@ func ApplySchema(ctx context.Context, conn *pgx.Conn, schema string) error {
 		defer ccancel()
 		_ = tx.Rollback(cctx)
 	}()
+	if err := applySchemaInTransaction(ctx, tx, schema); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// applySchemaInTransaction lets explicit deployment initialization include
+// namespace, schema and immutable anchors in one transaction. It contains no
+// lifecycle or commit policy: callers own the connection, budget and commit.
+// Existing schemas are checked, never silently migrated in place.
+func applySchemaInTransaction(ctx context.Context, tx pgx.Tx, schema string) error {
+	var existing *string
+	if err := tx.QueryRow(ctx, `SELECT pg_catalog.to_regclass($1)::text`, qualified(schema, "schema_meta")).Scan(&existing); err != nil {
+		return fmt.Errorf("sqlstore: inspect schema: %w", err)
+	}
+	if existing != nil {
+		return verifySchemaVersion(ctx, tx, schema)
+	}
 	// The embedded DDL is static and parameterless, so it is sent as one
 	// simple-protocol query: a statement splitter would break the
 	// dollar-quoted trigger function bodies (internal semicolons and "--"
@@ -100,7 +118,7 @@ func ApplySchema(ctx context.Context, conn *pgx.Conn, schema string) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO `+qualified(schema, "schema_meta")+` (version) VALUES ($1)`, sqlstoreSchemaVersion); err != nil {
 		return fmt.Errorf("sqlstore: record schema version: %w", err)
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // verifySchemaVersion refuses an absent schema or a version this build does

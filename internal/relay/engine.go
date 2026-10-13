@@ -1260,35 +1260,20 @@ func (e *Engine) Ack(a Auth, id, receipt string) error {
 		return err
 	}
 	m, ok := e.messages[id]
-	if !ok || m.To != a.Slot || m.TargetGeneration != a.Generation || receipt == "" || !same(m.Receipt, receipt) {
-		return ErrAuth
-	}
-	if m.State == "handed_off" {
-		return nil
-	}
+	pendingRetry := false
 	if m.State == "unknown" {
-		// Owner-approved late acknowledgement: the per-claim receipt was issued
-		// only to this collector and the binding generation plus session were
-		// re-authenticated above, so a matching receipt proves the envelope
-		// reached stdout even after the lease expired. A live explicit Retry
-		// still wins: settling the original behind a pending retry would
-		// duplicate work the operator already re-queued.
 		for _, key := range e.unresolved {
-			other := e.messages[key]
-			if other.RetryOf == id && (other.State == "queued" || other.State == "delivering") {
-				return errors.New("an explicit Retry is pending; resolve it before acknowledging the original delivery")
+			if isPendingRetry(e.messages[key], id) {
+				pendingRetry = true
+				break
 			}
 		}
-		m.State = "handed_off"
-		m.UpdatedAt = e.cfg.Now()
-		return e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt})
 	}
-	if m.State != "delivering" {
-		return errors.New("delivery outcome is unknown; inspect before explicit Retry")
+	decision, err := decideAcknowledgement(m, ok, a.Slot, a.Generation, receipt, pendingRetry)
+	if err != nil || decision == acknowledgementNoChange {
+		return err
 	}
-	m.State = "handed_off"
-	m.UpdatedAt = e.cfg.Now()
-	return e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt})
+	return e.append(EventMessage, a.Slot, planAcknowledgementFact(m, e.cfg.Now()))
 }
 func (e *Engine) Cancel(id string) error {
 	if err := e.requireLocalMutation(); err != nil {
@@ -1326,55 +1311,43 @@ func (e *Engine) Retry(id string) (Message, error) {
 		return Message{}, err
 	}
 	old, ok := e.messages[id]
-	if !ok || old.State != "unknown" {
-		return Message{}, errors.New("only unknown messages can be explicitly retried")
+	var targetGeneration uint64
+	if old.To != model.ActorUser {
+		targetGeneration = e.generation(old.To)
 	}
-	if e.cfg.DynamicBindings && old.To.ValidParticipant() && old.TargetGeneration != e.generation(old.To) {
-		return Message{}, ErrPeerChanged
-	}
+	pendingRetry := false
 	for _, key := range e.unresolved {
-		m := e.messages[key]
-		if m.RetryOf == id && (m.State == "queued" || m.State == "delivering") {
-			return Message{}, errors.New("a retry is already pending")
+		if isPendingRetry(e.messages[key], id) {
+			pendingRetry = true
+			break
 		}
 	}
-	m := e.makeMessage(old.From, old.To, old.Text, "retry")
-	if e.cfg.DynamicBindings {
-		m.FromRuntime, m.FromGeneration, m.TargetGeneration = old.FromRuntime, old.FromGeneration, old.TargetGeneration
-	}
-	// Retry publishes for the original author: dropping the authenticated
-	// human-author provenance would downgrade the envelope's @user handle and
-	// its shared-Room permissions notice.
-	m.Author = old.Author
-	m.Attachments = append([]model.Attachment(nil), old.Attachments...)
-	m.Quote = old.Quote
-	m.Review = old.Review
-	m.RetryOf = id
-	if _, err := e.envelope(m); err != nil {
+	if err := decideRetry(old, ok, e.cfg.DynamicBindings, targetGeneration, pendingRetry); err != nil {
 		return Message{}, err
 	}
-	if err := e.append(EventMessage, model.ActorUser, messageFact{Message: m}); err != nil {
+	// Preserve the Local producer's clock-before-ID ordering. No candidate is
+	// materialized for a rejected retry.
+	now := e.cfg.Now()
+	fact := planRetryFact(old, e.cfg.DynamicBindings, targetGeneration, model.NewID("relay"), now)
+	if _, err := e.envelope(fact.Message); err != nil {
 		return Message{}, err
 	}
-	return cloneMessage(m), nil
+	if err := e.append(EventMessage, model.ActorUser, fact); err != nil {
+		return Message{}, err
+	}
+	return cloneMessage(fact.Message), nil
 }
 func (e *Engine) reapLocked(all bool) error {
 	now := e.cfg.Now()
-	// There are normally at most two in-flight deliveries. Stable ordering
-	// keeps simultaneous expirations deterministic without scanning history.
-	ids := make([]string, 0, len(e.inFlight))
+	// Planning never appends or applies. Local still persists each expiry in
+	// order, stopping on the first append failure and retaining earlier facts.
+	inFlight := make([]Message, 0, len(e.inFlight))
 	for id := range e.inFlight {
-		ids = append(ids, id)
+		inFlight = append(inFlight, e.messages[id])
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		m := e.messages[id]
-		if m.State == "delivering" && (all || !now.Before(m.ClaimedAt.Add(e.cfg.Lease))) {
-			m.State = "unknown"
-			m.UpdatedAt = now
-			if err := e.append(EventMessage, model.ActorSystem, messageFact{Message: m, Receipt: m.Receipt}); err != nil {
-				return err
-			}
+	for _, fact := range planExpiryFacts(inFlight, now, e.cfg.Lease, all) {
+		if err := e.append(EventMessage, model.ActorSystem, fact); err != nil {
+			return err
 		}
 	}
 	return nil

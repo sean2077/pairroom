@@ -6,6 +6,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Added
 
+- Add the enterprise browser/control slice under implementation: explicit operator `enterprise init` and foreground `enterprise serve`, configured OIDC admission, persistent browser sessions with transaction-level revocation checks, PostgreSQL Room creation/membership, and a minimal login/Room history page. The complete native endpoint, governance, attachment and deployment gates remain in progress.
+
 - Create Native Rooms with two empty slots in Management or through `relay bind --create`, without Runtime, pair-profile, Provider or model selections. The joining harness supplies its actual Runtime; omitted local slots are assigned atomically. LAN still uses one local owner and one admitted remote guest, with no guest Service requirement.
 - Give new Native Rooms protocol v9 and stable `@agent1` / `@agent2` handles, including equal-Runtime pairs and explicit participant replacement. Bindings own actual Runtime per generation; message history retains immutable source Runtime and generation. Participant cards display empty or actual binding state and offer a separate, explicit replacement command.
 - Fence Agent publication by the originating peer generation. A changed peer never receives an old Stop/WAL reply: `peer_changed` stays terminal local evidence, and automatic publication pauses in the old native session. After inspection, a new foreground `send` / `exchange --peer-generation N --id NEW` can explicitly address the new peer; foreground wait remains available and same-session replacement cannot reset automatic context.
