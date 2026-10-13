@@ -14,6 +14,9 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
+- Replace a closed enterprise PostgreSQL work connection only when a new explicit command enters. Keep its original ownership fence and live authorization; a cancelled read cannot permanently disable later writes, and no failed or uncertain command is automatically replayed.
+- Preserve cancellation and deadline causes when an enterprise Native collector waits for its private identity lock. An expired collector poll before a new claim returns an empty result; a caller cancellation still propagates, genuine identity mismatch remains rejected, and an already journaled claim retains its uncertain outcome.
+
 - Keep Management checkbox and radio controls compact and aligned with their labels, including LAN invitations, listener settings, Agent pair defaults, Room selection and confirmations, instead of inheriting full-width text-field sizing.
 - Reject a Native `report` carrying more than one expected peer generation without appending any fact, name the peer generation in the duplicate-`--id` conflict message, and document the explicit `send` `peer_changed` error separately from the terminal Stop `peer_changed` publication.
 

@@ -184,6 +184,22 @@ func (b *BindingClient) send(ctx context.Context, r bindingRecord, id string, in
 // Relay adapts the existing Native client mechanics to the typed enterprise
 // wire. No native session/path or local capability is serialized into HTTP.
 func (b *BindingClient) Relay(ctx context.Context, a relay.Auth, action string, payload, result any) error {
+	if action == "wait" {
+		// Include initial private-lock and identity admission in the same
+		// collection budget. Other actions retain their original auth order.
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return ErrConfiguration
+		}
+		var req nativeRelayRequest
+		if payload != nil && decodeWire(data, &req) != nil {
+			return ErrConfiguration
+		}
+		if len(req.AttachmentIDs) > 0 || req.QuoteID != "" || req.Review != nil {
+			return ErrConfiguration
+		}
+		return b.collect(ctx, a, req, result)
+	}
 	unlock, err := b.lock(ctx)
 	if err != nil {
 		return err
@@ -277,10 +293,6 @@ func (b *BindingClient) Relay(ctx context.Context, a relay.Auth, action string, 
 			return err
 		}
 		return assign(reply.Result.Binding, result)
-	case "wait":
-		unlock()
-		unlock = func() {}
-		return b.collect(ctx, a, req, result)
 	case "ack":
 		return b.ack(ctx, r, req, result)
 	default:
@@ -370,7 +382,7 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 	pollCtx, cancel := context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
 	defer cancel()
 	beforeClaimFailure := func(err error) error {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 			return ctx.Err()
 		}
 		if pollCtx.Err() != nil && errors.Is(err, pollCtx.Err()) {
@@ -394,7 +406,7 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 		r, err := b.authenticated(pollCtx, a)
 		if err != nil {
 			unlock()
-			return err
+			return beforeClaimFailure(err)
 		}
 		journal, err := b.readDelivery()
 		if err != nil {
@@ -459,7 +471,7 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 			defer unlock()
 			r, err = b.authenticated(pollCtx, a)
 			if err != nil {
-				return err
+				return beforeClaimFailure(err)
 			}
 			journal, err = b.readDelivery()
 			if err != nil {

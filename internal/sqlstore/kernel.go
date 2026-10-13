@@ -382,6 +382,10 @@ func (s *Store) commitWithRestarts(ctx context.Context, plan opPlan, fact model.
 	if s.poisoned != nil {
 		return refused(ClassLeaseLost, s.poisoned)
 	}
+	// Reconnection belongs to this new explicit request, never to an effect retry.
+	if err := s.replaceClosedWork(opCtx); err != nil {
+		return s.preEffectFailure(opCtx, err)
+	}
 	for restarts := 0; ; restarts++ {
 		result, err, restart := s.commitPlanned(opCtx, plan, fact)
 		if !restart {

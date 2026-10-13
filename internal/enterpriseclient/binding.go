@@ -286,6 +286,12 @@ func (b *BindingClient) authenticated(ctx context.Context, a relay.Auth) (bindin
 		return r, err
 	}
 	if err := identities.Check(ctx, nativeidentity.Claim{Runtime: r.Runtime, SessionID: a.SessionID, Association: nativeidentity.Enterprise(r.Origin, r.DeploymentID, r.RoomID), BindID: r.BindID, Generation: r.Generation}); err != nil {
+		// A private identity-lock wait can exhaust this caller's context
+		// without disproving its identity. Preserve only those causes; actual
+		// reservation/credential mismatches remain authentication failures.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return r, err
+		}
 		return r, relay.ErrAuth
 	}
 	return r, nil
