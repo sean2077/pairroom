@@ -750,6 +750,7 @@ CREATE TABLE governance_actions (
   target_user_id text NOT NULL REFERENCES users(user_id),
   expected_owner_user_id text NOT NULL REFERENCES users(user_id),
   expected_revision bigint NOT NULL CHECK(expected_revision>=0),
+  reason text NOT NULL CONSTRAINT governance_reason_valid CHECK(octet_length(reason) BETWEEN 1 AND 1024 AND btrim(reason, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')<>'' AND reason !~ U&'[\0001-\0008\000B\000C\000E-\001F\007F-\009F]'),
   created_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
   ready_at timestamptz,
@@ -770,7 +771,7 @@ BEGIN
 END
 $fn$;
 CREATE TRIGGER governance_actions_no_delete BEFORE DELETE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
-CREATE TRIGGER governance_actions_identity_immutable BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_guard_columns('governance_actions_identity_immutable','action_id','actor_user_id','session_id','room_id','target_user_id','expected_owner_user_id','expected_revision','created_at','expires_at');
+CREATE TRIGGER governance_actions_identity_immutable BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_guard_columns('governance_actions_identity_immutable','action_id','actor_user_id','session_id','room_id','target_user_id','expected_owner_user_id','expected_revision','reason','created_at','expires_at');
 CREATE TRIGGER governance_actions_once BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_columns_once('ready_at','consumed_at','invalidated_at');
 CREATE TABLE governance_operations (
   deployment_id text NOT NULL REFERENCES deployment(deployment_id),

@@ -13,7 +13,7 @@
   let displayedMessages = [], historyTotal = 0, historyCursor = "", historySequence = 0, historyBusy = false, historyChanged = false, targetGenerations = {};
   const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("pairroom.enterprise.account.v1") : null;
   const listIDs = ["room-list", "project-list", "device-list", "agent-list", "session-list", "room-members", "project-members", "slots", "messages", "binding-requests", "governance-actions", "pending-list", "administration-users", "administration-administrators", "administration-admissions", "administration-connections"];
-  const inputIDs = ["room-id", "create-room-name", "collaboration-instructions", "create-project-name", "project-name", "project-member-id", "room-name", "room-project-id", "member-id", "ownership-target", "message-text", "governance-room", "governance-owner", "governance-target", "governance-revision"];
+  const inputIDs = ["room-id", "create-room-name", "collaboration-instructions", "create-project-name", "project-name", "project-member-id", "room-name", "room-project-id", "member-id", "ownership-target", "message-text", "governance-room", "governance-owner", "governance-target", "governance-revision", "governance-reason"];
   const textIDs = ["room-identity", "room-state", "room-sequence", "project-title", "project-state", "pending-description", "journal-status"];
   const scope = (value = account) => value ? [value.deployment_id, value.user_id, value.session_id].join("/") : "";
   const status = (text) => { $("status").textContent = text; };
@@ -433,7 +433,7 @@
     if (op.path === "/rooms" && id === body.room_id && op.resolvePath === "/rooms/" + id + "/resolve-create") return exactKeys(body, ["client_id", "room_id", "intent"]) && exactKeys(body.intent, ["name", "collaboration"]) && exactKeys(body.intent.collaboration, ["version", "mode", "instructions"]);
     if (id && op.path === "/rooms/" + id + "/messages" && op.resolvePath === "/rooms/" + id + "/resolve-message") return exactKeys(body, ["client_id", "to", "text", "attachment_ids"]) && ["slot1", "slot2"].includes(body.to) && typeof body.text === "string" && (body.attachment_ids === undefined || Array.isArray(body.attachment_ids) && body.attachment_ids.length <= 8 && new Set(body.attachment_ids).size === body.attachment_ids.length && body.attachment_ids.every(validAttachmentID));
     if (id && op.path === "/rooms/" + id + "/memberships" && op.resolvePath === "/rooms/" + id + "/resolve-membership") return exactKeys(body, ["client_id", "expected_revision", "intent"]) && revision(body.expected_revision) && exactKeys(body.intent, ["action", "target_user_id", "role"]);
-    if (id && op.path === "/rooms/" + id + "/ownership" && op.resolvePath === "/rooms/" + id + "/resolve-ownership") return exactKeys(body, ["client_id", "intent", "action_id"]) && exactKeys(body.intent, ["room_id", "target_user_id", "expected_owner_user_id", "expected_revision"]) && body.intent.room_id === id && revision(body.intent.expected_revision);
+    if (id && op.path === "/rooms/" + id + "/ownership" && op.resolvePath === "/rooms/" + id + "/resolve-ownership") return exactKeys(body, ["client_id", "intent", "action_id"]) && exactKeys(body.intent, ["room_id", "target_user_id", "expected_owner_user_id", "expected_revision", "reason"]) && body.intent.room_id === id && revision(body.intent.expected_revision) && (body.action_id ? validGovernanceReason(body.intent.reason) : body.intent.reason === undefined || validGovernanceReason(body.intent.reason));
     if (id && op.path === "/rooms/" + id + "/queue" && op.resolvePath === "/rooms/" + id + "/resolve-queue") return exactKeys(body, ["client_id", "expected_revision", "intent"]) && revision(body.expected_revision) && exactKeys(body.intent, ["kind", "message_id"]) && ["retry", "cancel"].includes(body.intent.kind) && validID(body.intent.message_id);
     return typeof op.path === "string" && /^\/devices\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/revoke$/.test(op.path) && op.resolvePath === op.path.replace(/\/revoke$/, "/resolve-revoke") && exactKeys(body, ["client_id"]);
   }
@@ -549,12 +549,13 @@
       }
     } catch (error) { if (error !== stale && version === roomVersion) status("Agent requests are unavailable."); }
   }
+  function validGovernanceReason(reason) { return typeof reason === "string" && /[^\p{White_Space}]/u.test(reason) && new TextEncoder().encode(reason).length <= 1024 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(reason); }
   async function loadGovernance() {
     if (!account || !account.administrator) return;
     const generation = epoch; $("governance-actions").replaceChildren();
     try {
       const result = await api("/governance/actions"); if (generation !== epoch || !result.ok) return;
-      for (const action of result.data.actions || []) { const item = element("li"); item.append(element("p", action.intent.room_id + " → " + action.intent.target_user_id + " · " + (action.ready ? "Identity verified" : "Verification required")), button("Transfer this Room", () => transfer(action.intent, action.id), !action.ready || Date.parse(action.expires_at) <= Date.now())); $("governance-actions").append(item); }
+      for (const action of result.data.actions || []) { const item = element("li"); item.append(element("p", action.intent.reason), element("p", action.intent.room_id + " → " + action.intent.target_user_id + " · " + (action.ready ? "Identity verified" : "Verification required")), button("Transfer this Room", () => transfer(action.intent, action.id), !action.ready || Date.parse(action.expires_at) <= Date.now())); $("governance-actions").append(item); }
     } catch (error) { if (error !== stale && generation === epoch) status("Prepared ownership actions are unavailable."); }
   }
   function form(id, fn) { $(id).addEventListener("submit", (event) => { event.preventDefault(); if (account && csrf) return fn(); }); }
@@ -607,8 +608,8 @@
   });
   form("governance-form", async () => {
     if (!account.administrator) return;
-    const generation = epoch, intent = { room_id: $("governance-room").value.trim(), expected_owner_user_id: $("governance-owner").value.trim(), target_user_id: $("governance-target").value.trim(), expected_revision: Number($("governance-revision").value) };
-    if (!Number.isSafeInteger(intent.expected_revision) || intent.expected_revision < 1) return;
+    const generation = epoch, intent = { room_id: $("governance-room").value.trim(), expected_owner_user_id: $("governance-owner").value.trim(), target_user_id: $("governance-target").value.trim(), expected_revision: Number($("governance-revision").value), reason: $("governance-reason").value };
+    if (!Number.isSafeInteger(intent.expected_revision) || intent.expected_revision < 1 || !validGovernanceReason(intent.reason)) { status("Provide a nonblank recovery reason of at most 1024 UTF-8 bytes."); return; }
     if (resourceBlocked("room:" + intent.room_id)) return;
     try {
       const result = await api("/governance/actions", { client_id: crypto.randomUUID(), intent });

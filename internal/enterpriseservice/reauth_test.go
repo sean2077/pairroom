@@ -81,7 +81,7 @@ func newGovernanceFixture(t *testing.T) (*Handler, *fakeProvider, *fakeGovernanc
 	return h, provider, backend
 }
 func governanceIntent() sqlstore.GovernanceIntent {
-	return sqlstore.GovernanceIntent{RoomID: "room-1", TargetUserID: "member-1", ExpectedOwnerUserID: "disabled-owner", ExpectedRevision: 7}
+	return sqlstore.GovernanceIntent{RoomID: "room-1", TargetUserID: "member-1", ExpectedOwnerUserID: "disabled-owner", ExpectedRevision: 7, Reason: "Recover disabled Owner after verified operator request"}
 }
 func governanceBody(t *testing.T) string {
 	t.Helper()

@@ -131,10 +131,10 @@ test('archive sends metadata only and does not invent process-control requests',
 
 test('governance requires selected exact action and never sends a fabricated fresh boolean', async () => {
   const f = await signIn(fixture(), { ...session(), administrator: true });
-  f.element('governance-room').value = 'room-private'; f.element('governance-owner').value = 'disabled-owner'; f.element('governance-target').value = 'target'; f.element('governance-revision').value = '7';
+  f.element('governance-room').value = 'room-private'; f.element('governance-owner').value = 'disabled-owner'; f.element('governance-target').value = 'target'; f.element('governance-revision').value = '7'; f.element('governance-reason').value = 'Recover disabled Owner';
   const operation = f.element('governance-form').fire('submit'), request = f.take('/governance/actions');
   const body = JSON.parse(request.options.body); assert.equal('fresh' in body, false); assert.equal('auth_time' in body, false);
-  assert.deepEqual(body.intent, { room_id: 'room-private', expected_owner_user_id: 'disabled-owner', target_user_id: 'target', expected_revision: 7 });
+  assert.deepEqual(body.intent, { room_id: 'room-private', expected_owner_user_id: 'disabled-owner', target_user_id: 'target', expected_revision: 7, reason: 'Recover disabled Owner' });
   f.complete(request, 200, { action: { id: 'action-1' }, authorization_url: 'https://idp.example.test/authorize?state=browser-bound' }); await operation;
   assert.deepEqual(f.navigations, ['https://idp.example.test/authorize?state=browser-bound']);
   assert.equal(f.requests.some((r) => r.url.endsWith('/ownership')), false);

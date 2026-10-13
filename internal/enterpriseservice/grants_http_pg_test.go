@@ -409,7 +409,7 @@ func TestGrantsHTTPPGFreshOIDCGovernanceKeepsOriginalSessionAndNeverGrantsAdminC
 	if status != 403 {
 		t.Fatal("administrator inherited Room content access before governance")
 	}
-	intent := sqlstore.GovernanceIntent{RoomID: "room-governance", TargetUserID: targetSession.UserID, ExpectedOwnerUserID: ownerSession.UserID, ExpectedRevision: view.Revision}
+	intent := sqlstore.GovernanceIntent{RoomID: "room-governance", TargetUserID: targetSession.UserID, ExpectedOwnerUserID: ownerSession.UserID, ExpectedRevision: view.Revision, Reason: "Recover disabled Owner after verified operator request"}
 	prepare := map[string]any{"client_id": "prepare-governance-http", "intent": intent}
 	status, body = f.post(operator, "/enterprise/api/v1/governance/actions", prepare, operatorSession.CSRF)
 	if status != 200 {

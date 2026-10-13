@@ -35,7 +35,7 @@ func TestRestorePreservesACLHistoryAndInvalidatesOldProofsWithoutFakeDecisions(t
 	if _, e = b.f.store.SetUserEnabled(t.Context(), b.admin.Auth, "proofs-disable-owner", disabledOwner.Auth.UserID, false); e != nil {
 		t.Fatal(e)
 	}
-	g := governanceFixture{f: b.f, admin: b.admin, owner: disabledOwner, target: b.owner, ownerLogin: ownerLogin, intent: GovernanceIntent{RoomID: "governance-room", TargetUserID: b.owner.Auth.UserID, ExpectedOwnerUserID: disabledOwner.Auth.UserID, ExpectedRevision: 2}}
+	g := governanceFixture{f: b.f, admin: b.admin, owner: disabledOwner, target: b.owner, ownerLogin: ownerLogin, intent: GovernanceIntent{RoomID: "governance-room", TargetUserID: b.owner.Auth.UserID, ExpectedOwnerUserID: disabledOwner.Auth.UserID, ExpectedRevision: 2, Reason: "Recover disabled Owner after verified operator request"}}
 	ready := readyGovernance(t, g, "old-ready-proof")
 	unready, _ := prepareGovernance(t, g, "old-unready-proof")
 	catalogPGCommit(t, b.f, b.owner.Auth, "restore-project", 0, CatalogIntent{Kind: "project.create", ProjectID: "backup-project", Name: "Logical project"})

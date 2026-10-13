@@ -60,6 +60,9 @@ func (s *Store) governancePlan(auth AuthContext, clientID string, mutation gover
 		if !validRoomCreateIdentity(i.RoomID) || !validRoomCreateIdentity(i.TargetUserID) || !validRoomCreateIdentity(i.ExpectedOwnerUserID) || i.TargetUserID == i.ExpectedOwnerUserID || i.ExpectedRevision > math.MaxInt64 {
 			return opPlan{}, refusedError(ClassInvalidRequest, nil)
 		}
+		if (mutation.kind == governancePrepare || mutation.actionID != "" || i.Reason != "") && !ValidGovernanceReason(i.Reason) {
+			return opPlan{}, refusedError(ClassInvalidRequest, nil)
+		}
 	}
 	if (mutation.kind == governanceRead || mutation.kind == governanceFinish) && !validRoomCreateIdentity(mutation.actionID) {
 		return opPlan{}, refusedError(ClassInvalidRequest, nil)
@@ -148,13 +151,16 @@ func governanceActionResult(result Result, err error) (GovernanceAction, error) 
 func (s *Store) readGovernanceAction(ctx context.Context, q rowQuerier, id, lock string) (governanceActionState, error) {
 	d := governanceActionState{action: GovernanceAction{ID: id}}
 	var ready, consumed, invalidated *time.Time
-	err := q.QueryRow(ctx, `SELECT actor_user_id,session_id,room_id,target_user_id,expected_owner_user_id,expected_revision,created_at,expires_at,ready_at,consumed_at,invalidated_at FROM `+s.table("governance_actions")+` WHERE action_id=$1`+lock, id).Scan(&d.actor, &d.session, &d.action.Intent.RoomID, &d.action.Intent.TargetUserID, &d.action.Intent.ExpectedOwnerUserID, &d.action.Intent.ExpectedRevision, &d.createdAt, &d.action.ExpiresAt, &ready, &consumed, &invalidated)
+	err := q.QueryRow(ctx, `SELECT actor_user_id,session_id,room_id,target_user_id,expected_owner_user_id,expected_revision,reason,created_at,expires_at,ready_at,consumed_at,invalidated_at FROM `+s.table("governance_actions")+` WHERE action_id=$1`+lock, id).Scan(&d.actor, &d.session, &d.action.Intent.RoomID, &d.action.Intent.TargetUserID, &d.action.Intent.ExpectedOwnerUserID, &d.action.Intent.ExpectedRevision, &d.action.Intent.Reason, &d.createdAt, &d.action.ExpiresAt, &ready, &consumed, &invalidated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.missing = true
 		return d, nil
 	}
 	if err != nil {
 		return d, err
+	}
+	if !ValidGovernanceReason(d.action.Intent.Reason) {
+		return d, &storedFactCorruption{err: errors.New("invalid stored governance intent")}
 	}
 	d.createdAt, d.action.ExpiresAt = d.createdAt.UTC(), d.action.ExpiresAt.UTC()
 	if ready != nil {
@@ -303,7 +309,7 @@ func eligibleGovernanceTarget(intent GovernanceIntent, d *governanceDependencies
 	return !d.roomMissing && d.owner == intent.ExpectedOwnerUserID && !d.ownerMissing && !d.targetMissing && !d.targetDisabled && !d.targetMemberMissing && !d.targetMemberDisabled && d.targetRole == "member"
 }
 
-func (s *Store) lookupGovernance(ctx context.Context, tx pgx.Tx, plan opPlan) (Result, bool, error) {
+func (s *Store) lookupGovernance(ctx context.Context, tx pgx.Tx, plan opPlan, d *governanceDependencies) (Result, bool, error) {
 	var hash, resultHash, encoding []byte
 	var version int
 	err := tx.QueryRow(ctx, `SELECT intent_hash,result_hash,result_version,result_encoding FROM `+s.table("governance_operations")+` WHERE deployment_id=$1 AND actor_user_id=$2 AND op_kind=$3 AND identifier=$4`, plan.key.Deployment, plan.userID, plan.governance.kind, plan.key.Identifier).Scan(&hash, &resultHash, &version, &encoding)
@@ -343,10 +349,16 @@ func (s *Store) lookupGovernance(ctx context.Context, tx pgx.Tx, plan opPlan) (R
 		if err != nil || change.FromUserID != plan.governance.intent.ExpectedOwnerUserID || change.ToUserID != plan.governance.intent.TargetUserID || change.Governance != (plan.governance.actionID != "") {
 			return Result{}, true, &storedFactCorruption{err: errors.New("stored governance fact disagrees with its operation")}
 		}
-	} else if receipt.Action == nil || !validRoomCreateIdentity(receipt.Action.ID) || receipt.Action.ExpiresAt.IsZero() || receipt.RoomID != "" || receipt.OwnerUserID != "" || receipt.Seq != 0 || receipt.Revision != 0 {
+	} else if receipt.Action == nil || !validRoomCreateIdentity(receipt.Action.ID) || !ValidGovernanceReason(receipt.Action.Intent.Reason) || receipt.Action.ExpiresAt.IsZero() || receipt.RoomID != "" || receipt.OwnerUserID != "" || receipt.Seq != 0 || receipt.Revision != 0 {
 		return Result{}, true, &storedFactCorruption{err: errors.New("invalid governance action receipt")}
 	} else if plan.governance.kind == governancePrepare && (receipt.Action.Intent != plan.governance.intent || receipt.Action.Ready) || plan.governance.kind == governanceFinish && (receipt.Action.ID != plan.governance.actionID || !receipt.Action.Ready) {
 		return Result{}, true, &storedFactCorruption{err: errors.New("stored governance action disagrees with its operation")}
+	}
+	if plan.governance.kind == governanceFinish && (d == nil || d.action.missing || receipt.Action.Intent != d.action.action.Intent || !receipt.Action.ExpiresAt.Equal(d.action.action.ExpiresAt) || receipt.Action.Ready != d.action.action.Ready) {
+		// The finish hash references this immutable original action. Digest
+		// integrity alone cannot prove the returned target/rationale is that
+		// action's intent. Consumption and expiry do not erase accepted results.
+		return Result{}, true, &storedFactCorruption{err: errors.New("stored governance finish disagrees with its original action")}
 	}
 	return Result{Outcome: OutcomeReplayed, Seq: receipt.Seq, Revision: receipt.Revision, Fact: fact, Governance: &receipt}, true, nil
 }
@@ -362,7 +374,7 @@ func (s *Store) resolveGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPla
 		return Result{Outcome: OutcomeReplayed, Governance: &GovernanceReceipt{Version: 1, Kind: governanceRead, Action: &d.action.action}}, nil
 	}
 	if plan.governance.kind == governanceList {
-		rows, err := tx.Query(ctx, `SELECT action_id,room_id,target_user_id,expected_owner_user_id,expected_revision,expires_at,ready_at IS NOT NULL FROM `+s.table("governance_actions")+` WHERE actor_user_id=$1 AND session_id=$2 AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>pg_catalog.clock_timestamp() ORDER BY created_at DESC,action_id LIMIT 32`, plan.userID, plan.auth.SessionID)
+		rows, err := tx.Query(ctx, `SELECT action_id,room_id,target_user_id,expected_owner_user_id,expected_revision,reason,expires_at,ready_at IS NOT NULL FROM `+s.table("governance_actions")+` WHERE actor_user_id=$1 AND session_id=$2 AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>pg_catalog.clock_timestamp() ORDER BY created_at DESC,action_id LIMIT 32`, plan.userID, plan.auth.SessionID)
 		if err != nil {
 			return resolveIncomplete(ctx, err)
 		}
@@ -370,8 +382,11 @@ func (s *Store) resolveGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPla
 		actions := make([]GovernanceAction, 0)
 		for rows.Next() {
 			var action GovernanceAction
-			if err := rows.Scan(&action.ID, &action.Intent.RoomID, &action.Intent.TargetUserID, &action.Intent.ExpectedOwnerUserID, &action.Intent.ExpectedRevision, &action.ExpiresAt, &action.Ready); err != nil {
+			if err := rows.Scan(&action.ID, &action.Intent.RoomID, &action.Intent.TargetUserID, &action.Intent.ExpectedOwnerUserID, &action.Intent.ExpectedRevision, &action.Intent.Reason, &action.ExpiresAt, &action.Ready); err != nil {
 				return resolveIncomplete(ctx, err)
+			}
+			if !ValidGovernanceReason(action.Intent.Reason) {
+				return refused(ClassStoredFactUnreadable, nil)
 			}
 			action.ExpiresAt = action.ExpiresAt.UTC()
 			actions = append(actions, action)
@@ -381,7 +396,7 @@ func (s *Store) resolveGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPla
 		}
 		return Result{Outcome: OutcomeReplayed, governanceActions: actions}, nil
 	}
-	result, found, err := s.lookupGovernance(ctx, tx, plan)
+	result, found, err := s.lookupGovernance(ctx, tx, plan, d)
 	if err != nil {
 		if isStoredFactCorruption(err) {
 			return refused(ClassStoredFactUnreadable, err)
@@ -402,7 +417,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 	if !governanceReadAllowed(plan, d) {
 		return refused(ClassAuthorization, nil)
 	}
-	result, found, err := s.lookupGovernance(ctx, tx, plan)
+	result, found, err := s.lookupGovernance(ctx, tx, plan, d)
 	if err != nil {
 		if isStoredFactCorruption(err) {
 			return refused(ClassStoredFactUnreadable, err)
@@ -447,7 +462,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 			return refused(ClassStateInvalid, err)
 		}
 		action := GovernanceAction{ID: id, Intent: intent, ExpiresAt: now.Add(governanceTTL)}
-		if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("governance_actions")+`(action_id,actor_user_id,session_id,room_id,target_user_id,expected_owner_user_id,expected_revision,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, plan.userID, plan.auth.SessionID, intent.RoomID, intent.TargetUserID, intent.ExpectedOwnerUserID, int64(intent.ExpectedRevision), now, action.ExpiresAt); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("governance_actions")+`(action_id,actor_user_id,session_id,room_id,target_user_id,expected_owner_user_id,expected_revision,reason,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, plan.userID, plan.auth.SessionID, intent.RoomID, intent.TargetUserID, intent.ExpectedOwnerUserID, int64(intent.ExpectedRevision), intent.Reason, now, action.ExpiresAt); err != nil {
 			return controlStatementFailure(s, ctx, err)
 		}
 		receipt.Action = &action
@@ -512,7 +527,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("governance_operations")+`(deployment_id,actor_user_id,op_kind,identifier,intent_hash,result_hash,result_version,result_encoding,committed_at) VALUES($1,$2,$3,$4,$5,$6,1,$7,$8)`, plan.key.Deployment, plan.userID, g.kind, plan.key.Identifier, plan.hash[:], digest[:], encoding, now); err != nil {
 		return controlStatementFailure(s, ctx, err)
 	}
-	if err := s.writeMutationAudit(ctx, tx, plan, intent.RoomID, plan.userID, "user", "governance."+g.kind, "accepted", "", intent.RoomID, auditCount(plan), now); err != nil {
+	if err := s.writeMutationAudit(ctx, tx, plan, intent.RoomID, plan.userID, "user", "governance."+g.kind, "accepted", intent.Reason, intent.RoomID, auditCount(plan), now); err != nil {
 		return controlStatementFailure(s, ctx, err)
 	}
 	return Result{Outcome: OutcomeCommitted, Fact: fact, Seq: receipt.Seq, Revision: receipt.Revision, Governance: &receipt}, nil

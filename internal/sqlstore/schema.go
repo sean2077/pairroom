@@ -156,6 +156,10 @@ func verifySchemaVersion(ctx context.Context, q rowQuerier, schema string) error
 	if err := q.QueryRow(ctx, `SELECT count(*)=3 FROM information_schema.columns WHERE table_schema=$1 AND table_name='audit' AND is_nullable='YES' AND column_default IS NULL AND ((column_name IN ('target_id','operation_id') AND data_type='text') OR (column_name='invalidated_approval_count' AND data_type='bigint'))`, schema).Scan(&auditShape); err != nil || !auditShape {
 		return fmt.Errorf("sqlstore: unsupported mutation audit schema shape")
 	}
+	var governanceShape bool
+	if err := q.QueryRow(ctx, `SELECT count(*)=1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='governance_actions' AND column_name='reason' AND is_nullable='NO' AND data_type='text' AND column_default IS NULL`, schema).Scan(&governanceShape); err != nil || !governanceShape {
+		return fmt.Errorf("sqlstore: unsupported governance reason schema shape")
+	}
 
 	return nil
 }

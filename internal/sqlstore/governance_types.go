@@ -1,6 +1,21 @@
 package sqlstore
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+const MaxGovernanceReasonBytes = 1024
+
+// ValidGovernanceReason validates original private rationale without rewriting
+// it. Line breaks and tabs permit paragraphs; other controls are rejected.
+func ValidGovernanceReason(reason string) bool {
+	return len(reason) <= MaxGovernanceReasonBytes && utf8.ValidString(reason) && strings.TrimSpace(reason) != "" && !strings.ContainsFunc(reason, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
+	})
+}
 
 // GovernanceIntent fixes the complete target of one freshly reauthenticated
 // ownership recovery. A missing Owner membership is not a disabled Owner.
@@ -9,6 +24,7 @@ type GovernanceIntent struct {
 	TargetUserID        string `json:"target_user_id"`
 	ExpectedOwnerUserID string `json:"expected_owner_user_id"`
 	ExpectedRevision    uint64 `json:"expected_revision"`
+	Reason              string `json:"reason,omitempty"`
 }
 
 // GovernanceAction is a public reference bound to one exact browser session,

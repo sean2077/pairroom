@@ -37,7 +37,7 @@ func newGovernanceFixture(t *testing.T, disabled bool) governanceFixture {
 	if _, err := f.store.CommitRoomMembership(context.Background(), member); err != nil {
 		t.Fatal(err)
 	}
-	g := governanceFixture{f: f, admin: admin, owner: owner, target: target, ownerLogin: ownerLogin, intent: GovernanceIntent{RoomID: create.RoomID, TargetUserID: target.Auth.UserID, ExpectedOwnerUserID: owner.Auth.UserID, ExpectedRevision: 2}}
+	g := governanceFixture{f: f, admin: admin, owner: owner, target: target, ownerLogin: ownerLogin, intent: GovernanceIntent{RoomID: create.RoomID, TargetUserID: target.Auth.UserID, ExpectedOwnerUserID: owner.Auth.UserID, ExpectedRevision: 2, Reason: "Recover disabled Owner after verified operator request"}}
 	if disabled {
 		if _, err := f.store.SetUserEnabled(context.Background(), admin.Auth, "disable-owner", owner.Auth.UserID, false); err != nil {
 			t.Fatal(err)

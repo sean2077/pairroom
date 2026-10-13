@@ -32,7 +32,7 @@ var tableColumns = map[string][]string{
 	"device_families":            {"family_id", "device_id", "user_id", "origin", "proof_hash", "restore_epoch", "current_grant_id", "previous_grant_id", "recovery_rotation_id", "recovery_hash", "recovery_until", "recovery_used_at", "created_at", "expires_at", "revoked_at"},
 	"device_grants":              {"grant_id", "family_id", "access_hash", "refresh_hash", "created_at", "expires_at", "revoked_at"},
 	"binding_grants":             {"grant_id", "binding_id", "family_id", "token_hash", "restore_epoch", "created_at", "expires_at", "revoked_at"},
-	"governance_actions":         {"action_id", "actor_user_id", "session_id", "room_id", "target_user_id", "expected_owner_user_id", "expected_revision", "created_at", "expires_at", "ready_at", "consumed_at", "invalidated_at"},
+	"governance_actions":         {"action_id", "actor_user_id", "session_id", "room_id", "target_user_id", "expected_owner_user_id", "expected_revision", "reason", "created_at", "expires_at", "ready_at", "consumed_at", "invalidated_at"},
 	"governance_operations":      {"deployment_id", "actor_user_id", "op_kind", "identifier", "intent_hash", "result_hash", "result_version", "result_encoding", "committed_at"},
 	"binding_requests":           {"request_id", "org_id", "room_id", "slot", "observed_generation", "replacement", "agent_id", "binding_id", "grant_id", "token_hash", "proof_hash", "park_enabled", "user_id", "device_id", "family_id", "restore_epoch", "status", "requested_at", "expires_at", "approved_by", "decided_at", "consumed_at"},
 	"binding_operations":         {"deployment_id", "room_id", "principal", "op_kind", "identifier", "intent_hash", "result_version", "result_encoding", "result_hash", "result_seq", "result_revision", "accepted_at"},

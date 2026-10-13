@@ -26,7 +26,7 @@ type GovernanceBackend interface {
 var _ GovernanceBackend = (*sqlstore.Store)(nil)
 
 func validGovernanceIntent(intent sqlstore.GovernanceIntent) bool {
-	return validID(intent.RoomID) && validID(intent.TargetUserID) && validID(intent.ExpectedOwnerUserID) && intent.TargetUserID != intent.ExpectedOwnerUserID && intent.ExpectedRevision <= math.MaxInt64
+	return validID(intent.RoomID) && validID(intent.TargetUserID) && validID(intent.ExpectedOwnerUserID) && intent.TargetUserID != intent.ExpectedOwnerUserID && intent.ExpectedRevision <= math.MaxInt64 && (intent.Reason == "" || sqlstore.ValidGovernanceReason(intent.Reason))
 }
 
 // beginReauth runs after browser authentication/CSRF middleware and checks the
@@ -46,7 +46,7 @@ func (h *Handler) beginReauth(w http.ResponseWriter, r *http.Request, session sq
 		ClientID string                    `json:"client_id"`
 		Intent   sqlstore.GovernanceIntent `json:"intent"`
 	}
-	if !decodeRequest(w, r, &request) || !validID(request.ClientID) || !validGovernanceIntent(request.Intent) {
+	if !decodeRequest(w, r, &request) || !validID(request.ClientID) || !validGovernanceIntent(request.Intent) || !sqlstore.ValidGovernanceReason(request.Intent.Reason) {
 		fail(w, http.StatusBadRequest, "invalid_reauthentication_request")
 		return
 	}
@@ -111,7 +111,7 @@ func (h *Handler) finishReauth(w http.ResponseWriter, r *http.Request, completio
 		writeGovernanceError(w, err)
 		return
 	}
-	if !action.Ready || action.ID != completion.CorrelationID || !action.ExpiresAt.After(time.Now()) || !validGovernanceIntent(action.Intent) {
+	if !action.Ready || action.ID != completion.CorrelationID || !action.ExpiresAt.After(time.Now()) || !validGovernanceIntent(action.Intent) || !sqlstore.ValidGovernanceReason(action.Intent.Reason) {
 		fail(w, http.StatusServiceUnavailable, "reauthentication_unavailable")
 		return
 	}
@@ -193,7 +193,7 @@ func (h *Handler) ownershipOperation(w http.ResponseWriter, r *http.Request, ses
 		Intent   sqlstore.GovernanceIntent `json:"intent"`
 		ActionID string                    `json:"action_id,omitempty"`
 	}
-	if !decodeRequest(w, r, &request) || !validID(request.ClientID) || !validGovernanceIntent(request.Intent) || request.Intent.RoomID != roomID || (request.ActionID != "" && !validID(request.ActionID)) {
+	if !decodeRequest(w, r, &request) || !validID(request.ClientID) || !validGovernanceIntent(request.Intent) || request.Intent.RoomID != roomID || (request.ActionID != "" && (!validID(request.ActionID) || !sqlstore.ValidGovernanceReason(request.Intent.Reason))) {
 		fail(w, http.StatusBadRequest, "invalid_ownership_request")
 		return
 	}
