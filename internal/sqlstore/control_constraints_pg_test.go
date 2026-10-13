@@ -817,6 +817,8 @@ func waitForControlLockWait(t *testing.T, admin *pgx.Conn, waitingPID, holdingPI
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		var waiting bool
 		if err := admin.QueryRow(ctx, `
@@ -827,6 +829,11 @@ func waitForControlLockWait(t *testing.T, admin *pgx.Conn, waitingPID, holdingPI
 		}
 		if waiting {
 			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("backend %d never reached a lock wait on backend %d: %v", waitingPID, holdingPID, ctx.Err())
+		case <-ticker.C:
 		}
 	}
 }
