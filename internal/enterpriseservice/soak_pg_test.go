@@ -209,9 +209,6 @@ func TestSoakHTTPPGThirtyMinutes(t *testing.T) {
 						}
 					} else {
 						stage.Completed++
-						if round%4 == 3 && room.objectID != "" {
-							// No new objects are uploaded in the soak steady workload.
-						}
 					}
 					mu.Unlock()
 					if err != nil {

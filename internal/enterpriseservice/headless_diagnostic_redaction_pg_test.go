@@ -143,7 +143,7 @@ func TestHeadlessDiagnosticRedactionHTTPPGOriginalCandidatesAndPollFault(t *test
 	path := "/enterprise/api/v1/device-enrollments/" + id
 	status, body = call(native, http.MethodGet, path, "", "", nil)
 	check(status, body, 401, "error", "session_invalid")
-	status, body = call(member, http.MethodGet, path, "", "", nil)
+	status, _ = call(member, http.MethodGet, path, "", "", nil)
 	if status != 200 {
 		t.Fatal("own authenticated browser could not inspect frozen consent metadata")
 	}
@@ -236,7 +236,7 @@ func TestHeadlessDiagnosticRedactionHTTPPGOriginalCandidatesAndPollFault(t *test
 	complete["client_proof"] = proof
 	status, body = call(native, http.MethodPost, base+"/headless-complete", "", "", complete)
 	check(status, body, 200, "status", "completed")
-	status, body = call(native, http.MethodGet, "/enterprise/device/v1/session", access, "", nil)
+	status, _ = call(native, http.MethodGet, "/enterprise/device/v1/session", access, "", nil)
 	if status != 200 {
 		t.Fatal("approved original candidate did not become an actually usable credential")
 	}
