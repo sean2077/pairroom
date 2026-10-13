@@ -24,6 +24,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/enterpriseauth"
 	"github.com/sean2077/pairroom/internal/enterpriseclient"
+	"github.com/sean2077/pairroom/internal/enterpriseobject"
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/relayclient"
@@ -38,6 +39,7 @@ type endpointProcessConfig struct {
 	Mode, Origin, Deployment, Schema, Issuer, CA, Key, Control string
 	Workspace, DeviceDirectory, Home, Session, BeforeStdout    string
 	Args                                                       []string
+	ObjectDirectory                                            string
 }
 
 type endpointStoppedWriter struct{ marker string }
@@ -81,7 +83,11 @@ func TestEnterpriseEndpointProcessHelper(t *testing.T) {
 	if cfg.Mode != "service" {
 		t.Fatal("unsupported process role")
 	}
-	store, err := sqlstore.Open(ctx, sqlstore.Config{DSN: os.Getenv("PAIRROOM_SQLSTORE_TEST_DSN"), Schema: cfg.Schema, DeploymentID: cfg.Deployment, RequireSessionAuth: true})
+	storeConfig := sqlstore.Config{DSN: os.Getenv("PAIRROOM_SQLSTORE_TEST_DSN"), Schema: cfg.Schema, DeploymentID: cfg.Deployment, RequireSessionAuth: true}
+	if cfg.ObjectDirectory != "" {
+		storeConfig.AttachmentLimits = sqlstore.AttachmentLimits{DeploymentBytes: 64 << 20, RoomBytes: 32 << 20, DeploymentPending: 32, RoomPending: 16}
+	}
+	store, err := sqlstore.Open(ctx, storeConfig)
 	if err != nil {
 		t.Fatal("process Store unavailable")
 	}
@@ -112,6 +118,16 @@ func TestEnterpriseEndpointProcessHelper(t *testing.T) {
 	handler, err := New(Config{DeploymentID: cfg.Deployment, PublicOrigin: cfg.Origin}, provider, transactions, store)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.ObjectDirectory != "" {
+		objects, err := enterpriseobject.Open(cfg.ObjectDirectory, cfg.Deployment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler, err = NewWithObjectStore(Config{DeploymentID: cfg.Deployment, PublicOrigin: cfg.Origin}, provider, transactions, store, objects)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	var faultMu sync.Mutex
 	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +373,7 @@ func TestEnterpriseEndpointProcessesSurviveServiceKillWithoutReprintingClaims(t 
 	if err := f.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	serviceConfig := endpointProcessConfig{Mode: "service", Origin: f.origin, Deployment: f.cfg.DeploymentID, Schema: f.schema, Issuer: f.idp.server.URL, CA: ca, Key: key, Control: filepath.Join(t.TempDir(), "drop-response")}
+	serviceConfig := endpointProcessConfig{Mode: "service", Origin: f.origin, Deployment: f.cfg.DeploymentID, Schema: f.schema, Issuer: f.idp.server.URL, CA: ca, Key: key, Control: filepath.Join(t.TempDir(), "drop-response"), ObjectDirectory: filepath.Join(t.TempDir(), "process-objects")}
 	service := endpointStart(t, serviceConfig, true)
 	bindArgs := func(e endpointProcessConfig, slot int) []string {
 		return []string{"bind", "--repo", e.Workspace, "--runtime", "claude", "--enterprise-service", e.Origin, "--deployment", e.Deployment, "--enterprise-ca", e.CA, "--enterprise-state-dir", e.DeviceDirectory, "--room", room, "--slot", fmt.Sprint(slot)}
@@ -391,6 +407,42 @@ func TestEnterpriseEndpointProcessesSurviveServiceKillWithoutReprintingClaims(t 
 	send("first-process-send", "first full process envelope")
 	if !strings.Contains(wait(), "first full process envelope") {
 		t.Fatal("two same-Runtime processes did not relay")
+	}
+	// A legal multi-MiB file crosses real CLI journals, immutable storage,
+	// referenced metadata, endpoint prefetch and the structured claim boundary.
+	largeEvidence := bytes.Repeat([]byte("large native evidence\n"), 110000)
+	evidencePath := filepath.Join(endpoints[0].Workspace, "large-evidence.txt")
+	if err := os.WriteFile(evidencePath, largeEvidence, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	endpointRun(t, endpoints[0], "send", "--repo", endpoints[0].Workspace, "--id", "process-media-send", "--text", "inspect large process evidence", "--file", evidencePath, "--peer-generation", "1")
+	mediaOutput := wait()
+	if !strings.Contains(mediaOutput, "inspect large process evidence") || !strings.Contains(mediaOutput, "large-evidence.txt") || strings.Contains(mediaOutput, endpoints[0].Workspace) {
+		t.Fatal("structured media delivery lost evidence or exposed sender's path")
+	}
+	verifiedCache := false
+	err = filepath.WalkDir(endpoints[1].DeviceDirectory, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() == int64(len(largeEvidence)) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			verifiedCache = verifiedCache || bytes.Equal(data, largeEvidence)
+		}
+		return nil
+	})
+	if err != nil || !verifiedCache {
+		t.Fatal("destination did not retain the verified original file in its private cache")
 	}
 	send("kill-before-output", "uncertain process envelope")
 	stoppedConfig := endpoints[1]

@@ -26,6 +26,7 @@ import (
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 // Real CLI parsing, native locators, private files, TLS and stdout boundary;
@@ -49,6 +50,10 @@ type enterpriseCLIFixture struct {
 	bindingApproved                         bool
 	extraBinding                            *model.EnterpriseBinding
 	extraTokenHash, extraGrantID            string
+	objectHandler                           func(http.ResponseWriter, *http.Request) bool
+	attachmentMetadata                      []model.Attachment
+	attachmentIncoming                      bool
+	historyQueries                          []relay.HistoryQuery
 }
 
 func enterpriseFixtureSecret(id string) string {
@@ -146,6 +151,27 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(403)
 		return
 	}
+	if f.objectHandler != nil && f.objectHandler(w, r) {
+		return
+	}
+	if r.URL.Path == "/enterprise/device/v1/rooms/server-room/relay/history" {
+		var query relay.HistoryQuery
+		if json.NewDecoder(r.Body).Decode(&query) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		f.calls["history"]++
+		f.historyQueries = append(f.historyQueries, query)
+		page := relay.HistoryPage{Messages: []relay.Message{}, Sequence: 4, Notice: "History only."}
+		for _, result := range f.operations {
+			if result.Message != nil && (query.ID == "" || result.Message.ID == query.ID) {
+				page.Messages = append(page.Messages, *result.Message)
+			}
+		}
+		page.Total = len(page.Messages)
+		_ = json.NewEncoder(w).Encode(page)
+		return
+	}
 	if r.URL.Path == "/enterprise/device/v1/rooms/server-room/relay/context" {
 		f.calls["context"]++
 		own := relay.Binding{Slot: model.ActorSlot1, Runtime: model.RuntimeClaude, BindID: "binding-test", Generation: 1, Active: true, ParkEnabled: true}
@@ -166,7 +192,11 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 			summary.TargetGenerations[model.ActorSlot1] = 1
 			summary.Bindings[model.ActorSlot2] = relay.BindingSummary{Runtime: own.Runtime, Generation: own.Generation, Active: true, Associated: true, ParkEnabled: true}
 		}
-		_ = json.NewEncoder(w).Encode(enterpriseclient.RelayContext{Revision: 3, Summary: summary, Binding: own, Peer: peer, PeerGeneration: f.peerGeneration, Bootstrap: protocol.NativeDynamicBootstrap(own.Slot, own.Runtime, peer.Runtime, f.peerGeneration), Collaboration: "Frozen collaboration instructions.", ClaimReady: f.queued && !f.claimed})
+		view := enterpriseclient.RelayContext{Revision: 3, Summary: summary, Binding: own, Peer: peer, PeerGeneration: f.peerGeneration, Bootstrap: protocol.NativeDynamicBootstrap(own.Slot, own.Runtime, peer.Runtime, f.peerGeneration), Collaboration: "Frozen collaboration instructions.", ClaimReady: f.queued && !f.claimed}
+		if f.attachmentIncoming && f.queued && !f.claimed {
+			view.Next = &relay.EnterpriseIncoming{MessageID: "inbound-message", TargetGeneration: 1, Attachments: f.attachmentMetadata}
+		}
+		_ = json.NewEncoder(w).Encode(view)
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/enterprise/device/v1/rooms/server-room/relay") {
@@ -222,6 +252,24 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 	switch command.Intent.Kind {
 	case relay.EnterpriseOperationSend:
 		result.Message = message("send")
+		if command.Intent.Review != (review.Anchor{}) {
+			anchor := command.Intent.Review
+			result.Message.Review = &anchor
+		}
+		if command.Intent.QuoteID != "" {
+			for _, prior := range f.operations {
+				if prior.Message != nil && prior.Message.ID == command.Intent.QuoteID {
+					result.Message.Quote = &model.AgentQuote{FromHandle: "@agent1", Text: prior.Message.Text}
+				}
+			}
+		}
+		for _, id := range command.Intent.AttachmentIDs.Slice() {
+			for _, meta := range f.attachmentMetadata {
+				if id == meta.ID {
+					result.Message.Attachments = append(result.Message.Attachments, meta)
+				}
+			}
+		}
 	case relay.EnterpriseOperationReport:
 		publication := &relay.Publication{BindID: "binding-test", Generation: 1, ReportSeq: command.Intent.ReportSeq, ExpectedPeerGeneration: command.Intent.ExpectedPeerGeneration}
 		if strings.Contains(command.Intent.Text, "@agent2") {
@@ -237,6 +285,13 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 			result.Empty = true
 		} else {
 			result.Claim = &relay.Claim{ID: "inbound-message", Receipt: "private-inbound-receipt", Envelope: "complete inbound envelope", PeerGeneration: f.peerGeneration}
+			if f.attachmentIncoming {
+				if command.Intent.MessageID != "inbound-message" || command.Intent.ExpectedTargetGeneration != 1 {
+					f.t.Error("attachment claim did not pin prepared head")
+				}
+				result.Claim = nil
+				result.StructuredClaim = &relay.StructuredClaim{ID: "inbound-message", Receipt: "private-inbound-receipt", PeerGeneration: f.peerGeneration, Message: relay.Message{ID: "inbound-message", From: model.ActorSlot2, To: model.ActorSlot1, FromRuntime: model.RuntimeClaude, FromGeneration: 1, TargetGeneration: 1, Text: "complete inbound evidence", Source: "send", State: "queued", CreatedAt: at, UpdatedAt: at, Attachments: f.attachmentMetadata}}
+			}
 			f.queued = false
 			f.claimed = true
 		}

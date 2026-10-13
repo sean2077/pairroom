@@ -26,6 +26,8 @@ const maxBindingStateBytes = 2 << 20
 var ErrBindingInactive = errors.New("enterprise Binding is inactive; inspect the original association")
 var ErrBindingCredentialExpired = errors.New("enterprise Binding credential expired; renew it explicitly in the foreground with the current Device login")
 var ErrDeliveryUnresolved = errors.New("enterprise delivery outcome is unresolved; reconcile its original operation without printing the envelope again")
+var ErrBindingRequestExpired = errors.New("enterprise Binding request expired; explicitly abandon its local attempt before requesting another admission")
+var ErrBindingRequestDenied = errors.New("enterprise Binding request was denied; explicitly abandon its local attempt before requesting another admission")
 
 // BindingOptions is local setup input. Official native identity and workspace
 // never cross HTTPS: only a random stable source key identifies the Agent.
@@ -48,6 +50,7 @@ type BindingMetadata struct {
 	ObservedGeneration                                                           uint64
 	Replace, ParkEnabled                                                         bool
 	ExpiresAt                                                                    time.Time
+	RemotePhase                                                                  string
 }
 
 type BindingContext struct {
@@ -137,6 +140,7 @@ type bindingRecord struct {
 	Proof                 secret            `json:"proof"`
 	Grant                 bindingGrant      `json:"grant"`
 	Renewal               *bindingRenewal   `json:"renewal,omitempty"`
+	DetachedAt            time.Time         `json:"detached_at,omitzero"`
 }
 
 type BindingClient struct {
@@ -149,7 +153,11 @@ func nativeSessionHash(a relay.Auth) string {
 	return relay.Digest(string(a.Runtime) + "\x00" + a.SessionID)
 }
 func (r bindingRecord) metadata() BindingMetadata {
-	return BindingMetadata{RecordID: r.RecordID, Origin: r.Origin, DeploymentID: r.DeploymentID, UserID: r.UserID, DeviceID: r.DeviceID, AgentID: r.AgentID, RoomID: r.RoomID, Workspace: r.Workspace, Slot: r.Slot, Runtime: r.Runtime, BindID: r.BindID, Generation: r.Generation, SessionHash: r.SessionHash, CredentialHash: r.CredentialHash, Status: r.Phase, RequestID: r.RequestID, ObservedGeneration: r.ObservedGeneration, Replace: r.Replace, ParkEnabled: r.ParkEnabled, ExpiresAt: r.Grant.ExpiresAt}
+	status := r.Phase
+	if !r.DetachedAt.IsZero() {
+		status = "locally_detached"
+	}
+	return BindingMetadata{RecordID: r.RecordID, Origin: r.Origin, DeploymentID: r.DeploymentID, UserID: r.UserID, DeviceID: r.DeviceID, AgentID: r.AgentID, RoomID: r.RoomID, Workspace: r.Workspace, Slot: r.Slot, Runtime: r.Runtime, BindID: r.BindID, Generation: r.Generation, SessionHash: r.SessionHash, CredentialHash: r.CredentialHash, Status: status, RemotePhase: r.Phase, RequestID: r.RequestID, ObservedGeneration: r.ObservedGeneration, Replace: r.Replace, ParkEnabled: r.ParkEnabled, ExpiresAt: r.Grant.ExpiresAt}
 }
 
 func (c *Client) OpenBinding(recordID string) (*BindingClient, error) {
@@ -176,7 +184,7 @@ func (b *BindingClient) read() (bindingRecord, error) {
 		return r, ErrPrivateState
 	}
 	switch r.Phase {
-	case "prepared", "agent_unknown", "request_prepared", "request_unknown", "awaiting_owner", "completion_prepared", "completion_unknown", "active", "inactive":
+	case "prepared", "agent_unknown", "request_prepared", "request_unknown", "awaiting_owner", "completion_prepared", "completion_unknown", "active", "inactive", "denied", "expired":
 	default:
 		return r, ErrPrivateState
 	}
@@ -267,7 +275,7 @@ func (b *BindingClient) authenticated(ctx context.Context, a relay.Auth) (bindin
 	if _, err := b.currentDevice(r, false); err != nil {
 		return r, err
 	}
-	if r.Phase != "active" {
+	if r.Phase != "active" || !r.DetachedAt.IsZero() {
 		return r, ErrBindingInactive
 	}
 	if a.BindID != r.BindID || a.Generation != r.Generation || a.Slot != r.Slot || a.Runtime != r.Runtime || nativeSessionHash(a) != r.SessionHash || subtle.ConstantTimeCompare([]byte(relay.Digest(a.Secret)), []byte(r.CredentialHash)) != 1 {
@@ -526,6 +534,15 @@ func (b *BindingClient) ResumeBinding(ctx context.Context) (BindingMetadata, err
 	if err != nil {
 		return BindingMetadata{}, err
 	}
+	if !r.DetachedAt.IsZero() {
+		return r.metadata(), ErrBindingInactive
+	}
+	if r.Phase == "denied" {
+		return r.metadata(), ErrBindingRequestDenied
+	}
+	if r.Phase == "expired" {
+		return r.metadata(), ErrBindingRequestExpired
+	}
 	if _, err := b.currentDevice(r, false); err != nil {
 		return BindingMetadata{}, err
 	}
@@ -622,15 +639,22 @@ func (b *BindingClient) ResumeBinding(ctx context.Context) (BindingMetadata, err
 	if !r.matchesRequest(view.Request) {
 		return r.metadata(), unknown("invalid_response")
 	}
-	if view.Request.Status == "pending" {
-		return r.metadata(), nil
-	}
 	if view.Request.Status == "denied" {
-		r.Phase = "inactive"
+		r.Phase = "denied"
 		if err := b.save(r); err != nil {
 			return r.metadata(), err
 		}
-		return r.metadata(), ErrBindingInactive
+		return r.metadata(), ErrBindingRequestDenied
+	}
+	if (view.Request.Status == "pending" || view.Request.Status == "approved") && !view.Request.ExpiresAt.After(time.Now()) {
+		r.Phase = "expired"
+		if err := b.save(r); err != nil {
+			return r.metadata(), err
+		}
+		return r.metadata(), ErrBindingRequestExpired
+	}
+	if view.Request.Status == "pending" {
+		return r.metadata(), nil
 	}
 	if view.Request.Status != "approved" && view.Request.Status != "consumed" {
 		return r.metadata(), unknown("invalid_response")
@@ -750,7 +774,11 @@ func (b *BindingClient) DetachLocal(ctx context.Context, a relay.Auth) error {
 	if r.BindID != a.BindID || r.Generation != a.Generation || r.Slot != a.Slot || r.Runtime != a.Runtime || r.SessionHash != nativeSessionHash(a) || subtle.ConstantTimeCompare([]byte(r.CredentialHash), []byte(relay.Digest(a.Secret))) != 1 {
 		return relay.ErrAuth
 	}
-	r.Phase = "inactive"
+	// Local retirement is separate from the last known remote operation phase.
+	// In particular, completion_unknown must survive an offline detach verbatim.
+	if r.DetachedAt.IsZero() {
+		r.DetachedAt = time.Now().UTC()
+	}
 	if err := b.save(r); err != nil {
 		return err
 	}
@@ -759,8 +787,16 @@ func (b *BindingClient) DetachLocal(ctx context.Context, a relay.Auth) error {
 		return err
 	}
 	claim := nativeidentity.Claim{Runtime: r.Runtime, SessionID: a.SessionID, Association: nativeidentity.Enterprise(r.Origin, r.DeploymentID, r.RoomID), BindID: r.BindID, Generation: r.Generation}
-	if err := identities.Release(ctx, claim); err != nil && !errors.Is(err, nativeidentity.ErrOwned) {
+	if _, err := identities.ReleaseIfHeld(ctx, claim); err != nil {
 		return err
+	}
+	if claim.Generation != 0 {
+		// Completion may have been saved immediately before a crash, while the
+		// native identity index still holds this exact pending generation zero.
+		claim.Generation = 0
+		if _, err := identities.ReleaseIfHeld(ctx, claim); err != nil {
+			return err
+		}
 	}
 	return nil
 }

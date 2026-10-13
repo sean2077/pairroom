@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,28 +40,36 @@ type nativeWireRenewal struct {
 	reply      bindingReply
 }
 type nativeWireFixture struct {
-	t                             *testing.T
-	server                        *httptest.Server
-	ca                            string
-	mu                            sync.Mutex
-	devices                       map[string]nativeWireDevice
-	agents                        map[string]string
-	runtimes                      map[string]model.RuntimeKind
-	requests                      map[string]*nativeWireRequest
-	grants                        map[string]*model.EnterpriseBinding
-	ops                           map[string]nativeWireOperation
-	events                        []model.Event
-	revision                      uint64
-	bodies                        []string
-	dropKind                      relay.EnterpriseOperationKind
-	posts, reads                  int
-	contextFailures               int
-	contextFailureClass           string
-	contextEntered                chan struct{}
-	blockContext                  bool
-	renewals                      map[string]nativeWireRenewal
-	dropRenewal                   bool
-	renewCalls, resolveRenewCalls int
+	t                                         *testing.T
+	server                                    *httptest.Server
+	ca                                        string
+	mu                                        sync.Mutex
+	devices                                   map[string]nativeWireDevice
+	agents                                    map[string]string
+	runtimes                                  map[string]model.RuntimeKind
+	requests                                  map[string]*nativeWireRequest
+	grants                                    map[string]*model.EnterpriseBinding
+	ops                                       map[string]nativeWireOperation
+	events                                    []model.Event
+	revision                                  uint64
+	bodies                                    []string
+	dropKind                                  relay.EnterpriseOperationKind
+	posts, reads                              int
+	contextFailures                           int
+	contextFailureClass                       string
+	contextEntered                            chan struct{}
+	blockContext                              bool
+	renewals                                  map[string]nativeWireRenewal
+	dropRenewal                               bool
+	renewCalls, resolveRenewCalls             int
+	objects                                   map[string]*wireObject
+	reservations                              map[string]string
+	verifications                             map[string]attachmentReceipt
+	objectCalls                               map[string]int
+	dropReserve, dropPut, omitPut, dropVerify bool
+	corruptDownload                           bool
+	downloadAction                            func(*nativeWireFixture)
+	denyObjectMethod                          string
 }
 type nativeEndpoint struct {
 	parent  *Client
@@ -371,6 +380,25 @@ func (f *nativeWireFixture) serve(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
+	if f.serveObjects(w, r, data, bound) {
+		return
+	}
+	if r.URL.Path == base+"relay/history" {
+		f.reads++
+		var query relay.HistoryQuery
+		if json.Unmarshal(data, &query) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		page, err := relay.ProjectEnterpriseHistory(f.snapshot(), query)
+		if err != nil {
+			w.WriteHeader(400)
+			write(map[string]string{"error": "history_unavailable"})
+			return
+		}
+		write(page)
+		return
+	}
 	if r.URL.Path == base+"relay/context" {
 		f.reads++
 		if f.blockContext {
@@ -431,7 +459,16 @@ func (f *nativeWireFixture) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.posts++
-		prepare, err := relay.PrepareEnterpriseOperation(f.snapshot(), relay.EnterpriseOperationCaller{Actor: bound.Slot, UserID: "user-fixture", BindingID: bound.BindID, Generation: bound.Generation, ClientID: body.ClientID}, body.Intent, relay.EnterpriseOperationIDs{MessageID: fmt.Sprintf("message-%d", f.posts), Receipt: fmt.Sprintf("private-receipt-%d", f.posts)})
+		var attachments []model.Attachment
+		for _, id := range body.Intent.AttachmentIDs.Slice() {
+			object := f.objects[id]
+			if object == nil || !object.verified {
+				fail()
+				return
+			}
+			attachments = append(attachments, object.metadata)
+		}
+		prepare, err := relay.PrepareEnterpriseOperationWithAttachments(f.snapshot(), relay.EnterpriseOperationCaller{Actor: bound.Slot, UserID: "user-fixture", BindingID: bound.BindID, Generation: bound.Generation, ClientID: body.ClientID}, body.Intent, relay.EnterpriseOperationIDs{MessageID: fmt.Sprintf("message-%d", f.posts), Receipt: fmt.Sprintf("private-receipt-%d", f.posts)}, attachments)
 		if err != nil {
 			f.t.Error(err)
 			w.WriteHeader(500)
@@ -440,7 +477,11 @@ func (f *nativeWireFixture) serve(w http.ResponseWriter, r *http.Request) {
 		plan, err := prepare(time.Now().UTC())
 		if err != nil {
 			w.WriteHeader(409)
-			write(map[string]string{"outcome": "refused", "class": "invalid_control_state"})
+			class := "invalid_control_state"
+			if errors.Is(err, relay.ErrPreparedClaimChanged) {
+				class = "prepared_head_changed"
+			}
+			write(map[string]string{"outcome": "refused", "class": class})
 			return
 		}
 		for _, fact := range plan.Facts {
@@ -550,6 +591,49 @@ func TestEnterpriseTwoEndpointsUseSharedRelayAndAckJournal(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.posts != before || f.reads == 0 {
 		t.Fatal("empty polling wrote operation receipts")
+	}
+}
+
+func TestEnterpriseCollectorReadLockTimeoutIsIdleAndParentCancellationPropagates(t *testing.T) {
+	f := newNativeWireFixture(t)
+	b := f.endpoint(t, "read-lock", model.ActorSlot1, model.RuntimeClaude)
+	f.approve(t, b)
+	ready, release, done := make(chan error, 1), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		unlock, err := b.binding.lock(t.Context())
+		ready <- err
+		if err == nil {
+			defer unlock()
+			<-release
+		}
+	}()
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { close(release); <-done })
+	f.mu.Lock()
+	posts, reads := f.posts, f.reads
+	f.mu.Unlock()
+	var response struct {
+		Claim *relay.Claim `json:"claim"`
+	}
+	if err := b.binding.collect(t.Context(), b.auth, nativeRelayRequest{TimeoutSeconds: 1}, &response); err != nil || response.Claim != nil {
+		t.Fatalf("own polling deadline before any effect must return empty: %v", err)
+	}
+	parent, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := b.binding.collect(parent, b.auth, nativeRelayRequest{TimeoutSeconds: 1}, &response); !errors.Is(err, context.Canceled) {
+		t.Fatal("parent cancellation was hidden as successful idle")
+	}
+	journal, err := b.binding.readDelivery()
+	if err != nil || journal.Version != 0 {
+		t.Fatal("read-only lock wait manufactured a delivery attempt")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.posts != posts || f.reads != reads {
+		t.Fatal("blocked read lock reached an HTTP effect")
 	}
 }
 

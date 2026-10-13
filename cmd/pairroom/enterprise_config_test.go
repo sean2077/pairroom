@@ -139,3 +139,32 @@ func TestEnterpriseAdmissionLimitPrecedesDatabase(t *testing.T) {
 		t.Fatalf("admission overflow reached resource setup: %v", err)
 	}
 }
+
+func TestEnterpriseConnectionBudgetLoadsBeforeOpeningResources(t *testing.T) {
+	for _, limit := range []int{-1, 1, 128, 256, 257} {
+		cfg := testEnterpriseConfig()
+		cfg.Resources = &enterpriseResourceConfig{Connections: limit}
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "enterprise.json")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := loadEnterpriseConfig(path)
+		if limit < 1 || limit > 256 {
+			if err == nil {
+				t.Fatal("invalid connection budget reached resource setup")
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		limits, err := loaded.httpResourceLimits().Normalized()
+		if err != nil || limits.Connections != limit || limits.ConcurrentRequests != 32 {
+			t.Fatal("strict JSON connection budget was lost before listener admission")
+		}
+	}
+}

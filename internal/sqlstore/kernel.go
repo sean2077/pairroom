@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 )
 
 const (
@@ -43,6 +44,8 @@ type Config struct {
 	// RequireSessionAuth forbids User-only authorization in public adapters.
 	// False is retained solely for existing trusted internal callers/fixtures.
 	RequireSessionAuth bool
+	AttachmentLimits   AttachmentLimits
+	ResourceLimits     ResourceLimits
 }
 
 // Store is the single-writer transaction kernel for one deployment. The lease
@@ -66,6 +69,12 @@ type Store struct {
 func Open(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.DSN == "" || cfg.DeploymentID == "" || !schemaNamePattern.MatchString(cfg.Schema) {
 		return nil, fmt.Errorf("sqlstore: DSN, schema and deployment id are required")
+	}
+	if !cfg.AttachmentLimits.valid() {
+		return nil, fmt.Errorf("sqlstore: invalid attachment limits")
+	}
+	if !cfg.ResourceLimits.valid() {
+		return nil, fmt.Errorf("sqlstore: invalid resource limits")
 	}
 	ctx, cancel := context.WithTimeout(ctx, openBudget)
 	defer cancel()
@@ -158,9 +167,18 @@ type dependencyState struct {
 	binding        *bindingDependencies
 	recovery       *recoveryDependencies
 	catalog        *catalogDependencies
+	attachment     *attachmentDependencies
+	restore        *restoreDependencies
+	attachmentRefs [8]attachmentState
 }
 
 func (d dependencyState) equal(other dependencyState) bool {
+	if d.restore != nil || other.restore != nil {
+		return d.restore != nil && other.restore != nil && *d.restore == *other.restore
+	}
+	if d.attachment != nil || other.attachment != nil {
+		return d.attachment != nil && other.attachment != nil && *d.attachment == *other.attachment
+	}
 	if d.catalog != nil || other.catalog != nil {
 		return d.catalog != nil && other.catalog != nil && *d.catalog == *other.catalog
 	}
@@ -179,7 +197,7 @@ func (d dependencyState) equal(other dependencyState) bool {
 	return d.userMissing == other.userMissing && d.userDisabled == other.userDisabled &&
 		d.memberMissing == other.memberMissing && d.memberDisabled == other.memberDisabled &&
 		d.memberRole == other.memberRole && d.roomMissing == other.roomMissing &&
-		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.hostMode == other.hostMode && d.archived == other.archived && d.target == other.target && d.credential == other.credential
+		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.hostMode == other.hostMode && d.archived == other.archived && d.target == other.target && d.credential == other.credential && d.attachmentRefs == other.attachmentRefs
 }
 
 // readAllowed reports live read authorization: the user and the membership
@@ -203,6 +221,13 @@ const (
 // documented global order (users, then room_members) with the requested lock
 // clause.
 func (s *Store) readDependencies(ctx context.Context, q rowQuerier, roomID string, auth AuthContext, d *dependencyState, lock string) error {
+	var pending bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+s.table("restore_runs")+` WHERE completed_at IS NULL)`).Scan(&pending); err != nil {
+		return err
+	}
+	if pending {
+		return refusedError(ClassRestorePending, nil)
+	}
 	userID := auth.UserID
 	err := q.QueryRow(ctx, `SELECT disabled FROM `+s.table("users")+` WHERE user_id = $1`+lock, userID).Scan(&d.userDisabled)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -243,21 +268,27 @@ func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *de
 // while human_send carries an explicitly bounded larger budget for its
 // worst-case-escaped text.
 type opPlan struct {
-	key              OpKey
-	userID           string
-	audit            AuditRecord
-	hash             [32]byte
-	expectedRevision uint64
-	encodingBudget   int
-	roomCreate       *model.EnterpriseRoomIntent
-	roomMembership   *model.EnterpriseMembershipIntent
-	auth             AuthContext
-	control          *controlMutation
-	relay            *relayMutation
-	governance       *governanceMutation
-	binding          *bindingMutation
-	recovery         *recoveryMutation
-	catalog          *catalogMutation
+	key                   OpKey
+	userID                string
+	audit                 AuditRecord
+	hash                  [32]byte
+	expectedRevision      uint64
+	encodingBudget        int
+	roomCreate            *model.EnterpriseRoomIntent
+	roomMembership        *model.EnterpriseMembershipIntent
+	auth                  AuthContext
+	control               *controlMutation
+	relay                 *relayMutation
+	governance            *governanceMutation
+	binding               *bindingMutation
+	recovery              *recoveryMutation
+	catalog               *catalogMutation
+	attachment            *attachmentMutation
+	restore               *restoreMutation
+	human                 *HumanSendIntent
+	produceHuman          bool
+	roomReadAuthorization bool
+	auditState            *mutationAuditState
 }
 
 // ownershipLock is fixed before any row is locked. Room creation and its
@@ -265,6 +296,15 @@ type opPlan struct {
 // exist. Membership controls use the same exclusive guard while their target
 // row can be absent; ordinary appends retain their shared ownership guard.
 func (p opPlan) ownershipLock() string {
+	if p.restore != nil {
+		return lockExclusive
+	}
+	if p.attachment != nil {
+		if attachmentReadOnly(p.attachment.kind) {
+			return lockShare
+		}
+		return lockExclusive
+	}
 	if p.catalog != nil {
 		if catalogReadOnly(p.catalog.kind) {
 			return lockShare
@@ -330,7 +370,7 @@ func (s *Store) commitWithRestarts(ctx context.Context, plan opPlan, fact model.
 		return s.acquireFailure(ctx, err)
 	}
 	defer release()
-	if plan.recovery == nil {
+	if plan.recovery == nil && plan.restore == nil {
 		if s.recoveryRunning.Load() || s.recoveryFailed.Load() {
 			return refused(ClassStartupRecovery, nil)
 		}
@@ -364,6 +404,15 @@ func refused3(class string, cause error) (Result, error, bool) {
 // operation plan. The third return requests a side-effect-free restart of the
 // discovery phase.
 func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event) (Result, error, bool) {
+	// A discovery restart cannot retain a previous attempt's measured effects.
+	plan.auditState = &mutationAuditState{}
+	ctx = context.WithValue(ctx, mutationAuditContextKey{}, plan.key)
+	cutoffContext, cutoffErr := captureApprovalCutoff(ctx, s.work, plan)
+	if cutoffErr != nil {
+		r, e := s.preEffectFailure(ctx, cutoffErr)
+		return r, e, false
+	}
+	ctx = cutoffContext
 	var discovered dependencyState
 	// No transaction of this operation has started while reading, so a failure
 	// here is a definite non-commit.
@@ -420,7 +469,11 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	}
 
 	var result Result
-	if plan.recovery != nil {
+	if plan.restore != nil {
+		result, err = s.applyRestorePlan(ctx, tx, plan, locked.restore)
+	} else if plan.attachment != nil {
+		result, err = s.applyAttachmentPlan(ctx, tx, plan, locked.attachment)
+	} else if plan.recovery != nil {
 		result, err = s.applyRecoveryPlan(ctx, tx, plan, locked.recovery)
 	} else if plan.catalog != nil {
 		result, err = s.applyCatalogPlan(ctx, tx, plan, locked.catalog)
@@ -452,7 +505,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 }
 
 func (s *Store) readPlannedRoom(ctx context.Context, q rowQuerier, plan opPlan, d *dependencyState, lock string) error {
-	if plan.control != nil || plan.governance != nil || plan.binding != nil || plan.recovery != nil || plan.catalog != nil {
+	if plan.control != nil || plan.governance != nil || plan.binding != nil || plan.recovery != nil || plan.catalog != nil || plan.attachment != nil || plan.restore != nil {
 		return nil
 	}
 	return s.readRoom(ctx, q, plan.key.RoomID, d, lock)
@@ -516,6 +569,14 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 				return refused3(ClassStoredFactUnreadable, err)
 			}
 		}
+		if plan.human != nil {
+			if err := s.validateHumanMessageReplay(ctx, tx, plan, original); err != nil {
+				if isStoredFactCorruption(err) {
+					return refused3(ClassStoredFactUnreadable, err)
+				}
+				return s.postBeginFailure(ctx, err)
+			}
+		}
 		// Replayed returns the original stored result, including the Room
 		// revision that original commit defined — never the current revision,
 		// which may have advanced past it.
@@ -556,6 +617,27 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 	}
 
 	var createOrg string
+	if plan.human != nil {
+		if locked.archived {
+			return refused3(ClassInvalidControlState, nil)
+		}
+		metadata, e := attachmentReferenceMetadata(plan, locked)
+		if e != nil {
+			return refused3(ClassAuthorization, e)
+		}
+		if plan.produceHuman {
+			fact, err = s.prepareHumanMessage(ctx, tx, plan, locked, metadata)
+			if err != nil {
+				if errors.Is(err, relay.ErrEnterpriseQueueLimit) {
+					return refused3(ClassResourceLimit, err)
+				}
+				return refused3(ClassInvalidControlState, err)
+			}
+		}
+		if e := s.validateHumanMessageCandidate(ctx, tx, plan, locked, fact, metadata); e != nil {
+			return refused3(ClassInvalidFact, e)
+		}
+	}
 	if plan.roomCreate != nil {
 		fact, createOrg, err = s.creationFact(ctx, tx, plan)
 		if err != nil {
@@ -579,9 +661,11 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 				}
 				return s.postBeginFailure(ctx, err)
 			}
-			if err := s.revokeNativeCredentials(ctx, tx, scope); err != nil {
+			count, err := s.revokeNativeCredentials(ctx, tx, scope)
+			if err != nil {
 				return s.postBeginFailure(ctx, err)
 			}
+			setAuditInvalidations(plan, count)
 			// Retirement facts and the membership fact share this Room's one
 			// revision change. The exclusive guard and prelocked scope remain
 			// held; only the sequence advanced within this same transaction.
@@ -600,12 +684,55 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 	if err != nil || len(encoding) > plan.encodingBudget {
 		return refused3(ClassInvalidFact, err)
 	}
+	if plan.roomMembership == nil || !membershipRevokes(*plan.roomMembership) {
+		var budgetErr error
+		if !s.cfg.RequireSessionAuth {
+			privateEncoding, e := encodeStoredFact(stored, userFactOrigin(plan.userID))
+			if e != nil {
+				return refused3(ClassInvalidFact, e)
+			}
+			budgetErr = s.checkRoomNewWorkBudget(ctx, tx, plan.key.RoomID, 1, int64(len(privateEncoding)), 0, 0)
+		} else {
+			snap := RoomSnapshot{RoomID: plan.key.RoomID, DeploymentID: plan.key.Deployment, OrgID: locked.orgID, HostMode: locked.hostMode, Seq: locked.currentSeq, Revision: locked.revision}
+			if plan.roomCreate != nil {
+				snap.OrgID = createOrg
+				snap.CreationUserID = plan.userID
+				snap.HostMode = string(model.HostNative)
+			} else {
+				var e error
+				snap, e = s.readRoomEvents(ctx, tx, snap)
+				if e != nil {
+					r, e := resourceAdmissionFailure(s, ctx, e)
+					return r, e, false
+				}
+			}
+			budgetErr = s.checkRoomFactAdmission(ctx, tx, plan, []model.Event{stored}, snap)
+		}
+		if budgetErr != nil {
+			r, e := resourceAdmissionFailure(s, ctx, budgetErr)
+			return r, e, false
+		}
+	}
 	if plan.roomCreate != nil {
+		if e := s.checkPersistentAdmission(ctx, tx, "rooms", 1); e != nil {
+			r, e := resourceAdmissionFailure(s, ctx, e)
+			return r, e, false
+		}
+		if e := s.checkMembershipAdmission(ctx, tx, "room", plan.key.RoomID, 1); e != nil {
+			r, e := resourceAdmissionFailure(s, ctx, e)
+			return r, e, false
+		}
 		if err := s.insertCreatedRoom(ctx, tx, plan, createOrg, stored.CreatedAt); err != nil {
 			return s.postBeginFailure(ctx, err)
 		}
 	}
 	if plan.roomMembership != nil {
+		if plan.roomMembership.Action == MembershipAdmit && locked.target.memberMissing {
+			if e := s.checkMembershipAdmission(ctx, tx, "room", plan.key.RoomID, 1); e != nil {
+				r, e := resourceAdmissionFailure(s, ctx, e)
+				return r, e, false
+			}
+		}
 		if err := s.writeMembership(ctx, tx, plan, locked); err != nil {
 			return s.postBeginFailure(ctx, err)
 		}
@@ -614,13 +741,21 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 	if err := s.writeStoredRoomEvent(ctx, tx, stored, userFactOrigin(plan.userID)); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
+	if plan.human != nil {
+		if e := s.writeHumanMessageReferences(ctx, tx, plan, stored, locked); e != nil {
+			return s.postBeginFailure(ctx, e)
+		}
+	}
 
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("operations")+` (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal, intent_hash, expected_revision, result_seq, result_revision, committed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal, plan.hash[:], int64(plan.expectedRevision), int64(stored.Seq), int64(locked.revision+1), now); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("audit")+` (deployment_id, room_id, user_id, kind, outcome, detail, at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		plan.key.Deployment, plan.key.RoomID, plan.userID, plan.audit.Kind, plan.audit.Outcome, plan.audit.Detail, now); err != nil {
+	target := plan.key.RoomID
+	if plan.roomMembership != nil {
+		target = plan.roomMembership.TargetUserID
+	}
+	if err := s.writeMutationAudit(ctx, tx, plan, plan.key.RoomID, plan.userID, "user", plan.audit.Kind, plan.audit.Outcome, plan.audit.Detail, target, auditCount(plan), now); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE `+s.table("rooms")+` SET current_seq = $2, revision = $3 WHERE room_id = $1`,

@@ -140,6 +140,11 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 // never begins a transaction, authorizes a caller or applies a transition.
 func (s *Store) readRoomEvents(ctx context.Context, tx pgx.Tx, snapshot RoomSnapshot) (RoomSnapshot, error) {
 	roomID := snapshot.RoomID
+	// Refuse before PostgreSQL streams any encoding or Go allocates the replay
+	// slice. Room sequence alone is untrusted; check actual count and bytes too.
+	if err := s.checkRoomReplayBudget(ctx, tx, roomID, snapshot.Seq); err != nil {
+		return RoomSnapshot{}, err
+	}
 	rows, err := tx.Query(ctx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding, origin_kind, origin_user FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
 	if err != nil {
 		return RoomSnapshot{}, incompleteError(ctx, err)

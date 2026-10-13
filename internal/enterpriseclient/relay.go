@@ -15,38 +15,40 @@ import (
 	"github.com/sean2077/pairroom/internal/privatefile"
 	"github.com/sean2077/pairroom/internal/protocol"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 // RelayContext is an authenticated observation, not native model state. The
 // server computes readiness through its shared Relay projection; reading this
 // value neither claims an envelope nor renews any operation automatically.
 type RelayContext struct {
-	Revision       uint64        `json:"revision"`
-	Summary        relay.Summary `json:"summary"`
-	Binding        relay.Binding `json:"binding"`
-	Peer           relay.Binding `json:"peer"`
-	PeerGeneration uint64        `json:"peer_generation"`
-	Bootstrap      string        `json:"bootstrap"`
-	Collaboration  string        `json:"collaboration"`
-	ReplyExpected  bool          `json:"reply_expected"`
-	ClaimReady     bool          `json:"claim_ready"`
+	Revision       uint64                    `json:"revision"`
+	Summary        relay.Summary             `json:"summary"`
+	Binding        relay.Binding             `json:"binding"`
+	Peer           relay.Binding             `json:"peer"`
+	PeerGeneration uint64                    `json:"peer_generation"`
+	Bootstrap      string                    `json:"bootstrap"`
+	Collaboration  string                    `json:"collaboration"`
+	ReplyExpected  bool                      `json:"reply_expected"`
+	ClaimReady     bool                      `json:"claim_ready"`
+	Next           *relay.EnterpriseIncoming `json:"next,omitempty"`
 }
 
 type nativeRelayRequest struct {
-	ID                     string          `json:"id,omitempty"`
-	Text                   string          `json:"text,omitempty"`
-	To                     model.ActorID   `json:"to,omitempty"`
-	ReportSeq              uint64          `json:"report_seq,omitempty"`
-	ExpectedPeerGeneration uint64          `json:"expected_peer_generation,omitempty"`
-	Receipt                string          `json:"receipt,omitempty"`
-	Park                   bool            `json:"park,omitempty"`
-	TimeoutSeconds         int             `json:"timeout_seconds,omitempty"`
-	Enabled                bool            `json:"enabled,omitempty"`
-	SessionID              string          `json:"session_id,omitempty"`
-	TranscriptPath         string          `json:"transcript_path,omitempty"`
-	AttachmentIDs          []string        `json:"attachment_ids,omitempty"`
-	Review                 json.RawMessage `json:"review,omitempty"`
-	QuoteID                string          `json:"quote_id,omitempty"`
+	ID                     string         `json:"id,omitempty"`
+	Text                   string         `json:"text,omitempty"`
+	To                     model.ActorID  `json:"to,omitempty"`
+	ReportSeq              uint64         `json:"report_seq,omitempty"`
+	ExpectedPeerGeneration uint64         `json:"expected_peer_generation,omitempty"`
+	Receipt                string         `json:"receipt,omitempty"`
+	Park                   bool           `json:"park,omitempty"`
+	TimeoutSeconds         int            `json:"timeout_seconds,omitempty"`
+	Enabled                bool           `json:"enabled,omitempty"`
+	SessionID              string         `json:"session_id,omitempty"`
+	TranscriptPath         string         `json:"transcript_path,omitempty"`
+	AttachmentIDs          []string       `json:"attachment_ids,omitempty"`
+	Review                 *review.Anchor `json:"review,omitempty"`
+	QuoteID                string         `json:"quote_id,omitempty"`
 }
 type sendJournal struct {
 	Version    int                             `json:"version"`
@@ -56,14 +58,17 @@ type sendJournal struct {
 	Intent     relay.EnterpriseOperationIntent `json:"intent"`
 }
 type deliveryJournal struct {
-	Version     int          `json:"version"`
-	BindingID   string       `json:"binding_id"`
-	Generation  uint64       `json:"generation"`
-	OperationID string       `json:"operation_id"`
-	AckID       string       `json:"ack_id"`
-	Park        bool         `json:"park"`
-	Phase       string       `json:"phase"`
-	Claim       *relay.Claim `json:"claim,omitempty"`
+	Version                  int                    `json:"version"`
+	BindingID                string                 `json:"binding_id"`
+	Generation               uint64                 `json:"generation"`
+	OperationID              string                 `json:"operation_id"`
+	AckID                    string                 `json:"ack_id"`
+	Park                     bool                   `json:"park"`
+	Phase                    string                 `json:"phase"`
+	Claim                    *relay.Claim           `json:"claim,omitempty"`
+	StructuredClaim          *relay.StructuredClaim `json:"structured_claim,omitempty"`
+	ExpectedMessageID        string                 `json:"expected_message_id,omitempty"`
+	ExpectedTargetGeneration uint64                 `json:"expected_target_generation,omitempty"`
 }
 type RecoveryOperation struct {
 	Kind      string `json:"kind"`
@@ -92,6 +97,12 @@ func (b *BindingClient) readDelivery() (deliveryJournal, error) {
 		return journal, ErrPrivateState
 	}
 	if journal.Version != 1 || !validID(journal.BindingID) || journal.Generation == 0 || !validID(journal.OperationID) || !validID(journal.AckID) {
+		return journal, ErrPrivateState
+	}
+	if (journal.ExpectedMessageID == "") != (journal.ExpectedTargetGeneration == 0) || journal.ExpectedMessageID != "" && (!validID(journal.ExpectedMessageID) || journal.ExpectedTargetGeneration != journal.Generation) {
+		return journal, ErrPrivateState
+	}
+	if journal.StructuredClaim != nil && (journal.StructuredClaim.ID != journal.ExpectedMessageID || journal.StructuredClaim.Message.TargetGeneration != journal.Generation || relay.ValidateEnterpriseOperationResult(relay.EnterpriseOperationResult{Version: 1, Kind: relay.EnterpriseOperationClaim, StructuredClaim: journal.StructuredClaim}) != nil) {
 		return journal, ErrPrivateState
 	}
 	switch journal.Phase {
@@ -186,14 +197,25 @@ func (b *BindingClient) Relay(ctx context.Context, a relay.Auth, action string, 
 	if err != nil {
 		return ErrConfiguration
 	}
+	if action == "history" {
+		var query relay.HistoryQuery
+		if decodeWire(data, &query) != nil {
+			return ErrConfiguration
+		}
+		page, err := b.history(ctx, r, query)
+		if err != nil {
+			return err
+		}
+		return assign(page, result)
+	}
 	var req nativeRelayRequest
 	if payload != nil {
 		if err := decodeWire(data, &req); err != nil {
 			return ErrConfiguration
 		}
 	}
-	if len(req.AttachmentIDs) > 0 || req.QuoteID != "" || len(req.Review) > 0 && string(req.Review) != "null" {
-		return errors.New("enterprise Native text relay does not yet accept attachment or review payloads")
+	if (len(req.AttachmentIDs) > 0 || req.QuoteID != "" || req.Review != nil) && action != "send" {
+		return ErrConfiguration
 	}
 	switch action {
 	case "inspect", "confirm", "peer", "summary", "doctor":
@@ -218,6 +240,14 @@ func (b *BindingClient) Relay(ctx context.Context, a relay.Auth, action string, 
 		return assign(bound, result)
 	case "send":
 		intent := relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, To: req.To, Text: req.Text, ExpectedPeerGeneration: req.ExpectedPeerGeneration}
+		intent.QuoteID = req.QuoteID
+		if req.Review != nil {
+			intent.Review = *req.Review
+		}
+		intent.AttachmentIDs, err = model.NewEnterpriseAttachmentIDs(req.AttachmentIDs)
+		if err != nil {
+			return ErrConfiguration
+		}
 		reply, err := b.send(ctx, r, req.ID, intent)
 		if err != nil {
 			return err
@@ -339,6 +369,15 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 	}
 	pollCtx, cancel := context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
 	defer cancel()
+	beforeClaimFailure := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if pollCtx.Err() != nil && errors.Is(err, pollCtx.Err()) {
+			return assign(map[string]any{"claim": nil}, result)
+		}
+		return err
+	}
 	idle, reconnect := 0, 0
 	var observedRevision uint64
 	for {
@@ -350,7 +389,7 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 		}
 		unlock, err := b.lock(pollCtx)
 		if err != nil {
-			return err
+			return beforeClaimFailure(err)
 		}
 		r, err := b.authenticated(pollCtx, a)
 		if err != nil {
@@ -400,12 +439,22 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 			return assign(map[string]any{"claim": nil, "foreground_required": view.Summary.Inboxes[r.Slot].Queued > 0}, result)
 		}
 		if view.ClaimReady {
+			var prepared []model.AgentAttachment
+			if view.Next != nil {
+				if !validID(view.Next.MessageID) || view.Next.TargetGeneration != r.Generation {
+					return unknown("invalid_response")
+				}
+				prepared, err = b.prefetchAttachments(pollCtx, r, view.Next.Attachments)
+				if err != nil {
+					return err
+				}
+			}
 			// The collector lock is held by relayclient, but state/status/send
 			// remain usable during these read-only polling intervals. Take the
 			// short record lock only for claim persistence and its one request.
 			unlock, err := b.lock(pollCtx)
 			if err != nil {
-				return err
+				return beforeClaimFailure(err)
 			}
 			defer unlock()
 			r, err = b.authenticated(pollCtx, a)
@@ -429,14 +478,30 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 					return err
 				}
 				journal = deliveryJournal{Version: 1, BindingID: r.BindID, Generation: r.Generation, OperationID: id, AckID: ackID, Park: req.Park, Phase: "claim_unknown"}
+				if view.Next != nil {
+					journal.ExpectedMessageID, journal.ExpectedTargetGeneration = view.Next.MessageID, view.Next.TargetGeneration
+				}
 			} else {
+				if journal.ExpectedMessageID != "" && (view.Next == nil || view.Next.MessageID != journal.ExpectedMessageID || view.Next.TargetGeneration != journal.ExpectedTargetGeneration) {
+					if err := b.clearDelivery(); err != nil {
+						return ErrPrivateState
+					}
+					return errors.New("original absent claim head changed; inspect and wait again for the current message")
+				}
 				journal.Phase = "claim_unknown"
 			}
 			if err := b.saveDelivery(journal); err != nil {
 				return err
 			}
-			reply, err := b.operation(pollCtx, r, journal.OperationID, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim, ParkEnabled: journal.Park}, false)
+			reply, err := b.operation(pollCtx, r, journal.OperationID, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim, ParkEnabled: journal.Park, MessageID: journal.ExpectedMessageID, ExpectedTargetGeneration: journal.ExpectedTargetGeneration}, false)
 			if err != nil {
+				var failure *Error
+				if errors.As(err, &failure) && failure.Class == "prepared_head_changed" && failure.Outcome == "refused" {
+					journal.Phase = "claim_absent"
+					if err := b.saveDelivery(journal); err != nil {
+						return err
+					}
+				}
 				return err
 			}
 			if reply.Result.Empty {
@@ -445,7 +510,25 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 				}
 				return assign(map[string]any{"claim": nil}, result)
 			}
-			journal.Phase, journal.Claim = "claimed", reply.Result.Claim
+			journal.StructuredClaim = reply.Result.StructuredClaim
+			if journal.StructuredClaim != nil {
+				if err := b.saveDelivery(journal); err != nil {
+					return err
+				}
+				if journal.StructuredClaim.ID != journal.ExpectedMessageID || view.Next == nil {
+					return unknown("invalid_response")
+				}
+				journal.Claim, err = enterpriseAttachmentEnvelope(r, journal.StructuredClaim, prepared)
+				if err != nil {
+					return err
+				}
+			} else {
+				if len(prepared) != 0 {
+					return unknown("invalid_response")
+				}
+				journal.Claim = reply.Result.Claim
+			}
+			journal.Phase = "claimed"
 			if err := b.saveDelivery(journal); err != nil {
 				return err
 			}
@@ -588,7 +671,7 @@ func (b *BindingClient) ReconcileDelivery(ctx context.Context, a relay.Auth, ret
 	}
 	ack := journal.Phase == "printed" || journal.Phase == "ack_unknown"
 	id := journal.OperationID
-	intent := relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim, ParkEnabled: journal.Park}
+	intent := relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationClaim, ParkEnabled: journal.Park, MessageID: journal.ExpectedMessageID, ExpectedTargetGeneration: journal.ExpectedTargetGeneration}
 	if ack {
 		id = journal.AckID
 		intent = relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationAck, MessageID: journal.Claim.ID, Receipt: journal.Claim.Receipt}
@@ -628,7 +711,11 @@ func (b *BindingClient) ReconcileDelivery(ctx context.Context, a relay.Auth, ret
 		}
 		return []RecoveryOperation{op}, nil
 	}
-	op.MessageID = reply.Result.Claim.ID
+	if reply.Result.StructuredClaim != nil {
+		op.MessageID = reply.Result.StructuredClaim.ID
+	} else {
+		op.MessageID = reply.Result.Claim.ID
+	}
 	// Keep the original private receipt in a bounded ledger. Later collection
 	// may claim different queued work after the server settles this delivery;
 	// this record is never a permission to print its old envelope again.
@@ -644,6 +731,7 @@ func (b *BindingClient) ReconcileDelivery(ctx context.Context, a relay.Auth, ret
 		return nil, ErrPending
 	}
 	journal.Phase, journal.Claim = "claimed", reply.Result.Claim
+	journal.StructuredClaim = reply.Result.StructuredClaim
 	if err := privatefile.WriteJSON(filepath.Join(dir, relay.Digest(journal.OperationID)+".json"), journal); err != nil {
 		return nil, ErrPrivateState
 	}
@@ -759,6 +847,9 @@ func checkRelayResult(r bindingRecord, intent relay.EnterpriseOperationIntent, r
 		if m == nil || m.From != r.Slot || m.FromRuntime != r.Runtime || m.FromGeneration != r.Generation || m.To != to || m.Text != intent.Text || to.ValidParticipant() && m.TargetGeneration != intent.ExpectedPeerGeneration {
 			return unknown("invalid_response")
 		}
+		if relay.MatchEnterpriseSendEvidence(intent, *m) != nil {
+			return unknown("invalid_response")
+		}
 	case relay.EnterpriseOperationReport:
 		p := result.Publication
 		if p == nil || p.BindID != r.BindID || p.Generation != r.Generation || p.ReportSeq != intent.ReportSeq || p.ExpectedPeerGeneration != intent.ExpectedPeerGeneration || p.Message != nil && (p.Message.From != r.Slot || p.Message.FromRuntime != r.Runtime || p.Message.FromGeneration != r.Generation || p.Message.Text != intent.Text) {
@@ -769,7 +860,16 @@ func checkRelayResult(r bindingRecord, intent relay.EnterpriseOperationIntent, r
 		if i == nil || i.RoomID != r.RoomID || i.BindID != r.BindID || i.Generation != r.Generation || i.Slot != r.Slot || i.AgentID != r.AgentID || i.Runtime != r.Runtime || i.ParkEnabled != intent.ParkEnabled {
 			return unknown("invalid_response")
 		}
-	case relay.EnterpriseOperationClaim, relay.EnterpriseOperationAck:
+	case relay.EnterpriseOperationClaim:
+		if result.StructuredClaim != nil {
+			c := result.StructuredClaim
+			if intent.MessageID == "" || c.ID != intent.MessageID || c.Message.To != r.Slot || c.Message.TargetGeneration != r.Generation || intent.ExpectedTargetGeneration != r.Generation {
+				return unknown("invalid_response")
+			}
+		} else if result.Claim != nil && intent.MessageID != "" && result.Claim.ID != intent.MessageID {
+			return unknown("invalid_response")
+		}
+	case relay.EnterpriseOperationAck:
 	default:
 		return errors.New("unsupported enterprise endpoint operation")
 	}

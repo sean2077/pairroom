@@ -19,25 +19,64 @@ import (
 
 	"github.com/sean2077/pairroom/internal/enterpriseauth"
 	"github.com/sean2077/pairroom/internal/enterpriseservice"
+	"github.com/sean2077/pairroom/internal/sqlstore"
 	"golang.org/x/oauth2"
 )
 
 // enterpriseFileConfig is trusted operator input. Secret values are read from
 // explicitly named process environment variables and never serialized here.
 type enterpriseFileConfig struct {
-	Version              int                  `json:"version"`
-	DeploymentID         string               `json:"deployment_id"`
-	OrganizationID       string               `json:"organization_id"`
-	DatabaseSchema       string               `json:"database_schema"`
-	DatabaseDSNEnv       string               `json:"database_dsn_env"`
-	Listen               string               `json:"listen"`
-	PublicOrigin         string               `json:"public_origin"`
-	TLSCertificateFile   string               `json:"tls_certificate_file,omitempty"`
-	TLSKeyFile           string               `json:"tls_key_file,omitempty"`
-	TrustedProxyPrefixes []string             `json:"trusted_proxy_prefixes,omitempty"`
-	SessionTTL           string               `json:"session_ttl,omitempty"`
-	PendingLoginLimit    int                  `json:"pending_login_limit,omitempty"`
-	OIDC                 enterpriseOIDCConfig `json:"oidc"`
+	Version              int                         `json:"version"`
+	DeploymentID         string                      `json:"deployment_id"`
+	OrganizationID       string                      `json:"organization_id"`
+	DatabaseSchema       string                      `json:"database_schema"`
+	DatabaseDSNEnv       string                      `json:"database_dsn_env"`
+	Listen               string                      `json:"listen"`
+	PublicOrigin         string                      `json:"public_origin"`
+	TLSCertificateFile   string                      `json:"tls_certificate_file,omitempty"`
+	TLSKeyFile           string                      `json:"tls_key_file,omitempty"`
+	TrustedProxyPrefixes []string                    `json:"trusted_proxy_prefixes,omitempty"`
+	SessionTTL           string                      `json:"session_ttl,omitempty"`
+	PendingLoginLimit    int                         `json:"pending_login_limit,omitempty"`
+	OIDC                 enterpriseOIDCConfig        `json:"oidc"`
+	Attachments          *enterpriseAttachmentConfig `json:"attachments,omitempty"`
+	Resources            *enterpriseResourceConfig   `json:"resources,omitempty"`
+}
+
+type enterpriseResourceConfig struct {
+	ConcurrentRequests int `json:"concurrent_requests,omitempty"`
+	Connections        int `json:"connections,omitempty"`
+	sqlstore.ResourceLimits
+}
+
+func (cfg enterpriseFileConfig) sqlResourceLimits() sqlstore.ResourceLimits {
+	if cfg.Resources == nil {
+		return sqlstore.ResourceLimits{}
+	}
+	return cfg.Resources.ResourceLimits
+}
+
+func (cfg enterpriseFileConfig) httpResourceLimits() enterpriseservice.ResourceLimits {
+	if cfg.Resources == nil {
+		return enterpriseservice.ResourceLimits{}
+	}
+	return enterpriseservice.ResourceLimits{ConcurrentRequests: cfg.Resources.ConcurrentRequests, Connections: cfg.Resources.Connections}
+}
+
+type enterpriseAttachmentConfig struct {
+	Directory         string `json:"directory"`
+	DeploymentBytes   int64  `json:"deployment_bytes"`
+	RoomBytes         int64  `json:"room_bytes"`
+	DeploymentPending int64  `json:"deployment_pending"`
+	RoomPending       int64  `json:"room_pending"`
+}
+
+func (cfg enterpriseFileConfig) attachmentLimits() sqlstore.AttachmentLimits {
+	if cfg.Attachments == nil {
+		return sqlstore.AttachmentLimits{}
+	}
+	a := cfg.Attachments
+	return sqlstore.AttachmentLimits{DeploymentBytes: a.DeploymentBytes, RoomBytes: a.RoomBytes, DeploymentPending: a.DeploymentPending, RoomPending: a.RoomPending}
 }
 
 type enterpriseOIDCConfig struct {
@@ -92,10 +131,25 @@ func loadEnterpriseConfig(path string) (enterpriseFileConfig, error) {
 			*value = filepath.Join(base, *value)
 		}
 	}
+	if cfg.Attachments != nil && !filepath.IsAbs(cfg.Attachments.Directory) {
+		cfg.Attachments.Directory = filepath.Join(base, cfg.Attachments.Directory)
+	}
 	return cfg, nil
 }
 
 func (cfg *enterpriseFileConfig) validate() error {
+	if err := sqlstore.ValidateResourceLimits(cfg.sqlResourceLimits()); err != nil {
+		return errors.New("enterprise SQL resource bounds are invalid")
+	}
+	if a := cfg.Attachments; a != nil {
+		if a.Directory == "" || strings.TrimSpace(a.Directory) != a.Directory || strings.ContainsFunc(a.Directory, unicode.IsControl) {
+			return errors.New("enterprise attachment directory is invalid")
+		}
+		zero := a.DeploymentBytes == 0 && a.RoomBytes == 0 && a.DeploymentPending == 0 && a.RoomPending == 0
+		if !zero && (a.DeploymentBytes <= 0 || a.RoomBytes <= 0 || a.RoomBytes > a.DeploymentBytes || a.DeploymentPending <= 0 || a.RoomPending <= 0 || a.RoomPending > a.DeploymentPending) {
+			return errors.New("enterprise attachment limits require consistent positive bounds or all zero for read-only objects")
+		}
+	}
 	if cfg.Version != 1 || !enterpriseIDPattern.MatchString(cfg.DeploymentID) || !enterpriseIDPattern.MatchString(cfg.OrganizationID) || !enterpriseSchemaPattern.MatchString(cfg.DatabaseSchema) || !enterpriseEnvPattern.MatchString(cfg.DatabaseDSNEnv) {
 		return errors.New("enterprise configuration requires version 1 and valid deployment, organization, schema and database environment reference")
 	}
@@ -209,7 +263,7 @@ func (cfg enterpriseFileConfig) providerConfig(secret string) enterpriseauth.Pro
 func (cfg enterpriseFileConfig) httpConfig() enterpriseservice.Config {
 	prefixes, _ := cfg.proxyPrefixes() // The caller validates the complete file first.
 	ttl, _ := time.ParseDuration(cfg.SessionTTL)
-	return enterpriseservice.Config{DeploymentID: cfg.DeploymentID, PublicOrigin: cfg.PublicOrigin, TrustedProxyPrefixes: prefixes, SessionTTL: ttl}
+	return enterpriseservice.Config{DeploymentID: cfg.DeploymentID, PublicOrigin: cfg.PublicOrigin, TrustedProxyPrefixes: prefixes, SessionTTL: ttl, Resources: cfg.httpResourceLimits()}
 }
 
 // A private IdP CA is an explicit operator reference. It extends system roots

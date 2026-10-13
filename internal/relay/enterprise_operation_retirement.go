@@ -22,26 +22,30 @@ func PrepareEnterpriseBindingRetirement(snapshot EnterpriseRoomSnapshot, binding
 		if err != nil {
 			return model.Event{}, err
 		}
-		for _, slot := range model.SlotActors() {
-			old := view.bindings[slot]
-			if old.BindID != bindingID || !old.Active || old.enterprise == nil {
-				continue
-			}
-			at = at.UTC()
-			binding := model.EnterpriseBinding{Version: model.EnterpriseBindingVersion, RoomID: copy.RoomID, Slot: slot, BindID: old.BindID, Generation: old.Generation,
-				AgentID: old.enterprise.agentID, Runtime: old.Runtime, Active: false, ParkEnabled: old.ParkEnabled, RetiredAt: &at, RetiredReason: reason}
-			data, err := json.Marshal(binding)
-			if err != nil {
-				return model.Event{}, err
-			}
-			fact := model.Event{ID: eventID, RoomID: copy.RoomID, Kind: model.EnterpriseBindingUpdatedKind, Actor: slot, CreatedAt: at, Data: data}
-			if _, err := model.DecodeEnterpriseBindingUpdate(fact); err != nil {
-				return model.Event{}, err
-			}
-			return fact, nil
-		}
-		return model.Event{}, errors.New("enterprise retirement requires the exact active Binding")
+		return view.enterpriseBindingRetirementFact(bindingID, reason, eventID, at)
 	}, nil
+}
+
+func (view *Engine) enterpriseBindingRetirementFact(bindingID, reason, eventID string, at time.Time) (model.Event, error) {
+	for _, slot := range model.SlotActors() {
+		old := view.bindings[slot]
+		if old.BindID != bindingID || !old.Active || old.enterprise == nil {
+			continue
+		}
+		at = at.UTC()
+		binding := model.EnterpriseBinding{Version: model.EnterpriseBindingVersion, RoomID: view.cfg.RoomID, Slot: slot, BindID: old.BindID, Generation: old.Generation,
+			AgentID: old.enterprise.agentID, Runtime: old.Runtime, Active: false, ParkEnabled: old.ParkEnabled, RetiredAt: &at, RetiredReason: reason}
+		data, err := json.Marshal(binding)
+		if err != nil {
+			return model.Event{}, err
+		}
+		fact := model.Event{ID: eventID, RoomID: view.cfg.RoomID, Kind: model.EnterpriseBindingUpdatedKind, Actor: slot, CreatedAt: at, Data: data}
+		if _, err := model.DecodeEnterpriseBindingUpdate(fact); err != nil {
+			return model.Event{}, err
+		}
+		return fact, nil
+	}
+	return model.Event{}, errors.New("enterprise retirement requires the exact active Binding")
 }
 
 func cloneEnterpriseOperationSnapshot(snapshot EnterpriseRoomSnapshot) EnterpriseRoomSnapshot {

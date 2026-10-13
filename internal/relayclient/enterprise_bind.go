@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sean2077/pairroom/internal/enterpriseclient"
 	"github.com/sean2077/pairroom/internal/model"
@@ -27,6 +28,7 @@ type enterpriseBindAttempt struct {
 	Replace            bool                `json:"replace"`
 	Credentials        credentials         `json:"credentials"`
 	PreviousBindID     string              `json:"previous_bind_id,omitempty"`
+	DetachedAt         time.Time           `json:"detached_at,omitzero"`
 }
 
 func enterpriseClaim(state State) nativeidentity.Claim {
@@ -113,14 +115,7 @@ func bindEnterprise(ctx context.Context, root string, o options, out io.Writer) 
 		return err
 	}
 	defer unlock()
-	name := "bind-attempt"
-	if o.replace {
-		name = "replace-attempt"
-	}
-	if o.id != "" {
-		name += "-" + relay.Digest(o.id)[:24]
-	}
-	path := filepath.Join(attemptDir, name+".json")
+	path := filepath.Join(attemptDir, enterpriseAttemptFilename(o))
 	var attempt enterpriseBindAttempt
 	if err := privatefile.ReadJSON(path, maxPrivateFileBytes, &attempt); errors.Is(err, os.ErrNotExist) {
 		if o.renewCredential {
@@ -185,6 +180,9 @@ func bindEnterprise(ctx context.Context, root string, o options, out io.Writer) 
 		}
 	} else if err != nil {
 		return err
+	}
+	if !attempt.DetachedAt.IsZero() {
+		return errors.New("this enterprise attempt was detached locally; use a new explicit --id for another admission")
 	}
 	if attempt.Version != 1 || attempt.Route.Origin != o.enterpriseOrigin || attempt.Route.DeploymentID != o.enterpriseDeployment || attempt.Route.RoomID != serverRoom || !sameWorkspace(attempt.Route.Directory, parent.Directory()) || attempt.Route.CAFile != o.enterpriseCA || attempt.Workspace != root || attempt.Runtime != kind || attempt.SessionID != session || !attempt.Slot.ValidParticipant() || o.slot != "" && string(attempt.Slot) != o.slot || attempt.Replace != o.replace || attempt.Credentials.BindID != attempt.Route.RecordID || attempt.Credentials.Secret == "" || attempt.ObservedGeneration == 0 {
 		return errors.New("enterprise bind attempt differs from its original session, route or intent")
@@ -294,6 +292,17 @@ func bindEnterprise(ctx context.Context, root string, o options, out io.Writer) 
 		return fmt.Errorf("enterprise admission confirmed but session locator needs repair: %w; repeat the same bind command", err)
 	}
 	return writeEnterpriseReady(out, state, view)
+}
+
+func enterpriseAttemptFilename(o options) string {
+	name := "bind-attempt"
+	if o.replace {
+		name = "replace-attempt"
+	}
+	if o.id != "" {
+		name += "-" + relay.Digest(o.id)[:24]
+	}
+	return name + ".json"
 }
 
 func archiveEnterpriseState(root string, state State) error {

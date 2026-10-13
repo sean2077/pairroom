@@ -37,12 +37,14 @@ type Config struct {
 	// Forwarded host/client-address headers never determine authority or identity.
 	TrustedProxyPrefixes []netip.Prefix
 	SessionTTL           time.Duration
+	Resources            ResourceLimits
 }
 
 type httpPolicy struct {
 	origin, host, deployment, sessionCookie, loginCookie string
 	proxies                                              []netip.Prefix
 	sessionTTL                                           time.Duration
+	resources                                            ResourceLimits
 }
 
 // ValidateConfig checks browser authority policy before an entrypoint opens its
@@ -50,6 +52,10 @@ type httpPolicy struct {
 func ValidateConfig(cfg Config) error { _, err := makeHTTPPolicy(cfg); return err }
 
 func makeHTTPPolicy(cfg Config) (httpPolicy, error) {
+	resources, err := cfg.Resources.normalized()
+	if err != nil {
+		return httpPolicy{}, err
+	}
 	u, err := url.Parse(cfg.PublicOrigin)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || strings.ToLower(u.Host) != u.Host || cfg.PublicOrigin != "https://"+u.Host || !validID(cfg.DeploymentID) {
 		return httpPolicy{}, ErrConfiguration
@@ -90,7 +96,7 @@ func makeHTTPPolicy(cfg Config) (httpPolicy, error) {
 	}
 	namespace := sha256.Sum256([]byte(cfg.DeploymentID))
 	suffix := hex.EncodeToString(namespace[:16])
-	return httpPolicy{origin: cfg.PublicOrigin, host: u.Host, deployment: cfg.DeploymentID, sessionCookie: "__Host-pairroom_session_" + suffix, loginCookie: "__Host-pairroom_login_" + suffix, proxies: proxies, sessionTTL: ttl}, nil
+	return httpPolicy{origin: cfg.PublicOrigin, host: u.Host, deployment: cfg.DeploymentID, sessionCookie: "__Host-pairroom_session_" + suffix, loginCookie: "__Host-pairroom_login_" + suffix, proxies: proxies, sessionTTL: ttl, resources: resources}, nil
 }
 
 func (p httpPolicy) accepts(r *http.Request) bool {

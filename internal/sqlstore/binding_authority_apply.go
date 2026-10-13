@@ -61,6 +61,9 @@ func (s *Store) applyBindingPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 		if used {
 			return refused(ClassInvalidControlState, nil)
 		}
+		if err := s.checkActionableAdmission(ctx, tx, 1); err != nil {
+			return resourceAdmissionFailure(s, ctx, err)
+		}
 		info := BindingRequestInfo{RequestID: c.RequestID, RoomID: c.RoomID, Slot: c.Slot, ObservedGeneration: c.ObservedGeneration, Replace: c.Replace, AgentID: c.AgentID, Runtime: d.runtime, BindingID: c.BindingID, UserID: plan.userID, DeviceID: d.credential.deviceID, ParkEnabled: c.ParkEnabled, Status: "pending", RequestedAt: now, ExpiresAt: now.Add(bindingRequestTTL)}
 		_, err = tx.Exec(ctx, `INSERT INTO `+s.table("binding_requests")+`(request_id,org_id,room_id,slot,observed_generation,replacement,agent_id,binding_id,grant_id,token_hash,proof_hash,park_enabled,user_id,device_id,family_id,restore_epoch,status,requested_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18)`, c.RequestID, d.orgID, c.RoomID, string(c.Slot), int64(c.ObservedGeneration), c.Replace, c.AgentID, c.BindingID, c.Grant.GrantID, c.Grant.TokenHash[:], c.ProofHash[:], c.ParkEnabled, plan.userID, d.credential.deviceID, d.credential.familyID, d.restoreEpoch, now, info.ExpiresAt)
 		if err != nil {
@@ -99,6 +102,9 @@ func (s *Store) applyBindingPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 		}
 		if !bindingSlotMatches(d.request.info.ObservedGeneration, d.request.info.Replace, d) || d.activeAgentBinding != "" && (!d.request.info.Replace || d.activeAgentBinding != d.activeBinding) {
 			return refused(ClassInvalidControlState, nil)
+		}
+		if err := s.checkActionableAdmission(ctx, tx, 2); err != nil {
+			return resourceAdmissionFailure(s, ctx, err)
 		}
 		facts, err = s.completeBindingAuthority(ctx, tx, plan, d, now, &receipt)
 		if err != nil {
@@ -180,6 +186,9 @@ func (s *Store) completeBindingAuthority(ctx context.Context, tx pgx.Tx, plan op
 	projection.Revision++
 	if _, err := relay.ProjectEnterpriseSnapshot(projection); err != nil {
 		return nil, &storedFactCorruption{err: err}
+	}
+	if err := s.checkRoomFactAdmission(ctx, tx, plan, facts, snapshot); err != nil {
+		return nil, err
 	}
 	if d.activeBinding != "" {
 		if _, err := tx.Exec(ctx, `UPDATE `+s.table("binding_grants")+` SET revoked_at=COALESCE(revoked_at,$2) WHERE binding_id=$1`, d.activeBinding, at); err != nil {

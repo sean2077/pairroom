@@ -10,15 +10,16 @@ import (
 // EnterpriseContext is an authorized, body-free transport view. Reading it
 // neither claims input nor changes the automatic publication context.
 type EnterpriseContext struct {
-	Revision       uint64  `json:"revision"`
-	Summary        Summary `json:"summary"`
-	Binding        Binding `json:"binding"`
-	Peer           Binding `json:"peer"`
-	PeerGeneration uint64  `json:"peer_generation"`
-	Bootstrap      string  `json:"bootstrap"`
-	Collaboration  string  `json:"collaboration"`
-	ReplyExpected  bool    `json:"reply_expected"`
-	ClaimReady     bool    `json:"claim_ready"`
+	Revision       uint64              `json:"revision"`
+	Summary        Summary             `json:"summary"`
+	Binding        Binding             `json:"binding"`
+	Peer           Binding             `json:"peer"`
+	PeerGeneration uint64              `json:"peer_generation"`
+	Bootstrap      string              `json:"bootstrap"`
+	Collaboration  string              `json:"collaboration"`
+	ReplyExpected  bool                `json:"reply_expected"`
+	ClaimReady     bool                `json:"claim_ready"`
+	Next           *EnterpriseIncoming `json:"next,omitempty"`
 }
 
 func DescribeEnterpriseSnapshot(snapshot EnterpriseRoomSnapshot, slot model.ActorID, bindingID string, generation uint64, at time.Time) (EnterpriseContext, error) {
@@ -50,7 +51,25 @@ func DescribeEnterpriseSnapshot(snapshot EnterpriseRoomSnapshot, slot model.Acto
 	if peer.Slot == "" {
 		peer.Slot, peer.Runtime = peerSlot, view.cfg.Runtimes[peerSlot]
 	}
-	return EnterpriseContext{Revision: snapshot.Revision, Summary: view.Summary(), Binding: bound, Peer: peer, PeerGeneration: peerGeneration, Bootstrap: bootstrap, Collaboration: protocol.CollaborationInstructions(slot, creation.Collaboration), ReplyExpected: view.replyExpectedLocked(slot), ClaimReady: enterpriseContextClaimReady(view, slot, generation, at)}, nil
+	return EnterpriseContext{Revision: snapshot.Revision, Summary: view.Summary(), Binding: bound, Peer: peer, PeerGeneration: peerGeneration, Bootstrap: bootstrap, Collaboration: protocol.CollaborationInstructions(slot, creation.Collaboration), ReplyExpected: view.replyExpectedLocked(slot), ClaimReady: enterpriseContextClaimReady(view, slot, generation, at), Next: enterpriseContextIncoming(view, slot, generation, at)}, nil
+}
+
+func enterpriseContextIncoming(view *Engine, slot model.ActorID, generation uint64, at time.Time) *EnterpriseIncoming {
+	for id := range view.inFlight {
+		message := view.messages[id]
+		if message.To == slot && message.State == "delivering" && at.Before(message.ClaimedAt.Add(DeliveryLease)) {
+			return nil
+		}
+	}
+	queued := view.queued[slot]
+	if len(queued) == 0 {
+		return nil
+	}
+	head := view.messages[queued[0]]
+	if head.TargetGeneration != generation || len(head.Attachments) == 0 {
+		return nil
+	}
+	return &EnterpriseIncoming{MessageID: head.ID, TargetGeneration: head.TargetGeneration, Attachments: append([]model.Attachment(nil), head.Attachments...)}
 }
 
 func enterpriseContextClaimReady(view *Engine, slot model.ActorID, generation uint64, at time.Time) bool {

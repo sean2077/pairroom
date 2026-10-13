@@ -111,6 +111,9 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 		if !x.missing {
 			return refused(ClassInvalidControlState, nil)
 		}
+		if e := s.checkActionableAdmission(ctx, tx, 1); e != nil {
+			return resourceAdmissionFailure(s, ctx, e)
+		}
 		c := m.enrollment
 		expiry := now.Add(10 * time.Minute)
 		_, e := tx.Exec(ctx, `INSERT INTO `+s.table("device_enrollments")+`(request_id,device_id,label,origin,callback_uri,client_state,proof_hash,grant_id,access_hash,refresh_hash,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, c.RequestID, c.DeviceID, c.Label, c.Origin, c.CallbackURI, c.ClientState, c.ProofHash[:], c.Credential.GrantID, c.Credential.AccessHash[:], c.Credential.RefreshHash[:], now, expiry)
@@ -141,6 +144,15 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 	case ControlDeviceComplete:
 		if x.status != "approved" {
 			return refused(ClassInvalidControlState, nil)
+		}
+		// Consuming the request releases its one unit; the new family reserves
+		// three units (family, current grant and recovery predecessor).
+		additional := int64(2)
+		if x.deviceMissing {
+			additional++
+		}
+		if e := s.checkActionableAdmission(ctx, tx, additional); e != nil {
+			return resourceAdmissionFailure(s, ctx, e)
 		}
 		actor = x.ownerID
 		if x.deviceMissing {
@@ -193,6 +205,9 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 		var retired bool
 		e := tx.QueryRow(ctx, `SELECT agent_id,COALESCE(runtime_kind,''),retired_at IS NOT NULL FROM `+s.table("agents")+` WHERE device_id=$1 AND stable_source_key=$2`, d.credential.deviceID, m.sourceKey).Scan(&id, &runtime, &retired)
 		if errors.Is(e, pgx.ErrNoRows) {
+			if e := s.checkActionableAdmission(ctx, tx, 1); e != nil {
+				return resourceAdmissionFailure(s, ctx, e)
+			}
 			id = m.agentID
 			if _, e = tx.Exec(ctx, `INSERT INTO `+s.table("agents")+`(agent_id,org_id,device_id,stable_source_key,runtime_kind,runtime_recorded_at) VALUES($1,$2,$3,$4,$5,$6)`, id, d.orgID, d.credential.deviceID, m.sourceKey, string(m.runtime), now); e != nil {
 				return controlStatementFailure(s, ctx, e)
@@ -211,9 +226,11 @@ func (s *Store) applyDeviceControl(ctx context.Context, tx pgx.Tx, p opPlan, d *
 			}
 			return controlStatementFailure(s, ctx, e)
 		}
-		if e := s.revokeNativeCredentials(ctx, tx, scope); e != nil {
+		count, e := s.revokeNativeCredentials(ctx, tx, scope)
+		if e != nil {
 			return controlStatementFailure(s, ctx, e)
 		}
+		setAuditInvalidations(p, count)
 		if _, e := tx.Exec(ctx, `UPDATE `+s.table("devices")+` SET disabled=true,retired_at=COALESCE(retired_at,$2),retired_reason=COALESCE(retired_reason,'device.revoked') WHERE device_id=$1`, x.deviceID, now); e != nil {
 			return controlStatementFailure(s, ctx, e)
 		}

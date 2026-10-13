@@ -5,7 +5,7 @@ Project-wide terms in `en` and `zh-CN`. Host-specific behavior is defined in [Co
 ## Workspace and identity
 
 **Project**:
-A Service registration of a canonical local Git workspace, not a copied repository. In the planned enterprise Native service the same term names a logical Room scope with no server-local Git workspace; neither mode infers the other's meaning from the term.
+A Service registration of a canonical local Git workspace, not a copied repository. In the enterprise Native service candidate the same term names a logical Room scope with no server-local Git workspace; neither mode infers the other's meaning from the term.
 _Equivalent (zh-CN)_: 项目
 
 **Room**:

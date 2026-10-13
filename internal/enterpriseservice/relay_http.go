@@ -9,6 +9,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
 	"github.com/sean2077/pairroom/internal/sqlstore"
 )
 
@@ -35,6 +36,10 @@ func (d *DeviceHandler) relayTransport(w http.ResponseWriter, r *http.Request) b
 	}
 	if len(parts) == 3 && parts[2] == "context" {
 		d.relayContext(w, r, parts[0])
+		return true
+	}
+	if len(parts) == 3 && parts[2] == "history" {
+		d.relayHistory(w, r, parts[0])
 		return true
 	}
 	if len(parts) > 3 || !validID(parts[0]) || len(parts) == 3 && parts[2] != "resolve" || !d.policy.acceptsTransport(r) || !deviceEnvelope(r, d.policy.deployment, true) {
@@ -90,7 +95,7 @@ func (d *DeviceHandler) relayTransport(w http.ResponseWriter, r *http.Request) b
 		fail(w, http.StatusServiceUnavailable, "relay_unavailable")
 		return true
 	}
-	if err == nil && confirmed(result) && result.Relay != nil && result.Relay.Claim != nil {
+	if err == nil && confirmed(result) && result.Relay != nil && (result.Relay.Claim != nil || result.Relay.StructuredClaim != nil) {
 		// Claim is persisted before this final, content-free release check.
 		// A lost fence or revoked grant releases no envelope and never requeues.
 		current, checkErr := backend.AuthenticateBinding(r.Context(), hash, d.policy.origin)
@@ -170,8 +175,8 @@ func writeRelayOperation(w http.ResponseWriter, result sqlstore.Result, err erro
 	}{result.Outcome, result.Seq, result.Revision, result.Relay})
 }
 
-// humanSend uses the existing enterprise engine/port, including its bounded
-// CAS rebuild, rather than introducing a second publication state machine.
+// humanSend uses the shared pure Relay producer inside the fenced SQL runner.
+// Text and attachment publications keep the original human_send key/table.
 func (h *Handler) humanSend(w http.ResponseWriter, r *http.Request, session sqlstore.BrowserSession, roomID string) {
 	store, ok := h.backend.(*sqlstore.Store)
 	if !ok {
@@ -179,28 +184,38 @@ func (h *Handler) humanSend(w http.ResponseWriter, r *http.Request, session sqls
 		return
 	}
 	var request struct {
-		ClientID string        `json:"client_id"`
-		To       model.ActorID `json:"to"`
-		Text     string        `json:"text"`
+		ClientID      string                        `json:"client_id"`
+		To            model.ActorID                 `json:"to"`
+		Text          string                        `json:"text"`
+		AttachmentIDs model.EnterpriseAttachmentIDs `json:"attachment_ids,omitzero"`
+		QuoteID       string                        `json:"quote_id,omitempty"`
+		Review        review.Anchor                 `json:"review,omitzero"`
 	}
-	if !decodeRequestLimit(w, r, &request, 2<<20) || !validID(request.ClientID) || !request.To.ValidParticipant() || relay.ValidateEnterpriseOperationIntent(relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, To: request.To, Text: request.Text}) != nil {
+	if !decodeRequestLimit(w, r, &request, 2<<20) || !validID(request.ClientID) || !request.To.ValidParticipant() || relay.ValidateEnterpriseOperationIntent(relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, To: request.To, Text: request.Text, AttachmentIDs: request.AttachmentIDs, QuoteID: request.QuoteID, Review: request.Review}) != nil {
 		fail(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	auth := relay.EnterpriseAuth{Deployment: session.Auth.Deployment, UserID: session.Auth.UserID, SessionID: session.Auth.SessionID}
-	engine, err := relay.OpenEnterprise(r.Context(), relay.Config{RoomID: roomID}, sqlstore.NewRoomPort(store), auth)
-	if err != nil {
-		fail(w, http.StatusServiceUnavailable, "room_unavailable")
+	intent := sqlstore.HumanSendIntent{To: string(request.To), Text: request.Text, AttachmentIDs: request.AttachmentIDs, QuoteID: request.QuoteID, Review: request.Review}
+	result, err := store.ResolveHumanSend(r.Context(), session.Auth, roomID, request.ClientID, intent)
+	if err == nil && result.Outcome == sqlstore.OutcomeNotCommitted {
+		for attempt := 0; attempt < 2; attempt++ {
+			snapshot, readErr := store.ReadonlySnapshot(r.Context(), session.Auth, roomID)
+			if readErr != nil {
+				writeRelayFailure(w, readErr)
+				return
+			}
+			result, err = store.CommitHumanMessage(r.Context(), sqlstore.HumanMessageCommand{Auth: session.Auth, RoomID: roomID, ClientID: request.ClientID, ExpectedRevision: snapshot.Revision, Intent: intent})
+			if result.Outcome != sqlstore.OutcomeRefused || result.Class != sqlstore.ClassRevisionConflict {
+				break
+			}
+		}
+	}
+	if err != nil || !confirmed(result) {
+		writeOperation(w, result, err)
 		return
 	}
-	defer engine.Close()
-	message, err := engine.ExecuteHumanSend(r.Context(), auth, relay.SendRequest{ID: request.ClientID, To: request.To, Text: request.Text})
+	message, err := relay.EnterpriseHumanSendMessage(result.Fact, session.Auth.UserID, request.ClientID, relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, To: request.To, Text: request.Text, AttachmentIDs: request.AttachmentIDs, QuoteID: request.QuoteID, Review: request.Review})
 	if err != nil {
-		var commandError *relay.EnterpriseCommandError
-		if errors.As(err, &commandError) {
-			writeOperation(w, sqlstore.Result{Outcome: sqlstore.Outcome(commandError.Outcome), Class: commandError.Class}, err)
-			return
-		}
 		fail(w, http.StatusServiceUnavailable, "publication_not_confirmed")
 		return
 	}
@@ -218,14 +233,17 @@ func (h *Handler) resolveHumanMessage(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 	var request struct {
-		ClientID string        `json:"client_id"`
-		To       model.ActorID `json:"to"`
-		Text     string        `json:"text"`
+		ClientID      string                        `json:"client_id"`
+		To            model.ActorID                 `json:"to"`
+		Text          string                        `json:"text"`
+		AttachmentIDs model.EnterpriseAttachmentIDs `json:"attachment_ids,omitzero"`
+		QuoteID       string                        `json:"quote_id,omitempty"`
+		Review        review.Anchor                 `json:"review,omitzero"`
 	}
 	if !decodeRequestLimit(w, r, &request, 2<<20) || !validID(request.ClientID) || !request.To.ValidParticipant() {
 		fail(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	result, err := backend.ResolveHumanSend(r.Context(), session.Auth, roomID, request.ClientID, sqlstore.HumanSendIntent{To: string(request.To), Text: request.Text})
+	result, err := backend.ResolveHumanSend(r.Context(), session.Auth, roomID, request.ClientID, sqlstore.HumanSendIntent{To: string(request.To), Text: request.Text, AttachmentIDs: request.AttachmentIDs, QuoteID: request.QuoteID, Review: request.Review})
 	writeOperation(w, result, err)
 }

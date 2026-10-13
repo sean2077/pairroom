@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/enterpriseauth"
+	"github.com/sean2077/pairroom/internal/enterpriseobject"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 	"github.com/sean2077/pairroom/internal/sqlstore"
@@ -45,6 +46,9 @@ type Handler struct {
 	transactions enterpriseauth.TransactionStore
 	backend      Backend
 	devices      *DeviceHandler
+	objects      *enterpriseobject.Store
+	objectSlots  chan struct{}
+	resources    *requestResources
 }
 
 func New(cfg Config, provider LoginProvider, transactions enterpriseauth.TransactionStore, backend Backend) (*Handler, error) {
@@ -52,7 +56,7 @@ func New(cfg Config, provider LoginProvider, transactions enterpriseauth.Transac
 	if err != nil || nilDependency(provider) || nilDependency(transactions) || nilDependency(backend) || !backend.RequiresSessionAuth() {
 		return nil, ErrConfiguration
 	}
-	handler := &Handler{policy: policy, provider: provider, transactions: transactions, backend: backend}
+	handler := &Handler{policy: policy, provider: provider, transactions: transactions, backend: backend, resources: newRequestResources(policy.resources)}
 	if deviceBackend, ok := backend.(DeviceBackend); ok {
 		handler.devices, err = NewDeviceHandler(cfg, deviceBackend)
 		if err != nil {
@@ -63,6 +67,40 @@ func New(cfg Config, provider LoginProvider, transactions enterpriseauth.Transac
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if h.health(w, r) {
+		return
+	}
+	if !h.resources.admit() {
+		w.Header().Set("Retry-After", "1")
+		fail(w, http.StatusTooManyRequests, "request_capacity")
+		return
+	}
+	started := time.Now()
+	observed := &resourceResponseWriter{ResponseWriter: w}
+	w = observed
+	defer func() {
+		status := observed.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		h.resources.finish(status, time.Since(started))
+	}()
+	// Keep replay admission until the complete projection is released. Bounding
+	// SQL reads alone would let callers retain many complete logs while waiting
+	// for their final live-authorization check.
+	if strings.Contains(r.URL.Path, "/rooms/") && !strings.Contains(r.URL.Path, "/attachments") {
+		select {
+		case h.resources.replaySlots <- struct{}{}:
+			defer func() { <-h.resources.replaySlots }()
+		default:
+			h.resources.rejected.Add(1)
+			w.Header().Set("Retry-After", "1")
+			fail(w, http.StatusTooManyRequests, "replay_capacity")
+			return
+		}
+	}
 	// Bound the whole request, including sequential authentication, provider,
 	// verification and commit calls. A per-statement SQL timeout alone cannot
 	// bound an HTTP operation that crosses several such calls.
@@ -78,6 +116,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(DeviceDeploymentHeader, h.policy.deployment)
 		if h.devices == nil {
 			fail(w, http.StatusServiceUnavailable, "device_authorization_unavailable")
+			return
+		}
+		if h.attachmentNative(w, r) {
 			return
 		}
 		if h.devices.relayTransport(w, r) {
@@ -114,15 +155,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "not_found")
 		return
 	}
-	if (r.URL.RawQuery != "" || r.URL.ForceQuery) && !catalogQueryAllowed(r) {
+	if (r.URL.RawQuery != "" || r.URL.ForceQuery) && !catalogQueryAllowed(r) && !administrationQueryAllowed(r) {
 		fail(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost && !browserAttachmentUpload(r) {
 		fail(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if r.Method == http.MethodPost && !h.policy.sameOrigin(r) {
+	if (r.Method == http.MethodPost || r.Method == http.MethodPut) && !h.policy.sameOrigin(r) {
 		fail(w, http.StatusForbidden, "invalid_origin")
 		return
 	}
@@ -134,14 +175,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// across accounts/tabs. They are never vendor/native session identities.
 	w.Header().Set("X-PairRoom-User", session.Auth.UserID)
 	w.Header().Set("X-PairRoom-Session", session.Auth.SessionID)
-	if r.Method == http.MethodPost && (len(r.Header.Values(CSRFHeader)) != 1 || !validOpaqueSecret(r.Header.Get(CSRFHeader)) || subtle.ConstantTimeCompare([]byte(r.Header.Get(CSRFHeader)), []byte(csrf)) != 1) {
+	if (r.Method == http.MethodPost || r.Method == http.MethodPut) && (len(r.Header.Values(CSRFHeader)) != 1 || !validOpaqueSecret(r.Header.Get(CSRFHeader)) || subtle.ConstantTimeCompare([]byte(r.Header.Get(CSRFHeader)), []byte(csrf)) != 1) {
 		fail(w, http.StatusForbidden, "invalid_csrf")
+		return
+	}
+	if h.attachmentBrowser(w, r, session) {
 		return
 	}
 	if h.bindingBrowser(w, r, session) {
 		return
 	}
 	if h.catalogBrowser(w, r, session) {
+		return
+	}
+	if h.observabilityBrowser(w, r, session) {
+		return
+	}
+	if h.administrationBrowser(w, r, session) {
 		return
 	}
 	switch {
@@ -346,15 +396,18 @@ func (h *Handler) room(w http.ResponseWriter, r *http.Request, session sqlstore.
 			}
 			return
 		}
-		projection, err := relay.ProjectEnterpriseSnapshot(relay.EnterpriseRoomSnapshot{DeploymentID: snapshot.DeploymentID, OrgID: snapshot.OrgID, CreationUserID: snapshot.CreationUserID, RoomID: snapshot.RoomID, HostMode: snapshot.HostMode, Events: snapshot.Events, Seq: snapshot.Seq, Revision: snapshot.Revision})
+		projection, err := relay.ProjectEnterpriseSnapshotTail(relay.EnterpriseRoomSnapshot{DeploymentID: snapshot.DeploymentID, OrgID: snapshot.OrgID, CreationUserID: snapshot.CreationUserID, RoomID: snapshot.RoomID, HostMode: snapshot.HostMode, Events: snapshot.Events, Seq: snapshot.Seq, Revision: snapshot.Revision})
 		if err != nil {
 			fail(w, http.StatusServiceUnavailable, "room_unavailable")
 			return
 		}
+		if !h.finalBrowserSession(w, r, session, roomID) {
+			return
+		}
 		writeJSON(w, http.StatusOK, struct {
 			Revision uint64 `json:"revision"`
-			relay.Snapshot
-		}{Revision: snapshot.Revision, Snapshot: projection})
+			relay.TailSnapshot
+		}{Revision: snapshot.Revision, TailSnapshot: projection})
 		return
 	}
 	if r.Method != http.MethodPost || len(parts) != 2 {
@@ -362,6 +415,8 @@ func (h *Handler) room(w http.ResponseWriter, r *http.Request, session sqlstore.
 		return
 	}
 	switch parts[1] {
+	case "history":
+		h.browserHistory(w, r, session, roomID)
 	case "messages":
 		h.humanSend(w, r, session, roomID)
 	case "resolve-message":
@@ -435,6 +490,8 @@ func writeOperation(w http.ResponseWriter, result sqlstore.Result, err error) {
 				status = http.StatusNotFound
 			} else if result.Class == sqlstore.ClassLeaseLost {
 				status = http.StatusServiceUnavailable
+			} else if result.Class == sqlstore.ClassPreparedHeadChanged {
+				status = http.StatusConflict
 			}
 		case sqlstore.OutcomeConflict, sqlstore.OutcomeNotCommitted:
 			status = http.StatusConflict

@@ -86,7 +86,20 @@ pairroom relay bind --enterprise-service https://pairroom.example.test --deploym
 
 Each endpoint requests its own slot. The first response supplies an Owner approval URL; the actual Room Owner approves that exact request, and the original endpoint repeats the same bind command to complete it. A second session may use slot 2 with the same or another Runtime. Optional `--enterprise-ca` and `--enterprise-state-dir` must select the same CA and Device state as login. Explicit `--replace` requests replacement of the observed occupied slot; it never inherits the old endpoint's consent. `bind --renew-credential` renews this session's current narrow Binding credential with its current Device login, preserving Binding and generation.
 
-After binding, normal `send`, `wait`, `exchange`, `hook`, `status` and `reconcile` discover the original private association. Changing cwd never changes its enterprise origin, Room or session. `reconcile` verifies uncertain original operation IDs without printing an old envelope; `reconcile --ack-delivery` can explicitly resend only a saved ACK after stdout succeeded and its ACK operation was proven absent. `unbind --local-only` detaches locally while preserving evidence and server authority. A queued or handed-off message is not proof of native model acceptance. Attachment and other first-phase gates remain under implementation in this candidate.
+After binding, normal `send`, `wait`, `exchange`, `hook`, `status` and `reconcile` discover the original private association. Changing cwd never changes its enterprise origin, Room or session. `reconcile` verifies uncertain original operation IDs without printing an old envelope; `reconcile --ack-delivery` can explicitly resend only a saved ACK after stdout succeeded and its ACK operation was proven absent. `unbind --local-only` detaches locally while preserving evidence and server authority. A queued or handed-off message is not proof of native model acceptance. Operational rehearsal and final first-phase acceptance remain in progress for this candidate.
+
+Enterprise `send --file PATH` reserves, uploads and verifies inert evidence before publishing its reference. Keep the original operation ID and private pending state on an uncertain response. Inspection does not resend a publication or upload; an explicit upload retry is allowed only after the original object is confirmed missing and its exact saved bytes remain available. The receiver verifies and caches referenced evidence before claiming a delivery, then acknowledges only after stdout succeeds. `--ref` remains a local path/hash reference. Quote, review and paginated `history` use the original enterprise Room association and current authorization.
+
+Offline maintenance uses the operator configuration and the exclusive deployment lease:
+
+```sh
+pairroom enterprise backup --config enterprise.json --id BACKUP_ID --output NEW_PRIVATE_BUNDLE
+pairroom enterprise restore --config restore-target.json --id RESTORE_ID --source PRIVATE_BUNDLE
+pairroom enterprise resolve-restore --config restore-target.json --id RESTORE_ID --manifest-hash ORIGINAL_MANIFEST_SHA256
+pairroom enterprise complete-restore --config restore-target.json --id RESTORE_ID --manifest-hash ORIGINAL_MANIFEST_SHA256
+```
+
+Stop the serving process before maintenance. Backup requires a new output directory outside the object root. Restore requires a pristine target schema and new private object root, preserving the source bundle. Retain the original ID and manifest hash when the outcome is uncertain; `resolve-restore` only inspects that operation. A restored deployment rotates its restore epoch, retires old credentials and approvals, and remains unavailable until recovery and completion succeed. `backup-end --config enterprise.json --id BACKUP_ID` explicitly releases an original backup retention barrier after inspection; it does not certify an incomplete bundle. See the [deployment procedure](../deploy/enterprise/README.md) for configuration, storage and recovery boundaries.
 
 ## Exit and errors
 
@@ -100,6 +113,8 @@ After binding, normal `send`, `wait`, `exchange`, `hook`, `status` and `reconcil
 The following names are extracted from `cmd/pairroom/*.go` and `internal/relayclient/cli.go`. Use them to find omissions; they do not mean every flag applies to every command.
 
 <!-- generated:flags -->
+
+- `--abandon-pending`
 - `--ack-delivery`
 - `--actor`
 - `--attach`
@@ -156,6 +171,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--live`
 - `--local-only`
 - `--log-file`
+- `--manifest-hash`
 - `--mock`
 - `--n`
 - `--name`
@@ -165,6 +181,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--peer-runtime`
 - `--pending`
 - `--purge-hooks`
+- `--quote`
 - `--recover`
 - `--recover-stale-lock`
 - `--ref`
@@ -174,6 +191,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--resend`
 - `--resume-pending`
 - `--retry`
+- `--retry-upload`
 - `--review`
 - `--review-base`
 - `--review-repo`
@@ -186,6 +204,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--shutdown-timeout`
 - `--since`
 - `--slot`
+- `--source`
 - `--stall-warning-seconds`
 - `--state-dir`
 - `--text`
@@ -193,6 +212,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--timeout`
 - `--to`
 - `--token`
+
 <!-- /generated:flags -->
 
 `pairroom daemon install` parses `--binary`, `--work-dir`, `--log-max-size`, `--log-max-backups`, and `--` itself, so they are not in this inventory; see `pairroom daemon --help`.

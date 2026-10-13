@@ -17,3 +17,13 @@ func ProjectEnterpriseSnapshot(snapshot EnterpriseRoomSnapshot) (Snapshot, error
 	}
 	return projection.Snapshot(), nil
 }
+
+// ProjectEnterpriseSnapshotTail projects only the shared bounded browser
+// window after strict read-only replay. It never builds a full Snapshot first.
+func ProjectEnterpriseSnapshotTail(snapshot EnterpriseRoomSnapshot) (TailSnapshot, error) {
+	projection, err := enterpriseOperationView(snapshot)
+	if err != nil {
+		return TailSnapshot{}, err
+	}
+	return projection.SnapshotTail(), nil
+}

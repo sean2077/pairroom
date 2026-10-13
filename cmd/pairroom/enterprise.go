@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/enterpriseauth"
+	"github.com/sean2077/pairroom/internal/enterpriseobject"
 	"github.com/sean2077/pairroom/internal/enterpriseservice"
 	"github.com/sean2077/pairroom/internal/sqlstore"
 )
@@ -28,9 +29,16 @@ func runEnterprise(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Println("Usage: pairroom enterprise init --config FILE --bootstrap-subject SUBJECT")
 		fmt.Println("       pairroom enterprise serve --config FILE")
+		fmt.Println("       pairroom enterprise backup --config FILE --output DIRECTORY --id ID")
+		fmt.Println("       pairroom enterprise restore --config FILE --source DIRECTORY --id ID")
+		fmt.Println("       pairroom enterprise resolve-restore|complete-restore --config FILE --id ID --manifest-hash SHA256")
+		fmt.Println("       pairroom enterprise backup-end --config FILE --id ID")
 		fmt.Println("       pairroom enterprise login|status|refresh|logout --service-origin HTTPS_ORIGIN --deployment ID")
 		fmt.Println("Initialization explicitly enrolls the selected administrator; serving never bootstraps an administrator.")
 		return nil
+	}
+	if args[0] == "backup" || args[0] == "backup-end" || args[0] == "restore" || args[0] == "resolve-restore" || args[0] == "complete-restore" {
+		return runEnterpriseMaintenance(args)
 	}
 	if args[0] == "login" || args[0] == "status" || args[0] == "refresh" || args[0] == "logout" {
 		return runEnterpriseClient(args)
@@ -64,7 +72,7 @@ func runEnterprise(args []string) error {
 	if err != nil {
 		return err
 	}
-	storeConfig := sqlstore.Config{DSN: dsn, Schema: cfg.DatabaseSchema, DeploymentID: cfg.DeploymentID, RequireSessionAuth: true}
+	storeConfig := sqlstore.Config{DSN: dsn, Schema: cfg.DatabaseSchema, DeploymentID: cfg.DeploymentID, RequireSessionAuth: true, AttachmentLimits: cfg.attachmentLimits(), ResourceLimits: cfg.sqlResourceLimits()}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if bootstrap != nil {
@@ -131,6 +139,9 @@ func serveEnterprise(ctx context.Context, cfg enterpriseFileConfig, storeConfig 
 		return errors.New("enterprise database or exclusive ownership is unavailable")
 	}
 	defer store.Close()
+	if err := store.EnsureRestoreReady(ctx); err != nil {
+		return errors.New("enterprise restore is incomplete; no public listener was opened")
+	}
 	if err := store.CheckIdentityConfiguration(ctx, cfg.OrganizationID, cfg.OIDC.ConnectionID, cfg.OIDC.Issuer); err != nil {
 		return errors.New("enterprise identity configuration is not initialized or does not match; run the explicit operator initialization first")
 	}
@@ -141,7 +152,16 @@ func serveEnterprise(ctx context.Context, cfg enterpriseFileConfig, storeConfig 
 	if err != nil {
 		return errors.New("enterprise login transaction store configuration is invalid")
 	}
-	handler, err := enterpriseservice.New(cfg.httpConfig(), provider, transactions, store)
+	var handler *enterpriseservice.Handler
+	if cfg.Attachments != nil {
+		objects, objectErr := enterpriseobject.Open(cfg.Attachments.Directory, cfg.DeploymentID)
+		if objectErr != nil {
+			return errors.New("enterprise object store is unavailable or belongs to another deployment")
+		}
+		handler, err = enterpriseservice.NewWithObjectStore(cfg.httpConfig(), provider, transactions, store, objects)
+	} else {
+		handler, err = enterpriseservice.New(cfg.httpConfig(), provider, transactions, store)
+	}
 	if err != nil {
 		return errors.New("enterprise HTTP policy or authenticated backend configuration is invalid")
 	}
@@ -149,7 +169,18 @@ func serveEnterprise(ctx context.Context, cfg enterpriseFileConfig, storeConfig 
 	if err != nil {
 		return errors.New("enterprise listen address is unavailable")
 	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: time.Minute, WriteTimeout: 65 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 32 << 10}
+	httpLimits, err := cfg.httpResourceLimits().Normalized()
+	if err != nil {
+		_ = listener.Close()
+		return errors.New("enterprise HTTP resource configuration is invalid")
+	}
+	boundedListener, err := newEnterpriseLimitedListener(listener, httpLimits.Connections)
+	if err != nil {
+		_ = listener.Close()
+		return err
+	}
+	listener = boundedListener
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute, WriteTimeout: 65 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	if cfg.TLSCertificateFile != "" {
 		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
 	}
@@ -169,6 +200,7 @@ func serveEnterprise(ctx context.Context, cfg enterpriseFileConfig, storeConfig 
 		}
 		return nil
 	case <-ctx.Done():
+		handler.BeginDrain()
 		// Shutdown drains accepted HTTP work before releasing the deployment
 		// lease. Vendor sessions and endpoint processes are never controlled.
 		shutdown, cancel := context.WithTimeout(context.Background(), 70*time.Second)

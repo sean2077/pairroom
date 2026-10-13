@@ -219,6 +219,10 @@ func newHTTPPGFixture(t *testing.T) *httpPGFixture {
 	idp.mu.Unlock()
 	f.providerConfig = enterpriseauth.ProviderConfig{ConnectionID: "fixture-connection", Issuer: idp.server.URL, ClientID: "fixture-client", ClientSecret: "fixture-client-secret", RedirectURL: idp.callback, AuthStyle: oauth2.AuthStyleInHeader, SigningAlgorithms: []string{"ES256"}, AllowedReturnPaths: []string{"/enterprise/"}, UseUserInfo: true, Outbound: enterpriseauth.OutboundPolicy{AllowedOrigins: []string{idp.server.URL}, RootCAs: roots, Timeout: 3 * time.Second}}
 	f.installHandler(store)
+	f.server.Listener, err = LimitListener(f.server.Listener, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.server.StartTLS()
 	t.Cleanup(f.server.Close)
 	return f

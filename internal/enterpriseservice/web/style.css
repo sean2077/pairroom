@@ -16,6 +16,8 @@ button:hover, .actions a:hover { background: #e9f1e8; }
 button:disabled { cursor: default; opacity: .45; }
 label { display: block; font-size: 14px; margin-bottom: 8px; color: #53665a; }
 input { flex: 1; min-width: 160px; font: inherit; padding: 11px; border: 1px solid #c7d5cb; border-radius: 8px; }
+form > input { max-width: 100%; }
+.cards pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #status { font-size: 14px; color: #667568; min-height: 20px; }
 #room-sequence { font-size: 13px; color: #68766c; }
 #messages { padding: 0; list-style: none; }

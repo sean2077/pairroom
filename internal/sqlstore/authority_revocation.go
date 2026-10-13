@@ -17,12 +17,14 @@ import (
 // revoke another User merely because they share a Room.
 type authorityRevocationScope struct{ UserID, DeviceID, RoomID, AgentID string }
 
-func (s *Store) authorityBindings(ctx context.Context, q rowQuerier, scope authorityRevocationScope, active bool) ([]string, error) {
+func (s *Store) authorityBindings(ctx context.Context, q rowQuerier, scope authorityRevocationScope) ([]string, error) {
 	if scope.UserID == "" && scope.DeviceID == "" && scope.AgentID == "" {
 		return nil, errors.New("revocation requires a User or Device")
 	}
 	var ids []string
-	e := q.QueryRow(ctx, `SELECT COALESCE(array_agg(binding_id ORDER BY binding_id),ARRAY[]::text[]) FROM (SELECT b.binding_id FROM `+s.table("bindings")+` b JOIN `+s.table("agents")+` a USING(agent_id) JOIN `+s.table("devices")+` d USING(device_id) WHERE ($1='' OR d.user_id=$1) AND ($2='' OR d.device_id=$2) AND ($3='' OR b.room_id=$3) AND (NOT $4 OR b.retired_at IS NULL) AND ($5='' OR b.agent_id=$5) ORDER BY b.binding_id LIMIT 10001) selected`, scope.UserID, scope.DeviceID, scope.RoomID, active, scope.AgentID).Scan(&ids)
+	// Permanent history cannot regain authority. Archived live Bindings still
+	// participate, because archive does not retire their reservation.
+	e := q.QueryRow(ctx, `SELECT COALESCE(array_agg(binding_id ORDER BY binding_id),ARRAY[]::text[]) FROM (SELECT b.binding_id FROM `+s.table("bindings")+` b JOIN `+s.table("agents")+` a USING(agent_id) JOIN `+s.table("devices")+` d USING(device_id) WHERE a.retired_at IS NULL AND d.retired_at IS NULL AND ($1='' OR d.user_id=$1) AND ($2='' OR d.device_id=$2) AND ($3='' OR b.room_id=$3) AND b.retired_at IS NULL AND ($4='' OR b.agent_id=$4) ORDER BY b.binding_id LIMIT 10001) selected`, scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID).Scan(&ids)
 	if len(ids) > 10000 {
 		return nil, errors.New("revocation scope exceeds bounded transaction")
 	}
@@ -30,7 +32,11 @@ func (s *Store) authorityBindings(ctx context.Context, q rowQuerier, scope autho
 }
 func (s *Store) readAuthorityRevocation(ctx context.Context, q rowQuerier, scope authorityRevocationScope, lock string) ([32]byte, error) {
 	var zero [32]byte
-	bindingIDs, e := s.authorityBindings(ctx, q, scope, false)
+	cutoff, cutoffErr := approvalCutoff(ctx)
+	if cutoffErr != nil {
+		return zero, cutoffErr
+	}
+	bindingIDs, e := s.authorityBindings(ctx, q, scope)
 	if e != nil {
 		return zero, e
 	}
@@ -39,12 +45,13 @@ func (s *Store) readAuthorityRevocation(ctx context.Context, q rowQuerier, scope
 		table, key, query string
 		args              []any
 	}{
-		{"binding_requests", "request_id", `SELECT request_id FROM ` + s.table("binding_requests") + ` WHERE status='approved' AND ($3='' OR room_id=$3) AND ($4='' OR agent_id=$4) AND (($1<>'' AND (user_id=$1 OR ($3='' AND approved_by=$1))) OR ($2<>'' AND device_id=$2) OR ($4<>'' AND agent_id=$4))`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
-		{"devices", "device_id", `SELECT device_id FROM ` + s.table("devices") + ` d WHERE ($1='' OR user_id=$1) AND ($2='' OR device_id=$2) AND ($3='' OR EXISTS(SELECT 1 FROM ` + s.table("agents") + ` a JOIN ` + s.table("bindings") + ` b USING(agent_id) WHERE a.device_id=d.device_id AND b.room_id=$3)) AND ($4='' OR EXISTS(SELECT 1 FROM ` + s.table("agents") + ` a WHERE a.agent_id=$4 AND a.device_id=d.device_id))`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
-		{"agents", "agent_id", `SELECT a.agent_id FROM ` + s.table("agents") + ` a JOIN ` + s.table("devices") + ` d USING(device_id) WHERE ($1='' OR d.user_id=$1) AND ($2='' OR d.device_id=$2) AND ($3='' OR EXISTS(SELECT 1 FROM ` + s.table("bindings") + ` b WHERE b.agent_id=a.agent_id AND b.room_id=$3)) AND ($4='' OR a.agent_id=$4)`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
-		{"device_families", "family_id", `SELECT f.family_id FROM ` + s.table("device_families") + ` f WHERE $3='' AND $4='' AND ($1='' OR f.user_id=$1) AND ($2='' OR f.device_id=$2)`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
-		{"device_grants", "grant_id", `SELECT g.grant_id FROM ` + s.table("device_grants") + ` g JOIN ` + s.table("device_families") + ` f USING(family_id) WHERE $3='' AND $4='' AND ($1='' OR f.user_id=$1) AND ($2='' OR f.device_id=$2)`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
-		{"binding_grants", "grant_id", `SELECT grant_id FROM ` + s.table("binding_grants") + ` WHERE binding_id=ANY($1::text[])`, []any{bindingIDs}},
+		{"device_enrollments", "request_id", `SELECT request_id FROM ` + s.table("device_enrollments") + ` WHERE status='approved' AND expires_at>$5 AND $3='' AND $4='' AND (($1<>'' AND approved_user_id=$1) OR ($2<>'' AND device_id=$2))`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID, cutoff}},
+		{"binding_requests", "request_id", `SELECT request_id FROM ` + s.table("binding_requests") + ` WHERE status='approved' AND expires_at>$5 AND ($3='' OR room_id=$3) AND ($4='' OR agent_id=$4) AND (($1<>'' AND (user_id=$1 OR ($3='' AND approved_by=$1))) OR ($2<>'' AND device_id=$2) OR ($4<>'' AND agent_id=$4))`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID, cutoff}},
+		{"devices", "device_id", `SELECT device_id FROM ` + s.table("devices") + ` d WHERE d.retired_at IS NULL AND ($1='' OR user_id=$1) AND ($2='' OR device_id=$2) AND ($3='' OR EXISTS(SELECT 1 FROM ` + s.table("agents") + ` a JOIN ` + s.table("bindings") + ` b USING(agent_id) WHERE a.device_id=d.device_id AND b.room_id=$3)) AND ($4='' OR EXISTS(SELECT 1 FROM ` + s.table("agents") + ` a WHERE a.agent_id=$4 AND a.device_id=d.device_id))`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
+		{"agents", "agent_id", `SELECT a.agent_id FROM ` + s.table("agents") + ` a JOIN ` + s.table("devices") + ` d USING(device_id) WHERE a.retired_at IS NULL AND d.retired_at IS NULL AND ($1='' OR d.user_id=$1) AND ($2='' OR d.device_id=$2) AND ($3='' OR EXISTS(SELECT 1 FROM ` + s.table("bindings") + ` b WHERE b.agent_id=a.agent_id AND b.room_id=$3)) AND ($4='' OR a.agent_id=$4)`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
+		{"device_families", "family_id", `SELECT f.family_id FROM ` + s.table("device_families") + ` f WHERE f.revoked_at IS NULL AND f.expires_at>pg_catalog.clock_timestamp() AND $3='' AND $4='' AND ($1='' OR f.user_id=$1) AND ($2='' OR f.device_id=$2)`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
+		{"device_grants", "grant_id", `SELECT g.grant_id FROM ` + s.table("device_grants") + ` g JOIN ` + s.table("device_families") + ` f USING(family_id) WHERE f.revoked_at IS NULL AND f.expires_at>pg_catalog.clock_timestamp() AND ((g.grant_id=f.current_grant_id AND g.revoked_at IS NULL) OR (g.grant_id=f.previous_grant_id AND f.recovery_used_at IS NULL AND f.recovery_until>pg_catalog.clock_timestamp())) AND $3='' AND $4='' AND ($1='' OR f.user_id=$1) AND ($2='' OR f.device_id=$2)`, []any{scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID}},
+		{"binding_grants", "grant_id", `SELECT grant_id FROM ` + s.table("binding_grants") + ` WHERE binding_id=ANY($1::text[]) AND revoked_at IS NULL`, []any{bindingIDs}},
 		{"bindings", "binding_id", `SELECT binding_id FROM ` + s.table("bindings") + ` WHERE binding_id=ANY($1::text[])`, []any{bindingIDs}},
 	}
 	for _, set := range selected {
@@ -112,7 +119,7 @@ func (s *Store) readAuthorityRevocation(ctx context.Context, q rowQuerier, scope
 // The shared Relay planner validates full history and reuses the existing
 // Binding projection for cancellation; this layer does not invent a queue.
 func (s *Store) retireAuthorityBindings(ctx context.Context, tx pgx.Tx, scope authorityRevocationScope, actor string) error {
-	ids, e := s.authorityBindings(ctx, tx, scope, true)
+	ids, e := s.authorityBindings(ctx, tx, scope)
 	if e != nil {
 		return e
 	}
@@ -169,13 +176,20 @@ func (s *Store) retireAuthorityBindings(ctx context.Context, tx pgx.Tx, scope au
 			return &storedFactCorruption{err: errors.New("binding authority disagrees with original fact")}
 		}
 		fact.Seq = seq + 1
-		if _, e = tx.Exec(ctx, `UPDATE `+s.table("bindings")+` SET retired_at=$2,retired_reason=$3 WHERE binding_id=$1 AND retired_at IS NULL`, id, at, reason); e != nil {
+		if _, e = tx.Exec(ctx, `UPDATE `+s.table("binding_grants")+` SET revoked_at=$2 WHERE binding_id=$1 AND revoked_at IS NULL`, id, at); e != nil {
 			return e
+		}
+		tag, updateErr := tx.Exec(ctx, `UPDATE `+s.table("bindings")+` SET retired_at=$2,retired_reason=$3 WHERE binding_id=$1 AND retired_at IS NULL`, id, at, reason)
+		if updateErr != nil {
+			return updateErr
+		}
+		if tag.RowsAffected() != 1 {
+			return &storedFactCorruption{err: errors.New("binding retirement affected no active identity")}
 		}
 		if e := s.writeStoredRoomEvent(ctx, tx, fact, userFactOrigin(actor)); e != nil {
 			return e
 		}
-		if _, e = tx.Exec(ctx, `INSERT INTO `+s.table("audit")+`(deployment_id,room_id,user_id,kind,outcome,at) VALUES($1,$2,$3,'binding.retire','accepted',$4)`, s.cfg.DeploymentID, roomID, actor, at); e != nil {
+		if e = s.writeMutationAudit(ctx, tx, contextAuditPlan(ctx), roomID, actor, "user", "binding.retire", "accepted", "", id, nil, at); e != nil {
 			return e
 		}
 		if _, e = tx.Exec(ctx, `UPDATE `+s.table("rooms")+` SET current_seq=$2 WHERE room_id=$1`, roomID, int64(fact.Seq)); e != nil {
@@ -192,24 +206,39 @@ func (s *Store) retireAuthorityBindings(ctx context.Context, tx pgx.Tx, scope au
 	}
 	return nil
 }
-func (s *Store) revokeNativeCredentials(ctx context.Context, tx pgx.Tx, scope authorityRevocationScope) error {
+func (s *Store) revokeNativeCredentials(ctx context.Context, tx pgx.Tx, scope authorityRevocationScope) (int64, error) {
+	cutoff, cutoffErr := approvalCutoff(ctx)
+	if cutoffErr != nil {
+		return 0, cutoffErr
+	}
 	if scope.UserID == "" && scope.DeviceID == "" && scope.AgentID == "" {
-		return errors.New("revocation requires identity scope")
+		return 0, errors.New("revocation requires identity scope")
 	}
 	// A revoked authorization must not return through an ABA of a User,
 	// Owner or membership flag. Preserve the original approval/receipt as
 	// history, while making every still-unconsumed affected request terminal.
-	if _, e := tx.Exec(ctx, `UPDATE `+s.table("binding_requests")+` SET status='denied' WHERE status='approved' AND ($3='' OR room_id=$3) AND ($4='' OR agent_id=$4) AND (($1<>'' AND (user_id=$1 OR ($3='' AND approved_by=$1))) OR ($2<>'' AND device_id=$2) OR ($4<>'' AND agent_id=$4))`, scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID); e != nil {
-		return e
+	tag, e := tx.Exec(ctx, `UPDATE `+s.table("binding_requests")+` SET status='denied' WHERE status='approved' AND expires_at>$5 AND ($3='' OR room_id=$3) AND ($4='' OR agent_id=$4) AND (($1<>'' AND (user_id=$1 OR ($3='' AND approved_by=$1))) OR ($2<>'' AND device_id=$2) OR ($4<>'' AND agent_id=$4))`, scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID, cutoff)
+	if e != nil {
+		return 0, e
 	}
+	invalidated := tag.RowsAffected()
 	if scope.RoomID == "" && scope.AgentID == "" {
-		if _, e := tx.Exec(ctx, `UPDATE `+s.table("device_families")+` SET revoked_at=COALESCE(revoked_at,pg_catalog.clock_timestamp()) WHERE ($1='' OR user_id=$1) AND ($2='' OR device_id=$2)`, scope.UserID, scope.DeviceID); e != nil {
-			return e
+		tag, e = tx.Exec(ctx, `UPDATE `+s.table("device_enrollments")+` SET status='invalidated' WHERE status='approved' AND expires_at>$3 AND (($1<>'' AND approved_user_id=$1) OR ($2<>'' AND device_id=$2))`, scope.UserID, scope.DeviceID, cutoff)
+		if e != nil {
+			return 0, e
 		}
-		if _, e := tx.Exec(ctx, `UPDATE `+s.table("device_grants")+` g SET revoked_at=COALESCE(g.revoked_at,pg_catalog.clock_timestamp()) FROM `+s.table("device_families")+` f WHERE f.family_id=g.family_id AND ($1='' OR f.user_id=$1) AND ($2='' OR f.device_id=$2)`, scope.UserID, scope.DeviceID); e != nil {
-			return e
+		invalidated += tag.RowsAffected()
+		// Access expiry does not end refresh authority. A revoked immediate
+		// predecessor can still recover a lost rotation, so revoke precisely
+		// the current and eligible recovery grants before ending their family.
+		if _, e := tx.Exec(ctx, `UPDATE `+s.table("device_grants")+` g SET revoked_at=COALESCE(g.revoked_at,pg_catalog.clock_timestamp()) FROM `+s.table("device_families")+` f WHERE f.family_id=g.family_id AND f.revoked_at IS NULL AND f.expires_at>pg_catalog.clock_timestamp() AND ((g.grant_id=f.current_grant_id AND g.revoked_at IS NULL) OR (g.grant_id=f.previous_grant_id AND f.recovery_used_at IS NULL AND f.recovery_until>pg_catalog.clock_timestamp())) AND ($1='' OR f.user_id=$1) AND ($2='' OR f.device_id=$2)`, scope.UserID, scope.DeviceID); e != nil {
+			return 0, e
+		}
+		if _, e := tx.Exec(ctx, `UPDATE `+s.table("device_families")+` SET revoked_at=pg_catalog.clock_timestamp() WHERE revoked_at IS NULL AND expires_at>pg_catalog.clock_timestamp() AND ($1='' OR user_id=$1) AND ($2='' OR device_id=$2)`, scope.UserID, scope.DeviceID); e != nil {
+			return 0, e
 		}
 	}
-	_, e := tx.Exec(ctx, `UPDATE `+s.table("binding_grants")+` g SET revoked_at=COALESCE(g.revoked_at,pg_catalog.clock_timestamp()) FROM `+s.table("bindings")+` b,`+s.table("agents")+` a,`+s.table("devices")+` d WHERE g.binding_id=b.binding_id AND a.agent_id=b.agent_id AND d.device_id=a.device_id AND ($1='' OR d.user_id=$1) AND ($2='' OR d.device_id=$2) AND ($3='' OR b.room_id=$3) AND ($4='' OR b.agent_id=$4)`, scope.UserID, scope.DeviceID, scope.RoomID, scope.AgentID)
-	return e
+	// Each originally active Binding's grants were revoked with its retirement
+	// above. Permanently retired history cannot regain Binding authority.
+	return invalidated, nil
 }

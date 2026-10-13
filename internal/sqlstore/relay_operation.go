@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	namespaceBinding    = "binding"
-	relayResultVersion  = 1
-	relayEncodingBudget = 2 << 20
-	maxRelayBatchFacts  = 16
-	ClassPeerChanged    = "peer_changed"
+	namespaceBinding         = "binding"
+	relayResultVersion       = 1
+	relayEncodingBudget      = 2 << 20
+	maxRelayBatchFacts       = 16
+	ClassPeerChanged         = "peer_changed"
+	ClassPreparedHeadChanged = "prepared_head_changed"
 )
 
 // RelayCommand carries a closed intent, never arbitrary facts or a callback.
@@ -144,6 +145,22 @@ func (s *Store) lookupRelayOperation(ctx context.Context, tx pgx.Tx, plan opPlan
 		}
 		result.Seq = uint64(*last)
 	}
+	if original.Kind == relay.EnterpriseOperationSend {
+		if relay.MatchEnterpriseSendEvidence(plan.relay.intent, *original.Message) != nil {
+			return Result{}, true, &storedFactCorruption{err: errors.New("relay message evidence disagrees with frozen intent")}
+		}
+		if plan.relay.intent.QuoteID != "" {
+			if first == nil {
+				return Result{}, true, &storedFactCorruption{err: errors.New("quoted Relay result has no stored publication")}
+			}
+			quotePlan := plan
+			quotePlan.human = &HumanSendIntent{AttachmentIDs: plan.relay.intent.AttachmentIDs, QuoteID: plan.relay.intent.QuoteID, Review: plan.relay.intent.Review}
+			message := original.Message
+			if err := s.validateHistoricalHumanQuote(ctx, tx, quotePlan, model.Event{Seq: uint64(*first)}, humanSendPayload{Attachments: message.Attachments, Quote: message.Quote, Review: message.Review}); err != nil {
+				return Result{}, true, err
+			}
+		}
+	}
 	return result, true, nil
 }
 
@@ -223,7 +240,11 @@ func (s *Store) applyRelayPlan(ctx context.Context, tx pgx.Tx, plan opPlan, lock
 	if err != nil {
 		return refused(ClassStateInvalid, err)
 	}
-	prepare, err := relay.PrepareEnterpriseOperation(toRelaySnapshot(snapshot), caller, plan.relay.intent, ids)
+	media, err := attachmentReferenceMetadata(plan, locked)
+	if err != nil {
+		return refused(ClassAuthorization, err)
+	}
+	prepare, err := relay.PrepareEnterpriseOperationWithAttachments(toRelaySnapshot(snapshot), caller, plan.relay.intent, ids, media)
 	if err != nil {
 		return refused(ClassInvalidRequest, err)
 	}
@@ -232,6 +253,12 @@ func (s *Store) applyRelayPlan(ctx context.Context, tx pgx.Tx, plan opPlan, lock
 		if errors.Is(err, relay.ErrPeerChanged) {
 			return refused(ClassPeerChanged, nil)
 		}
+		if errors.Is(err, relay.ErrPreparedClaimChanged) {
+			return refused(ClassPreparedHeadChanged, nil)
+		}
+		if errors.Is(err, relay.ErrEnterpriseQueueLimit) {
+			return refused(ClassResourceLimit, nil)
+		}
 		if errors.Is(err, relay.ErrAuth) {
 			return refused(ClassAuthorization, nil)
 		}
@@ -239,6 +266,14 @@ func (s *Store) applyRelayPlan(ctx context.Context, tx pgx.Tx, plan opPlan, lock
 	}
 	if len(batch.Facts) > maxRelayBatchFacts || uint64(len(batch.Facts)) > math.MaxInt64-locked.currentSeq || batch.Result.Kind != plan.relay.intent.Kind || relay.ValidateEnterpriseOperationResult(batch.Result) != nil {
 		return refused(ClassInvalidFact, nil)
+	}
+	if len(batch.Facts) > 0 {
+		switch plan.relay.intent.Kind {
+		case relay.EnterpriseOperationSend, relay.EnterpriseOperationReport, relay.EnterpriseOperationRetry, relay.EnterpriseOperationPark:
+			if err := s.checkRoomFactAdmission(ctx, tx, plan, batch.Facts, snapshot); err != nil {
+				return resourceAdmissionFailure(s, ctx, err)
+			}
+		}
 	}
 	encoding, err := json.Marshal(batch.Result)
 	if err != nil || len(encoding) > relayEncodingBudget {
@@ -277,6 +312,22 @@ func (s *Store) applyRelayPlan(ctx context.Context, tx pgx.Tx, plan opPlan, lock
 
 	}
 	seq := locked.currentSeq + uint64(len(batch.Facts))
+	if plan.relay.intent.Kind == relay.EnterpriseOperationSend && batch.Result.Message != nil {
+		if err := s.writeAttachmentReferences(ctx, tx, plan.key.RoomID, batch.Result.Message.ID, seq, locked.attachmentRefs); err != nil {
+			return controlStatementFailure(s, ctx, err)
+		}
+		if plan.relay.intent.QuoteID != "" {
+			if err := s.copyQuotedReferences(ctx, tx, plan.key.RoomID, plan.relay.intent.QuoteID, batch.Result.Message.ID, seq, batch.Result.Message.Attachments); err != nil {
+				return controlStatementFailure(s, ctx, err)
+			}
+		}
+	}
+	if plan.relay.intent.Kind == relay.EnterpriseOperationRetry && batch.Result.Message != nil {
+		message := batch.Result.Message
+		if err := s.copyAttachmentReferences(ctx, tx, plan.key.RoomID, message.RetryOf, message.ID, seq, message.Attachments); err != nil {
+			return controlStatementFailure(s, ctx, err)
+		}
+	}
 	if len(batch.Facts) > 0 {
 		start, end := int64(locked.currentSeq+1), int64(seq)
 		first, last = &start, &end

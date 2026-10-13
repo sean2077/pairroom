@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 )
 
 type factOrigin struct {
@@ -29,6 +30,9 @@ type storedEventRecord struct {
 func encodeStoredFact(event model.Event, origin factOrigin) ([]byte, error) {
 	if origin.kind != "user" && origin.kind != "operator" || origin.kind == "user" && !validRoomCreateIdentity(origin.userID) || origin.kind == "operator" && (origin.userID != "" || event.Actor != model.ActorSystem) {
 		return nil, errors.New("invalid stored event provenance")
+	}
+	if err := relay.ValidateEnterpriseOriginalAuthor(event, origin.userID); err != nil {
+		return nil, err
 	}
 	record := storedEventRecord{CodecVersion: factCodecVersion, OriginKind: origin.kind, Event: event}
 	if origin.kind == "user" {

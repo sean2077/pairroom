@@ -174,8 +174,12 @@ func (s *Store) readCatalogDependencies(ctx context.Context, q rowQuerier, plan 
 // Lock requests in stable identity order before the Room consistency row.
 func (s *Store) readCatalogArchiveApprovals(ctx context.Context, q rowQuerier, roomID, lock string) ([32]byte, error) {
 	var result [32]byte
+	cutoff, e := approvalCutoff(ctx)
+	if e != nil {
+		return result, e
+	}
 	var ids []string
-	err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(request_id ORDER BY request_id),ARRAY[]::text[]) FROM (SELECT request_id FROM `+s.table("binding_requests")+` WHERE room_id=$1 AND status='approved' ORDER BY request_id LIMIT 10001) selected`, roomID).Scan(&ids)
+	err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(request_id ORDER BY request_id),ARRAY[]::text[]) FROM (SELECT request_id FROM `+s.table("binding_requests")+` WHERE room_id=$1 AND status='approved' AND expires_at>$2 ORDER BY request_id LIMIT 10001) selected`, roomID, cutoff).Scan(&ids)
 	if err != nil {
 		return result, err
 	}

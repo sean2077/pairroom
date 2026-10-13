@@ -187,3 +187,105 @@ test('Owner queue controls keep original mutation identity and never retry uncer
     f.reply('/rooms/room-a/resolve-queue', 200, { outcome: 'replayed' }); await resolve;
   }
 });
+
+test('real empty snapshot Binding objects render Vacant while historical retirement stays Retired', async () => {
+  const f = await signIn(); f.element('room-id').value = 'room-a'; const reading = f.element('room-form').fire('submit'); await flush();
+  f.reply('/rooms/room-a', 200, { ...history(), bindings: { slot1: { bind_id: '', generation: 0, active: false }, slot2: { bind_id: 'old-binding', generation: 4, active: false } }, target_generations: { slot1: 1, slot2: 4 } });
+  await reading;
+  assert.match(f.element('slots').children[0].text(), /Vacant/);
+  assert.equal(f.element('slots').children[0].text().includes('Retired'), false);
+  assert.match(f.element('slots').children[1].text(), /Retired · generation 4/);
+});
+
+test('Room and Project names use UTF-8 bytes and control rejection before any effect request', async () => {
+  for (const name of ['验'.repeat(60), 'x'.repeat(161), 'control\u0007name']) {
+    const f = await signIn();
+    f.element('create-project-name').value = name; await f.element('create-project-form').fire('submit');
+    f.element('create-room-name').value = name; await f.element('create-room-form').fire('submit');
+    await open(f); f.element('room-name').value = name; await f.element('rename-room-form').fire('submit');
+    assert.equal(f.requests.filter((request) => request.options.method === 'POST').length, 0);
+    assert.equal(f.storage.length, 0); assert.equal(f.element('pending').hidden, true);
+    assert.match(f.element('status').textContent, /1–160 UTF-8 bytes/);
+  }
+  for (const name of ['x'.repeat(160), '验'.repeat(53)]) {
+    const f = await signIn(); f.element('create-project-name').value = name;
+    const operation = f.element('create-project-form').fire('submit');
+    const request = f.take('/catalog/commands'); assert.equal(JSON.parse(request.options.body).intent.name, name);
+    f.complete(request, 503, { outcome: 'unknown' }); await operation;
+  }
+});
+
+test('first precise typed validation refusal is retained accurately and explicitly discardable after reload', async () => {
+  const f = await signIn(); await open(f); f.element('room-project-id').value = 'bad/path';
+  const operation = f.element('room-project-form').fire('submit'); f.reply('/catalog/commands', 400, { outcome: 'refused', class: 'invalid_request' }); await operation;
+  assert.equal(f.element('pending-title').textContent, 'Action rejected'); assert.equal(f.element('resolve-operation').hidden, true);
+  assert.equal(f.element('discard-operation').hidden, false); assert.equal(f.element('retry-operation').hidden, true);
+  const record = JSON.parse([...f.storage.values.values()][0]);
+  assert.deepEqual(record.validation_refusal, { http_status: 400, outcome: 'refused', class: 'invalid_request' });
+  const reloaded = await signIn(fixture({ storage: f.storage }));
+  assert.equal(reloaded.element('pending-title').textContent, 'Action rejected');
+  assert.equal(reloaded.requests.filter((request) => request.options.method === 'POST').length, 0);
+  await reloaded.element('discard-operation').fire('click'); assert.equal(reloaded.storage.length, 0); assert.equal(reloaded.element('pending').hidden, true);
+});
+
+test('generic errors, authorization refusals and Resolve refusals never become a definite validation rejection', async () => {
+  for (const [status, data] of [[400, { error: 'invalid_request' }], [403, { outcome: 'refused', class: 'authorization' }], [400, { outcome: 'refused', class: 'invalid_request', fact: {} }], [503, { outcome: 'unknown' }]]) {
+    const f = await signIn(); await open(f); f.element('room-project-id').value = 'project-1';
+    const operation = f.element('room-project-form').fire('submit'); f.reply('/catalog/commands', status, data); await operation;
+    assert.equal(f.element('discard-operation').hidden, true); assert.equal(f.element('retry-operation').hidden, true);
+    assert.equal(JSON.parse([...f.storage.values.values()][0]).validation_refusal, undefined);
+    const check = f.element('resolve-operation').fire('click'); f.reply('/catalog/resolve', 400, { outcome: 'refused', class: 'invalid_request' }); await check;
+    assert.equal(f.element('discard-operation').hidden, true);
+  }
+});
+
+test('an unresolved Room blocks only that Room while another Room can commit without losing evidence', async () => {
+  const f = await signIn(); const first = await uncertainMessage(f);
+  f.element('message-text').value = 'accidental same-Room repetition'; await f.element('send-form').fire('submit');
+  assert.equal(f.requests.filter((request) => request.url.endsWith('/room-a/messages')).length, 1);
+  await open(f, 'room-b', 'Room B history'); f.element('message-text').value = 'independent Room B work';
+  const second = f.element('send-form').fire('submit'); f.reply('/rooms/room-b/messages', 200, { message: { id: 'message-b' } }); await second;
+  assert.equal(f.storage.length, 1); assert.equal(JSON.parse([...f.storage.values.values()][0]).body.client_id, first.client_id);
+  assert.match(f.element('pending-description').textContent, /room-a/);
+});
+
+test('out-of-order operations on different Rooms settle independently and never retarget the selected Room', async () => {
+  const f = await signIn(); await open(f); f.element('message-text').value = 'Room A work';
+  const first = f.element('send-form').fire('submit'), requestA = f.take('/rooms/room-a/messages');
+  await open(f, 'room-b', 'Room B history'); f.element('message-text').value = 'Room B work';
+  const second = f.element('send-form').fire('submit'); f.reply('/rooms/room-b/messages', 503, { outcome: 'unknown' }); await second;
+  f.complete(requestA, 200, { message: { id: 'message-a' } }); await first;
+  assert.equal(f.element('room-title').textContent, 'room-b'); assert.match(f.element('pending-description').textContent, /room-b/);
+  assert.equal(f.storage.length, 1); assert.equal(JSON.parse([...f.storage.values.values()][0]).scope.room, 'room-b');
+});
+
+test('NotCommitted from one resource cannot enable retry or discard for another selected journal', async () => {
+  const f = await signIn(); await uncertainMessage(f);
+  await open(f, 'room-b'); f.element('message-text').value = 'B work'; const second = f.element('send-form').fire('submit'); f.reply('/rooms/room-b/messages', 503, { outcome: 'unknown' }); await second;
+  f.element('pending-list').children.find((value) => value.text().includes('room:room-a')).fire('click');
+  const resolving = f.element('resolve-operation').fire('click');
+  f.element('pending-list').children.find((value) => value.text().includes('room:room-b')).fire('click');
+  f.reply('/rooms/room-a/resolve-message', 409, { outcome: 'not_committed' }); await resolving;
+  assert.equal(f.element('retry-operation').hidden, true); assert.equal(f.element('discard-operation').hidden, true);
+  f.element('pending-list').children.find((value) => value.text().includes('room:room-a')).fire('click');
+  assert.equal(f.element('retry-operation').hidden, false); assert.equal(f.element('discard-operation').hidden, false);
+});
+
+test('a stale same-user response cannot clear the busy guard for a new session resolving the same operation', async () => {
+  const f = await signIn(); await uncertainMessage(f);
+  const oldResolve = f.element('resolve-operation').fire('click'), old = f.take('/rooms/room-a/resolve-message');
+  const refresh = f.element('refresh').fire('click'); await signIn(f, session('user-a', 'new-session')); await refresh;
+  const currentResolve = f.element('resolve-operation').fire('click');
+  const currentRequest = f.requests.filter((request) => !request.resolved && request.url.endsWith('/rooms/room-a/resolve-message')).at(-1);
+  f.complete(old, 409, { outcome: 'not_committed' }, session()); await oldResolve;
+  assert.equal(f.element('resolve-operation').disabled, true);
+  f.complete(currentRequest, 409, { outcome: 'not_committed' }); await currentResolve;
+  assert.equal(f.element('resolve-operation').disabled, false);
+});
+
+test('another resource completing cannot erase an unsaved in-memory unknown when browser storage fails', async () => {
+  const storage = { get length() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+  const f = await signIn(fixture({ storage })); await uncertainMessage(f);
+  await open(f, 'room-b'); f.element('message-text').value = 'B work'; const second = f.element('send-form').fire('submit'); f.reply('/rooms/room-b/messages', 200, { message: { id: 'message-b' } }); await second;
+  assert.match(f.element('pending-description').textContent, /room-a/); assert.match(f.element('journal-status').textContent, /reload recovery is unavailable/);
+});

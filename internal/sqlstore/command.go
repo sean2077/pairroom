@@ -156,28 +156,34 @@ const (
 // fact. Replayed returns the original stored fact (original event id and
 // creation time) — never a freshly constructed candidate event.
 type Result struct {
-	Outcome           Outcome
-	Class             string
-	Err               error
-	Seq               uint64
-	Revision          uint64
-	Fact              model.Event
-	Facts             []model.Event
-	Relay             *relay.EnterpriseOperationResult
-	Governance        *GovernanceReceipt
-	BindingAuthority  *BindingAuthorityReceipt
-	Control           *ControlReceipt
-	Catalog           *CatalogReceipt
-	catalogPage       *CatalogPage
-	Recovery          *RecoveryReport
-	recoveryRooms     []string
-	session           *BrowserSession
-	device            *DeviceCredential
-	binding           *BindingCredential
-	enrollment        *DeviceEnrollmentInfo
-	governanceActions []GovernanceAction
-	bindingRequests   []BindingRequestInfo
-	bindingContext    *BindingContext
+	Outcome            Outcome
+	Class              string
+	Err                error
+	Seq                uint64
+	Revision           uint64
+	Fact               model.Event
+	Facts              []model.Event
+	Relay              *relay.EnterpriseOperationResult
+	Governance         *GovernanceReceipt
+	BindingAuthority   *BindingAuthorityReceipt
+	Control            *ControlReceipt
+	Catalog            *CatalogReceipt
+	catalogPage        *CatalogPage
+	Recovery           *RecoveryReport
+	Attachment         *AttachmentReceipt
+	Restore            *RestoreReceipt
+	readiness          *Readiness
+	restoreObjects     []model.Attachment
+	attachmentIDs      []string
+	administrationPage *AdministrationPage
+	recoveryRooms      []string
+	session            *BrowserSession
+	device             *DeviceCredential
+	binding            *BindingCredential
+	enrollment         *DeviceEnrollmentInfo
+	governanceActions  []GovernanceAction
+	bindingRequests    []BindingRequestInfo
+	bindingContext     *BindingContext
 }
 
 // KernelError is the error form of a non-committed outcome.

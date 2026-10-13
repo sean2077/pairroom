@@ -125,6 +125,12 @@ func (s *Store) applyCatalogPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 		if !d.projectMissing {
 			return refused(ClassInvalidControlState, nil)
 		}
+		if e := s.checkPersistentAdmission(ctx, tx, "projects", 1); e != nil {
+			return resourceAdmissionFailure(s, ctx, e)
+		}
+		if e := s.checkMembershipAdmission(ctx, tx, "project", intent.ProjectID, 1); e != nil {
+			return resourceAdmissionFailure(s, ctx, e)
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO `+s.table("projects")+`(project_id,org_id,display_name,owner_user_id,revision,created_at) VALUES($1,$2,$3,$4,1,$5)`, intent.ProjectID, d.orgID, intent.Name, plan.userID, now)
 		if err == nil {
 			_, err = tx.Exec(ctx, `INSERT INTO `+s.table("project_members")+`(project_id,org_id,user_id,role,created_at) VALUES($1,$2,$3,'owner',$4)`, intent.ProjectID, d.orgID, plan.userID, now)
@@ -136,6 +142,11 @@ func (s *Store) applyCatalogPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 				return refused(ClassInvalidControlState, nil)
 			}
 			if intent.Kind == "project.member.add" {
+				if d.projectTargetMissing {
+					if e := s.checkMembershipAdmission(ctx, tx, "project", intent.ProjectID, 1); e != nil {
+						return resourceAdmissionFailure(s, ctx, e)
+					}
+				}
 				_, err = tx.Exec(ctx, `INSERT INTO `+s.table("project_members")+`(project_id,org_id,user_id,role,created_at) VALUES($1,$2,$3,'member',$4) ON CONFLICT(project_id,user_id) DO UPDATE SET disabled=false`, intent.ProjectID, d.orgID, intent.TargetUserID, now)
 			} else {
 				_, err = tx.Exec(ctx, `UPDATE `+s.table("project_members")+` SET disabled=true WHERE project_id=$1 AND user_id=$2`, intent.ProjectID, intent.TargetUserID)
@@ -150,9 +161,15 @@ func (s *Store) applyCatalogPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 			return refused(ClassInvalidControlState, nil)
 		}
 		if intent.Kind == "room.archive" {
-			if _, err = tx.Exec(ctx, `UPDATE `+s.table("binding_requests")+` SET status='denied' WHERE room_id=$1 AND status='approved'`, intent.RoomID); err != nil {
-				return catalogFailure(s, ctx, Result{}, err, false)
+			cutoff, e := approvalCutoff(ctx)
+			if e != nil {
+				return catalogFailure(s, ctx, Result{}, e, false)
 			}
+			tag, e := tx.Exec(ctx, `UPDATE `+s.table("binding_requests")+` SET status='denied' WHERE room_id=$1 AND status='approved' AND expires_at>$2`, intent.RoomID, cutoff)
+			if e != nil {
+				return catalogFailure(s, ctx, Result{}, e, false)
+			}
+			setAuditInvalidations(plan, tag.RowsAffected())
 		}
 		initial, e := s.loadFact(ctx, tx, intent.RoomID, 1)
 		if e != nil {
@@ -163,6 +180,15 @@ func (s *Store) applyCatalogPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 			return refused(ClassStoredFactUnreadable, e)
 		}
 		fact, err = model.NewEnterpriseRoomMetadata(intent.RoomID, d.roomSeq+1, catalogMetadata(intent), now)
+		if err == nil && intent.Kind != "room.archive" {
+			snapshot, e := s.readRoomEvents(ctx, tx, RoomSnapshot{RoomID: intent.RoomID, DeploymentID: plan.key.Deployment, OrgID: d.orgID, HostMode: string(model.HostNative), Seq: d.roomSeq, Revision: d.roomRevision})
+			if e != nil {
+				return resourceAdmissionFailure(s, ctx, e)
+			}
+			if e = s.checkRoomFactAdmission(ctx, tx, plan, []model.Event{fact}, snapshot); e != nil {
+				return resourceAdmissionFailure(s, ctx, e)
+			}
+		}
 		if err == nil {
 			err = s.writeStoredRoomEvent(ctx, tx, fact, userFactOrigin(plan.userID))
 		}
@@ -176,7 +202,11 @@ func (s *Store) applyCatalogPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 		scope := authorityRevocationScope{UserID: plan.userID, AgentID: intent.AgentID}
 		err = s.retireAuthorityBindings(ctx, tx, scope, plan.userID)
 		if err == nil {
-			err = s.revokeNativeCredentials(ctx, tx, scope)
+			var count int64
+			count, err = s.revokeNativeCredentials(ctx, tx, scope)
+			if err == nil {
+				setAuditInvalidations(plan, count)
+			}
 		}
 		if err == nil {
 			_, err = tx.Exec(ctx, `UPDATE `+s.table("agents")+` SET retired_at=COALESCE(retired_at,$2),retired_reason=COALESCE(retired_reason,'agent.revoked') WHERE agent_id=$1`, intent.AgentID, now)
@@ -194,7 +224,17 @@ func (s *Store) applyCatalogPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 	digest := sha256.Sum256(encoding)
 	_, err = tx.Exec(ctx, `INSERT INTO `+s.table("catalog_operations")+`(deployment_id,principal,op_kind,identifier,intent_hash,result_version,result_encoding,result_hash,accepted_at) VALUES($1,$2,$3,$4,$5,1,$6,$7,$8)`, plan.key.Deployment, plan.userID, intent.Kind, plan.key.Identifier, plan.hash[:], encoding, digest[:], now)
 	if err == nil {
-		_, err = tx.Exec(ctx, `INSERT INTO `+s.table("audit")+`(deployment_id,room_id,user_id,kind,outcome,at) VALUES($1,NULLIF($2,''),$3,$4,'accepted',$5)`, plan.key.Deployment, intent.RoomID, plan.userID, "catalog."+intent.Kind, now)
+		target := intent.RoomID
+		if strings.HasPrefix(intent.Kind, "project.") {
+			target = intent.ProjectID
+		}
+		if intent.Kind == "agent.retire" {
+			target = intent.AgentID
+		}
+		if intent.Kind == "session.revoke" {
+			target = intent.SessionID
+		}
+		err = s.writeMutationAudit(ctx, tx, plan, intent.RoomID, plan.userID, "user", "catalog."+intent.Kind, "accepted", "", target, auditCount(plan), now)
 	}
 	if err != nil {
 		return catalogFailure(s, ctx, Result{}, err, false)

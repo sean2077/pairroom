@@ -6,15 +6,27 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 // PrepareEnterpriseOperation captures only immutable input values. It does
 // not check mutable peer/state conditions until the returned Prepare runs,
 // after SQL has authorized the caller and recovered any accepted receipt.
 func PrepareEnterpriseOperation(snapshot EnterpriseRoomSnapshot, caller EnterpriseOperationCaller, intent EnterpriseOperationIntent, ids EnterpriseOperationIDs) (EnterprisePrepare, error) {
+	return PrepareEnterpriseOperationWithAttachments(snapshot, caller, intent, ids, nil)
+}
+
+// PrepareEnterpriseOperationWithAttachments accepts metadata resolved from
+// the caller's live, fenced Room manifest. It does no filesystem/network work
+// and captures an isolated copy so the candidate cannot change after admission.
+func PrepareEnterpriseOperationWithAttachments(snapshot EnterpriseRoomSnapshot, caller EnterpriseOperationCaller, intent EnterpriseOperationIntent, ids EnterpriseOperationIDs, attachments []model.Attachment) (EnterprisePrepare, error) {
 	if err := ValidateEnterpriseOperationIntent(intent); err != nil {
 		return nil, err
 	}
+	if err := matchEnterpriseAttachmentSelection(intent.AttachmentIDs, attachments); err != nil {
+		return nil, err
+	}
+	media := append([]model.Attachment(nil), attachments...)
 	if !validEnterpriseOperationID(caller.ClientID) || !validEnterpriseOperationID(caller.UserID) || caller.Actor != model.ActorUser && !caller.Actor.ValidParticipant() {
 		return nil, errors.New("invalid enterprise operation caller")
 	}
@@ -40,7 +52,7 @@ func PrepareEnterpriseOperation(snapshot EnterpriseRoomSnapshot, caller Enterpri
 				return EnterpriseOperationPlan{}, ErrAuth
 			}
 		}
-		return view.prepareEnterpriseOperation(caller, intent, ids, at)
+		return view.prepareEnterpriseOperation(caller, intent, ids, media, at)
 	}, nil
 }
 
@@ -48,7 +60,7 @@ func PrepareEnterpriseOperation(snapshot EnterpriseRoomSnapshot, caller Enterpri
 // never an Engine with a recorder Store or a call into a legacy mutator. Only
 // the small expiry overlay below is composed; it substitutes candidates made
 // by the shared expiry planner and does not reimplement event application.
-func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller, intent EnterpriseOperationIntent, ids EnterpriseOperationIDs, at time.Time) (EnterpriseOperationPlan, error) {
+func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller, intent EnterpriseOperationIntent, ids EnterpriseOperationIDs, media []model.Attachment, at time.Time) (EnterpriseOperationPlan, error) {
 	plan := EnterpriseOperationPlan{Result: EnterpriseOperationResult{Version: 1, Kind: intent.Kind}}
 	appendFact := func(kind string, actor model.ActorID, payload any) error {
 		data, err := json.Marshal(payload)
@@ -119,11 +131,25 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 			return EnterpriseOperationPlan{}, errors.New("enterprise send requires its fixed message ID")
 		}
 		message := planMessage(view.messagePlanSource(caller.Actor, to), ids.MessageID, at, intent.Text, "send")
+		if caller.Actor == model.ActorUser {
+			message.Author = EnterpriseHumanAuthor(caller.UserID)
+		}
+		message.Attachments = append([]model.Attachment(nil), media...)
+		if intent.Review != (review.Anchor{}) {
+			anchor := intent.Review
+			message.Review = &anchor
+		}
+		if err := view.mergeQuoteAndLimitsLocked(&message, SendRequest{QuoteID: intent.QuoteID}); err != nil {
+			return EnterpriseOperationPlan{}, err
+		}
 		key := enterpriseClientKey(caller.UserID, caller.ClientID)
 		if caller.Actor.ValidParticipant() {
 			key = bindingKey(caller.BindingID, caller.Generation) + "/send/" + caller.ClientID
 		}
-		if _, err := view.envelope(message); err != nil {
+		if err := view.validateEnterpriseEnvelope(message); err != nil {
+			return EnterpriseOperationPlan{}, err
+		}
+		if err := view.admitEnterpriseQueuedWork(message); err != nil {
 			return EnterpriseOperationPlan{}, err
 		}
 		if err := appendFact(EventMessage, caller.Actor, messageFact{Message: message, ClientKey: key}); err != nil {
@@ -141,6 +167,9 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 				return EnterpriseOperationPlan{}, errors.New("enterprise publication requires its fixed message ID")
 			}
 			message := planMessage(view.messagePlanSource(caller.Actor, decision.to), ids.MessageID, at, intent.Text, "stop")
+			if err := view.admitEnterpriseQueuedWork(message); err != nil {
+				return EnterpriseOperationPlan{}, err
+			}
 			decision.publication.Message = &message
 		}
 		if err := appendFact(decision.kind, caller.Actor, decision.publication); err != nil {
@@ -162,16 +191,18 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 			head = &message
 		}
 		candidate := selectClaimMessage(head, busy, caller.Generation)
+		if intent.MessageID != "" && (candidate == nil || candidate.ID != intent.MessageID || candidate.TargetGeneration != intent.ExpectedTargetGeneration) {
+			return EnterpriseOperationPlan{}, ErrPreparedClaimChanged
+		}
 		if candidate == nil {
 			plan.Result.Empty = true
 			return finish()
 		}
-		if hasOperationMedia(*candidate) {
-			return EnterpriseOperationPlan{}, errors.New("enterprise claim is text-only in this slice")
-		}
-		envelope, err := view.envelope(*candidate)
-		if err != nil {
+		if err := view.validateEnterpriseEnvelope(*candidate); err != nil {
 			return EnterpriseOperationPlan{}, err
+		}
+		if len(candidate.Attachments) > 0 && intent.MessageID == "" {
+			return EnterpriseOperationPlan{}, errors.New("enterprise attachments require a prepared claim")
 		}
 		if !validEnterpriseOperationID(ids.Receipt) {
 			return EnterpriseOperationPlan{}, errors.New("enterprise claim requires its fixed private receipt")
@@ -180,7 +211,15 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 		if err := appendFact(EventMessage, caller.Actor, fact); err != nil {
 			return EnterpriseOperationPlan{}, err
 		}
-		plan.Result.Claim = &Claim{ID: candidate.ID, Receipt: ids.Receipt, Envelope: envelope, PeerGeneration: view.peerGenerationLocked(caller.Actor)}
+		if len(candidate.Attachments) > 0 {
+			plan.Result.StructuredClaim = &StructuredClaim{ID: candidate.ID, Receipt: ids.Receipt, Message: cloneMessage(*candidate), PeerGeneration: view.peerGenerationLocked(caller.Actor)}
+		} else {
+			envelope, err := view.envelope(*candidate)
+			if err != nil {
+				return EnterpriseOperationPlan{}, err
+			}
+			plan.Result.Claim = &Claim{ID: candidate.ID, Receipt: ids.Receipt, Envelope: envelope, PeerGeneration: view.peerGenerationLocked(caller.Actor)}
+		}
 	case EnterpriseOperationAck:
 		original, exists := messageAt(intent.MessageID)
 		decision, err := decideAcknowledgement(original, exists, caller.Actor, caller.Generation, intent.Receipt, pendingRetry(intent.MessageID))
@@ -198,14 +237,14 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 		if err := decideRetry(original, exists, true, view.generation(original.To), pendingRetry(intent.MessageID)); err != nil {
 			return EnterpriseOperationPlan{}, err
 		}
-		if hasOperationMedia(original) {
-			return EnterpriseOperationPlan{}, errors.New("enterprise retry is text-only in this slice")
-		}
 		if !validEnterpriseOperationID(ids.MessageID) {
 			return EnterpriseOperationPlan{}, errors.New("enterprise retry requires its fixed message ID")
 		}
 		fact := planRetryFact(original, true, view.generation(original.To), ids.MessageID, at)
-		if _, err := view.envelope(fact.Message); err != nil {
+		if err := view.validateEnterpriseEnvelope(fact.Message); err != nil {
+			return EnterpriseOperationPlan{}, err
+		}
+		if err := view.admitEnterpriseQueuedWork(fact.Message); err != nil {
 			return EnterpriseOperationPlan{}, err
 		}
 		if err := appendFact(EventMessage, model.ActorUser, fact); err != nil {
@@ -218,9 +257,6 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 		changed, err := decideCancellation(original, exists)
 		if err != nil {
 			return EnterpriseOperationPlan{}, err
-		}
-		if hasOperationMedia(original) {
-			return EnterpriseOperationPlan{}, errors.New("enterprise cancellation is text-only in this slice")
 		}
 		if changed {
 			fact := planCancellationFact(original, at)
@@ -242,8 +278,4 @@ func (view *Engine) prepareEnterpriseOperation(caller EnterpriseOperationCaller,
 		plan.Result.Binding = &binding
 	}
 	return finish()
-}
-
-func hasOperationMedia(message Message) bool {
-	return len(message.Attachments) > 0 || message.Quote != nil || message.Review != nil
 }

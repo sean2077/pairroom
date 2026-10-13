@@ -94,6 +94,11 @@ func (s *Store) openVerificationConn(ctx context.Context) (*pgx.Conn, error) {
 // connection. An incomplete check is unknown; a complete check that proves
 // absence is NotCommitted.
 func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn) (Result, error) {
+	cutoffContext, cutoffErr := captureApprovalCutoff(ctx, conn, plan)
+	if cutoffErr != nil {
+		return resolveIncomplete(ctx, cutoffErr)
+	}
+	ctx = cutoffContext
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return resolveIncomplete(ctx, err)
@@ -133,6 +138,12 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		}
 		return resolveIncomplete(ctx, err)
 	}
+	if plan.restore != nil {
+		return s.resolveRestorePlan(ctx, tx, plan, locked.restore)
+	}
+	if plan.attachment != nil {
+		return s.resolveAttachmentPlan(ctx, tx, plan, locked.attachment)
+	}
 	if plan.catalog != nil {
 		return s.resolveCatalogPlan(ctx, tx, plan, locked.catalog)
 	}
@@ -150,6 +161,15 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 	}
 	if plan.relay != nil {
 		return s.resolveRelayPlan(ctx, tx, plan, locked)
+	}
+	if plan.roomReadAuthorization {
+		if locked.roomMissing {
+			return refused(ClassRoomNotFound, nil)
+		}
+		if !locked.readAllowed() || plan.auth.BindingGrantID != "" && (locked.credential.kind != CredentialBinding || locked.credential.roomID != plan.key.RoomID) {
+			return refused(ClassAuthorization, nil)
+		}
+		return Result{Outcome: OutcomeReplayed}, nil
 	}
 
 	if plan.roomCreate != nil {
@@ -202,6 +222,14 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		if plan.roomMembership != nil {
 			if err := validateRoomMembershipReplay(plan, original); err != nil {
 				return refused(ClassStoredFactUnreadable, err)
+			}
+		}
+		if plan.human != nil {
+			if err := s.validateHumanMessageReplay(ctx, tx, plan, original); err != nil {
+				if isStoredFactCorruption(err) {
+					return refused(ClassStoredFactUnreadable, err)
+				}
+				return resolveIncomplete(ctx, err)
 			}
 		}
 		// The original stored result, including the Room revision that the

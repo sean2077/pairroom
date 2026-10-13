@@ -100,6 +100,25 @@ type membershipTargetState struct {
 // independently, and the target membership takes UPDATE from the outset;
 // there is no later lock upgrade, including when actor and target coincide.
 func (s *Store) readPlanDependencies(ctx context.Context, q rowQuerier, plan opPlan, d *dependencyState, lock string) error {
+	if plan.restore != nil {
+		var err error
+		d.restore, err = s.readRestoreDependencies(ctx, q, plan, lock)
+		return err
+	}
+	if plan.recovery == nil {
+		var pending bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+s.table("restore_runs")+` WHERE completed_at IS NULL)`).Scan(&pending); err != nil {
+			return err
+		}
+		if pending {
+			return refusedError(ClassRestorePending, nil)
+		}
+	}
+	if plan.attachment != nil {
+		var err error
+		d.attachment, err = s.readAttachmentDependencies(ctx, q, plan, lock)
+		return err
+	}
 	if plan.catalog != nil {
 		var err error
 		d.catalog, err = s.readCatalogDependencies(ctx, q, plan, lock)
@@ -126,7 +145,18 @@ func (s *Store) readPlanDependencies(ctx context.Context, q rowQuerier, plan opP
 		return err
 	}
 	if plan.roomMembership == nil {
-		return s.readDependencies(ctx, q, plan.key.RoomID, plan.auth, d, lock)
+		if err := s.readDependencies(ctx, q, plan.key.RoomID, plan.auth, d, lock); err != nil {
+			return err
+		}
+		var ids model.EnterpriseAttachmentIDs
+		if plan.human != nil {
+			ids = plan.human.AttachmentIDs
+		} else if plan.relay != nil {
+			ids = plan.relay.intent.AttachmentIDs
+		}
+		var err error
+		d.attachmentRefs, err = s.readAttachmentReferences(ctx, q, plan, ids, lock)
+		return err
 	}
 	targetID := plan.roomMembership.TargetUserID
 	ids := []string{plan.userID}

@@ -131,16 +131,30 @@ func verifySchemaVersion(ctx context.Context, q rowQuerier, schema string) error
 	if existing == nil {
 		return fmt.Errorf("sqlstore: schema is not applied; run ApplySchema")
 	}
-	var version, codec int
-	if err := q.QueryRow(ctx, `SELECT version,fact_codec_version FROM `+qualified(schema, "schema_meta")).Scan(&version, &codec); err != nil {
+	var version, codec, objects int
+	if err := q.QueryRow(ctx, `SELECT version,fact_codec_version,object_schema_version FROM `+qualified(schema, "schema_meta")).Scan(&version, &codec, &objects); err != nil {
 		return fmt.Errorf("sqlstore: schema metadata unreadable: %w", err)
 	}
-	if version != sqlstoreSchemaVersion || codec != factCodecVersion {
+	if version != sqlstoreSchemaVersion || codec != factCodecVersion || objects != 1 {
 		return fmt.Errorf("sqlstore: schema version %d is not supported by this build (implements %d)", version, sqlstoreSchemaVersion)
 	}
 	var shape bool
 	if err := q.QueryRow(ctx, `SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='room_events' AND ((column_name='origin_kind' AND is_nullable='NO' AND data_type='text') OR (column_name='origin_user' AND is_nullable='YES' AND data_type='text')))=2 AND pg_catalog.to_regclass($2) IS NOT NULL AND pg_catalog.to_regclass($3) IS NOT NULL`, schema, qualified(schema, "startup_room_recoveries"), qualified(schema, "startup_recovery_runs")).Scan(&shape); err != nil || !shape {
 		return fmt.Errorf("sqlstore: unsupported provenance/recovery schema shape")
+	}
+	for _, table := range []string{"attachments", "attachment_operations", "attachment_references", "attachment_usage", "attachment_backup_barriers", "restore_runs"} {
+		var present bool
+		if err := q.QueryRow(ctx, `SELECT pg_catalog.to_regclass($1) IS NOT NULL`, qualified(schema, table)).Scan(&present); err != nil || !present {
+			return fmt.Errorf("sqlstore: unsupported enterprise object schema shape")
+		}
+	}
+	var restoreShape bool
+	if err := q.QueryRow(ctx, `SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='attachments' AND column_name='restore_epoch' AND is_nullable='NO' AND data_type='text')=1 AND (SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='governance_actions' AND column_name='invalidated_at' AND data_type='timestamp with time zone')=1`, schema).Scan(&restoreShape); err != nil || !restoreShape {
+		return fmt.Errorf("sqlstore: unsupported restore authority schema shape")
+	}
+	var auditShape bool
+	if err := q.QueryRow(ctx, `SELECT count(*)=3 FROM information_schema.columns WHERE table_schema=$1 AND table_name='audit' AND is_nullable='YES' AND column_default IS NULL AND ((column_name IN ('target_id','operation_id') AND data_type='text') OR (column_name='invalidated_approval_count' AND data_type='bigint'))`, schema).Scan(&auditShape); err != nil || !auditShape {
+		return fmt.Errorf("sqlstore: unsupported mutation audit schema shape")
 	}
 
 	return nil

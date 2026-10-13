@@ -25,7 +25,7 @@ type deviceMutation struct {
 
 func controlReadOnly(kind string) bool {
 	switch kind {
-	case controlAuthenticate, controlReadiness, controlDeviceAuthenticate, controlBindingAuthenticate, controlEnrollmentRead:
+	case controlAuthenticate, controlReadiness, controlDeviceAuthenticate, controlBindingAuthenticate, controlEnrollmentRead, controlAdministrationRead:
 		return true
 	}
 	return false

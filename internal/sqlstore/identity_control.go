@@ -45,6 +45,7 @@ type controlMutation struct {
 	expectedOrgID        string
 	identity             *enterpriseauth.VerifiedIdentity
 	device               *deviceMutation
+	administration       *AdministrationQuery
 }
 
 type controlDependencies struct {
@@ -154,12 +155,20 @@ func (s *Store) SetAdministrator(ctx context.Context, auth AuthContext, clientID
 // no administrator role or Room access, and does not change an existing
 // User's status. SetUserEnabled is the separate immediate revocation action.
 func (s *Store) SetIdentityAdmission(ctx context.Context, auth AuthContext, clientID string, identity enterpriseauth.VerifiedIdentity, enabled bool) (Result, error) {
+	plan, class := s.identityAdmissionPlan(auth, clientID, identity, enabled)
+	if class != "" {
+		return refused(class, nil)
+	}
+	return s.commitWithRestarts(ctx, plan, model.Event{})
+}
+
+func (s *Store) identityAdmissionPlan(auth AuthContext, clientID string, identity enterpriseauth.VerifiedIdentity, enabled bool) (opPlan, string) {
 	if !validIdentity(identity) {
-		return refused(ClassInvalidRequest, nil)
+		return opPlan{}, ClassInvalidRequest
 	}
 	plan, class := s.humanControlPlan(auth, clientID, controlAdmission, auth.UserID, enabled)
 	if class != "" {
-		return refused(class, nil)
+		return opPlan{}, class
 	}
 	identity = identityTuple(identity)
 	plan.control.identity = &identity
@@ -168,7 +177,7 @@ func (s *Store) SetIdentityAdmission(ctx context.Context, auth AuthContext, clie
 		Identity enterpriseauth.VerifiedIdentity
 		Enabled  bool
 	}{identity, enabled})
-	return s.commitWithRestarts(ctx, plan, model.Event{})
+	return plan, ""
 }
 
 func (s *Store) humanControlPlan(auth AuthContext, clientID, kind, target string, enabled bool) (opPlan, string) {
@@ -398,7 +407,7 @@ func (s *Store) readControlDependencies(ctx context.Context, q rowQuerier, plan 
 	}
 	if lock != "" && !d.missing {
 		stateLock := lockExclusive
-		if plan.control.kind == controlAuthenticate || plan.control.kind == controlReadiness {
+		if controlReadOnly(plan.control.kind) {
 			stateLock = lockShare
 		}
 		// Global control's consistency row occupies the same phase as the Room
@@ -424,7 +433,7 @@ func (s *Store) controlReadAllowed(plan opPlan, d *controlDependencies) bool {
 		return !d.missing && !d.orgDisabled && d.connectionKnown && d.orgID == plan.control.expectedOrgID
 	case controlLogin:
 		return !d.missing && !d.orgDisabled && d.connectionKnown && d.admitted && !d.identityRetired && (d.identityUser == "" || !d.actorMissing && !d.actorDisabled)
-	case controlUserStatus, controlAdminSet, controlAdmission:
+	case controlUserStatus, controlAdminSet, controlAdmission, controlAdministrationRead:
 		return !d.missing && !d.orgDisabled && !d.actorMissing && !d.actorDisabled && d.actorAdmin && d.credential.allowed()
 	default:
 		return !d.missing && !d.orgDisabled && !d.actorMissing && !d.actorDisabled && d.credential.allowed()
@@ -474,6 +483,9 @@ func controlConflict() (Result, error) {
 func (s *Store) resolveControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d *controlDependencies) (Result, error) {
 	if !s.controlReadAllowed(plan, d) {
 		return refused(ClassAuthorization, nil)
+	}
+	if plan.control.administration != nil {
+		return s.resolveAdministrationDirectory(ctx, tx, plan, d)
 	}
 	if plan.control.device != nil {
 		return s.resolveDeviceControl(ctx, tx, plan, d)
@@ -549,7 +561,17 @@ func (s *Store) applyControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 		}
 		identity := plan.control.login.Completion.Identity
 		actor = d.identityUser
+		additional := int64(1)
 		if actor == "" {
+			additional++
+		}
+		if e := s.checkActionableAdmission(ctx, tx, additional); e != nil {
+			return resourceAdmissionFailure(s, ctx, e)
+		}
+		if actor == "" {
+			if e := s.checkPersistentAdmission(ctx, tx, "users", 1); e != nil {
+				return resourceAdmissionFailure(s, ctx, e)
+			}
 			actor = plan.control.newUserID
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("users")+`(user_id,org_id) VALUES($1,$2)`, actor, d.orgID); err != nil {
 				return controlStatementFailure(s, ctx, err)
@@ -604,6 +626,11 @@ func (s *Store) applyControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 		if !d.actorAdmin || d.targetMissing {
 			return refused(ClassAuthorization, nil)
 		}
+		if plan.control.kind == controlUserStatus && plan.control.enabled && d.targetDisabled {
+			if e := s.checkActionableAdmission(ctx, tx, 1); e != nil {
+				return resourceAdmissionFailure(s, ctx, e)
+			}
+		}
 		if d.targetAdmin && !d.targetDisabled && !plan.control.enabled {
 			admins, err := s.countLoginEligibleAdmins(ctx, tx, plan.control.targetUser, nil)
 			if err != nil {
@@ -621,23 +648,25 @@ func (s *Store) applyControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 				}
 				return controlStatementFailure(s, ctx, err)
 			}
-			if err := s.revokeNativeCredentials(ctx, tx, scope); err != nil {
+			count, err := s.revokeNativeCredentials(ctx, tx, scope)
+			if err != nil {
 				return controlStatementFailure(s, ctx, err)
 			}
+			setAuditInvalidations(plan, count)
 		}
 		if plan.control.kind == controlUserStatus {
 			if _, err := tx.Exec(ctx, `UPDATE `+s.table("users")+` SET disabled=$2 WHERE user_id=$1`, plan.control.targetUser, !plan.control.enabled); err != nil {
 				return controlStatementFailure(s, ctx, err)
 			}
 		} else {
-			if d.targetDisabled {
+			if d.targetDisabled && plan.control.enabled {
 				return refused(ClassInvalidControlState, nil)
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("organization_admins")+`(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=EXCLUDED.enabled`, plan.control.targetUser, plan.control.enabled); err != nil {
 				return controlStatementFailure(s, ctx, err)
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE `+s.table("browser_sessions")+` SET revoked_at=COALESCE(revoked_at,pg_catalog.clock_timestamp()) WHERE user_id=$1`, plan.control.targetUser); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE `+s.table("browser_sessions")+` SET revoked_at=pg_catalog.clock_timestamp() WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>pg_catalog.clock_timestamp()`, plan.control.targetUser); err != nil {
 			return controlStatementFailure(s, ctx, err)
 		}
 		receipt.UserID, receipt.TargetUserID, receipt.Enabled = actor, plan.control.targetUser, plan.control.enabled
@@ -722,7 +751,7 @@ func (s *Store) appendControlResult(ctx context.Context, tx pgx.Tx, plan opPlan,
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("control_operations")+`(op_namespace,deployment_id,op_kind,identifier,principal,intent_hash,result_hash,result_seq,committed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, plan.key.Namespace, plan.key.Deployment, plan.key.OpKind, plan.key.Identifier, plan.key.Principal, plan.hash[:], resultHash[:], int64(receipt.Seq), now); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("audit")+`(deployment_id,user_id,actor_kind,kind,outcome,at) VALUES($1,$2,$3,$4,'accepted',$5)`, s.cfg.DeploymentID, actorValue, actorKind, receipt.Kind, now); err != nil {
+	if err := s.writeMutationAudit(ctx, tx, plan, "", actor, actorKind, receipt.Kind, "accepted", "", controlAuditTarget(receipt), auditCount(plan), now); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE `+s.table("identity_policy")+` SET revision=$1 WHERE id`, int64(receipt.Seq))
@@ -739,7 +768,7 @@ func (s *Store) lockControlSessions(ctx context.Context, q rowQuerier, plan opPl
 	}
 	if plan.control.kind == controlUserStatus || plan.control.kind == controlAdminSet {
 		var sessions []string
-		if err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(session_id ORDER BY session_id),ARRAY[]::text[]) FROM `+s.table("browser_sessions")+` WHERE user_id=$1`, plan.control.targetUser).Scan(&sessions); err != nil {
+		if err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(session_id ORDER BY session_id),ARRAY[]::text[]) FROM `+s.table("browser_sessions")+` WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>pg_catalog.clock_timestamp()`, plan.control.targetUser).Scan(&sessions); err != nil {
 			return err
 		}
 		for _, session := range sessions {

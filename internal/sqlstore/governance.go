@@ -31,10 +31,10 @@ type governanceMutation struct {
 }
 
 type governanceActionState struct {
-	missing                        bool
-	action                         GovernanceAction
-	actor, session                 string
-	createdAt, readyAt, consumedAt time.Time
+	missing                                       bool
+	action                                        GovernanceAction
+	actor, session                                string
+	createdAt, readyAt, consumedAt, invalidatedAt time.Time
 }
 
 type governanceDependencies struct {
@@ -48,6 +48,7 @@ type governanceDependencies struct {
 	roomMissing                                                                        bool
 	owner, orgID                                                                       string
 	seq, revision                                                                      uint64
+	approvalDigest                                                                     [32]byte
 }
 
 func (s *Store) governancePlan(auth AuthContext, clientID string, mutation governanceMutation) (opPlan, error) {
@@ -146,8 +147,8 @@ func governanceActionResult(result Result, err error) (GovernanceAction, error) 
 
 func (s *Store) readGovernanceAction(ctx context.Context, q rowQuerier, id, lock string) (governanceActionState, error) {
 	d := governanceActionState{action: GovernanceAction{ID: id}}
-	var ready, consumed *time.Time
-	err := q.QueryRow(ctx, `SELECT actor_user_id,session_id,room_id,target_user_id,expected_owner_user_id,expected_revision,created_at,expires_at,ready_at,consumed_at FROM `+s.table("governance_actions")+` WHERE action_id=$1`+lock, id).Scan(&d.actor, &d.session, &d.action.Intent.RoomID, &d.action.Intent.TargetUserID, &d.action.Intent.ExpectedOwnerUserID, &d.action.Intent.ExpectedRevision, &d.createdAt, &d.action.ExpiresAt, &ready, &consumed)
+	var ready, consumed, invalidated *time.Time
+	err := q.QueryRow(ctx, `SELECT actor_user_id,session_id,room_id,target_user_id,expected_owner_user_id,expected_revision,created_at,expires_at,ready_at,consumed_at,invalidated_at FROM `+s.table("governance_actions")+` WHERE action_id=$1`+lock, id).Scan(&d.actor, &d.session, &d.action.Intent.RoomID, &d.action.Intent.TargetUserID, &d.action.Intent.ExpectedOwnerUserID, &d.action.Intent.ExpectedRevision, &d.createdAt, &d.action.ExpiresAt, &ready, &consumed, &invalidated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.missing = true
 		return d, nil
@@ -158,6 +159,9 @@ func (s *Store) readGovernanceAction(ctx context.Context, q rowQuerier, id, lock
 	d.createdAt, d.action.ExpiresAt = d.createdAt.UTC(), d.action.ExpiresAt.UTC()
 	if ready != nil {
 		d.readyAt, d.action.Ready = ready.UTC(), true
+	}
+	if invalidated != nil {
+		d.invalidatedAt = *invalidated
 	}
 	if consumed != nil {
 		d.consumedAt = consumed.UTC()
@@ -255,19 +259,13 @@ func (s *Store) readGovernanceDependencies(ctx context.Context, q rowQuerier, pl
 			return nil, err
 		}
 	}
-	if g.kind == governanceTransfer && lock != lockNone {
+	if g.kind == governanceTransfer {
 		// Ownership UPDATE is the first guard for all admission writers. Lock
 		// pending approvals before the Room consistency row, so transferring
 		// away and back can never revive an old Owner's unconsumed approval.
-		var requests []string
-		if err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(request_id ORDER BY request_id),ARRAY[]::text[]) FROM `+s.table("binding_requests")+` WHERE room_id=$1 AND status='approved'`, intent.RoomID).Scan(&requests); err != nil {
+		d.approvalDigest, err = s.readCatalogArchiveApprovals(ctx, q, intent.RoomID, lock)
+		if err != nil {
 			return nil, err
-		}
-		for _, requestID := range requests {
-			var id string
-			if err := q.QueryRow(ctx, `SELECT request_id FROM `+s.table("binding_requests")+` WHERE request_id=$1 FOR UPDATE`, requestID).Scan(&id); err != nil {
-				return nil, err
-			}
 		}
 	}
 	if intent.RoomID != "" {
@@ -358,13 +356,13 @@ func (s *Store) resolveGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPla
 		return refused(ClassAuthorization, nil)
 	}
 	if plan.governance.kind == governanceRead {
-		if !d.action.action.ExpiresAt.After(time.Now()) || !d.action.consumedAt.IsZero() {
+		if !d.action.action.ExpiresAt.After(time.Now()) || !d.action.consumedAt.IsZero() || !d.action.invalidatedAt.IsZero() {
 			return refused(ClassAuthorization, nil)
 		}
 		return Result{Outcome: OutcomeReplayed, Governance: &GovernanceReceipt{Version: 1, Kind: governanceRead, Action: &d.action.action}}, nil
 	}
 	if plan.governance.kind == governanceList {
-		rows, err := tx.Query(ctx, `SELECT action_id,room_id,target_user_id,expected_owner_user_id,expected_revision,expires_at,ready_at IS NOT NULL FROM `+s.table("governance_actions")+` WHERE actor_user_id=$1 AND session_id=$2 AND consumed_at IS NULL AND expires_at>pg_catalog.clock_timestamp() ORDER BY created_at DESC,action_id LIMIT 32`, plan.userID, plan.auth.SessionID)
+		rows, err := tx.Query(ctx, `SELECT action_id,room_id,target_user_id,expected_owner_user_id,expected_revision,expires_at,ready_at IS NOT NULL FROM `+s.table("governance_actions")+` WHERE actor_user_id=$1 AND session_id=$2 AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>pg_catalog.clock_timestamp() ORDER BY created_at DESC,action_id LIMIT 32`, plan.userID, plan.auth.SessionID)
 		if err != nil {
 			return resolveIncomplete(ctx, err)
 		}
@@ -438,7 +436,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 			return refused(ClassAuthorization, nil)
 		}
 		var pending int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.table("governance_actions")+` WHERE actor_user_id=$1 AND session_id=$2 AND consumed_at IS NULL AND expires_at>pg_catalog.clock_timestamp()`, plan.userID, plan.auth.SessionID).Scan(&pending); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.table("governance_actions")+` WHERE actor_user_id=$1 AND session_id=$2 AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>pg_catalog.clock_timestamp()`, plan.userID, plan.auth.SessionID).Scan(&pending); err != nil {
 			return controlStatementFailure(s, ctx, err)
 		}
 		if pending >= 32 {
@@ -454,7 +452,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 		}
 		receipt.Action = &action
 	case governanceFinish:
-		if !d.ownerDisabled || !d.identityMatches || !d.action.readyAt.IsZero() || !d.action.consumedAt.IsZero() || !d.action.action.ExpiresAt.After(now) || g.completion.Identity.AuthTime.Before(d.action.createdAt.Truncate(time.Second)) || g.completion.Identity.AuthTime.After(now.Add(time.Minute)) {
+		if !d.ownerDisabled || !d.identityMatches || !d.action.readyAt.IsZero() || !d.action.consumedAt.IsZero() || !d.action.invalidatedAt.IsZero() || !d.action.action.ExpiresAt.After(now) || g.completion.Identity.AuthTime.Before(d.action.createdAt.Truncate(time.Second)) || g.completion.Identity.AuthTime.After(now.Add(time.Minute)) {
 			return refused(ClassAuthorization, nil)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE `+s.table("governance_actions")+` SET ready_at=$2 WHERE action_id=$1`, g.actionID, now); err != nil {
@@ -465,7 +463,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 		receipt.Action = &action
 	case governanceTransfer:
 		if g.actionID != "" {
-			if !d.ownerDisabled || d.action.action.Intent != intent || !d.action.action.Ready || !d.action.action.ExpiresAt.After(now) || !d.action.consumedAt.IsZero() {
+			if !d.ownerDisabled || d.action.action.Intent != intent || !d.action.action.Ready || !d.action.action.ExpiresAt.After(now) || !d.action.consumedAt.IsZero() || !d.action.invalidatedAt.IsZero() {
 				return refused(ClassAuthorization, nil)
 			}
 			if _, err := tx.Exec(ctx, `UPDATE `+s.table("governance_actions")+` SET consumed_at=$2 WHERE action_id=$1`, g.actionID, now); err != nil {
@@ -477,9 +475,15 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 		if d.seq >= math.MaxInt64 || d.revision >= math.MaxInt64 {
 			return refused(ClassRangeExceeded, nil)
 		}
-		if _, err := tx.Exec(ctx, `UPDATE `+s.table("binding_requests")+` SET status='denied' WHERE room_id=$1 AND status='approved'`, intent.RoomID); err != nil {
-			return controlStatementFailure(s, ctx, err)
+		cutoff, e := approvalCutoff(ctx)
+		if e != nil {
+			return controlStatementFailure(s, ctx, e)
 		}
+		tag, e := tx.Exec(ctx, `UPDATE `+s.table("binding_requests")+` SET status='denied' WHERE room_id=$1 AND status='approved' AND expires_at>$2`, intent.RoomID, cutoff)
+		if e != nil {
+			return controlStatementFailure(s, ctx, e)
+		}
+		setAuditInvalidations(plan, tag.RowsAffected())
 		if _, err := tx.Exec(ctx, `UPDATE `+s.table("room_members")+` SET role='member' WHERE room_id=$1 AND user_id=$2 AND role='owner'`, intent.RoomID, intent.ExpectedOwnerUserID); err != nil {
 			return controlStatementFailure(s, ctx, err)
 		}
@@ -508,7 +512,7 @@ func (s *Store) applyGovernancePlan(ctx context.Context, tx pgx.Tx, plan opPlan,
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("governance_operations")+`(deployment_id,actor_user_id,op_kind,identifier,intent_hash,result_hash,result_version,result_encoding,committed_at) VALUES($1,$2,$3,$4,$5,$6,1,$7,$8)`, plan.key.Deployment, plan.userID, g.kind, plan.key.Identifier, plan.hash[:], digest[:], encoding, now); err != nil {
 		return controlStatementFailure(s, ctx, err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("audit")+`(deployment_id,room_id,user_id,kind,outcome,at) VALUES($1,$2,$3,$4,'accepted',$5)`, plan.key.Deployment, intent.RoomID, plan.userID, "governance."+g.kind, now); err != nil {
+	if err := s.writeMutationAudit(ctx, tx, plan, intent.RoomID, plan.userID, "user", "governance."+g.kind, "accepted", "", intent.RoomID, auditCount(plan), now); err != nil {
 		return controlStatementFailure(s, ctx, err)
 	}
 	return Result{Outcome: OutcomeCommitted, Fact: fact, Seq: receipt.Seq, Revision: receipt.Revision, Governance: &receipt}, nil

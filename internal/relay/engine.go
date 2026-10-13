@@ -1022,6 +1022,9 @@ func (e *Engine) mergeQuoteAndLimitsLocked(m *Message, req SendRequest) error {
 			return errors.New("quoted message is not in this Room")
 		}
 		m.Quote = &model.AgentQuote{FromHandle: e.handle(quote.From), Text: quote.Text}
+		if e.enterprise && quote.From == model.ActorUser && ValidEnterpriseHumanAuthor(quote.Author) {
+			m.Quote.Author = quote.Author
+		}
 		// Like embedded quoted input, preserve image identity without recursively
 		// expanding peer correlation links or duplicating the same attachment.
 		seen := make(map[string]bool, len(m.Attachments))
@@ -1076,7 +1079,7 @@ func (e *Engine) handle(actor model.ActorID) string {
 	}
 	return model.ParticipantIdentities(e.cfg.Runtimes)[actor].MentionHandle
 }
-func (e *Engine) envelope(m Message) (string, error) {
+func (e *Engine) envelopeInput(m Message) model.AgentInput {
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: e.handle(m.From), Text: m.Text, Quote: m.Quote}
 	if e.cfg.DynamicBindings {
 		input.FromRuntime, input.FromGeneration = m.FromRuntime, m.FromGeneration
@@ -1084,7 +1087,9 @@ func (e *Engine) envelope(m Message) (string, error) {
 		input.PeerGeneration = e.peerGenerationLocked(m.To)
 	}
 	if m.From == model.ActorUser && m.Author != "" {
-		if strings.HasPrefix(m.Author, "lan:") {
+		if e.enterprise && ValidEnterpriseHumanAuthor(m.Author) {
+			input.Author = m.Author
+		} else if strings.HasPrefix(m.Author, "lan:") {
 			input.FromHandle = protocol.RemoteRoomOwnerHandle
 			input.Text += "\n" + protocol.SharedRoomEnvelopeNotice
 		} else {
@@ -1094,6 +1099,11 @@ func (e *Engine) envelope(m Message) (string, error) {
 	if m.Review != nil {
 		input.Text += m.Review.Envelope()
 	}
+	return input
+}
+
+func (e *Engine) envelope(m Message) (string, error) {
+	input := e.envelopeInput(m)
 	for _, a := range m.Attachments {
 		if e.cfg.Media == nil {
 			return "", errors.New("attachment store unavailable")

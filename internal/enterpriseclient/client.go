@@ -190,11 +190,17 @@ func (c *Client) request(ctx context.Context, method, path string, body any, bea
 			return 0, nil, ErrConfiguration
 		}
 	}
+	return c.requestEncoded(ctx, method, path, encoded, "application/json", bearer, maxBytes)
+}
+
+// requestEncoded retains one security envelope for JSON and bounded raw object
+// transfers. Callers enforce their own closed method/path/body budgets first.
+func (c *Client) requestEncoded(ctx context.Context, method, path string, encoded []byte, contentType string, bearer secret, maxBytes int) (int, []byte, error) {
 	if e := c.preflight(ctx); e != nil {
 		return 0, nil, e
 	}
 	var reader io.Reader
-	if method == http.MethodPost {
+	if encoded != nil {
 		reader = strings.NewReader(string(encoded))
 	}
 	req, e := http.NewRequestWithContext(ctx, method, c.origin+path, reader)
@@ -202,8 +208,8 @@ func (c *Client) request(ctx context.Context, method, path string, body any, bea
 		return 0, nil, ErrConfiguration
 	}
 	req.GetBody = nil
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", "application/json")
+	if encoded != nil {
+		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set(DeploymentHeader, c.deployment)
 	if bearer != "" {
@@ -247,6 +253,8 @@ func (c *Client) post(ctx context.Context, path string, body any, bearer secret)
 // output. Only the protocol's fixed public class vocabulary reaches the CLI.
 func safeClass(class string) string {
 	switch class {
+	case "prepared_head_changed", "object_missing", "resource_limit":
+		return class
 	case "peer_changed", "revision_conflict", "room_not_found", "room_taken", "unsupported_op", "unsupported_namespace", "invalid_fact", "authorization", "invalid_request", "invalid_control_state", "payload_conflict", "state_invalid", "unsupported_control_state", "last_administrator", "operation_budget_exceeded", "connection_failed", "commit_uncertain", "connection_exception", "canceled", "closed", "lease_lost", "stored_fact_unreadable", "constraint_violation", "statement_failed", "serialization_failure", "deadlock_detected", "discovery_restart_exceeded", "range_exceeded", "rotation_recovery_required", "rotation_recovery_unavailable", "enrollment_approval_limit":
 		return class
 	default:

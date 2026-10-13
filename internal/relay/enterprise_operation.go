@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 type EnterpriseOperationKind string
@@ -27,14 +28,18 @@ const (
 // Room, operation identity and authenticated scope belong to the SQL command,
 // not this value. Neither this type nor a Plan is a raw-event upload surface.
 type EnterpriseOperationIntent struct {
-	Kind                   EnterpriseOperationKind `json:"kind"`
-	To                     model.ActorID           `json:"to,omitempty"`
-	Text                   string                  `json:"text,omitempty"`
-	ReportSeq              uint64                  `json:"report_seq,omitempty"`
-	ExpectedPeerGeneration uint64                  `json:"expected_peer_generation,omitempty"`
-	MessageID              string                  `json:"message_id,omitempty"`
-	Receipt                string                  `json:"receipt,omitempty"`
-	ParkEnabled            bool                    `json:"park_enabled,omitempty"`
+	Kind                     EnterpriseOperationKind       `json:"kind"`
+	To                       model.ActorID                 `json:"to,omitempty"`
+	Text                     string                        `json:"text,omitempty"`
+	AttachmentIDs            model.EnterpriseAttachmentIDs `json:"attachment_ids,omitzero"`
+	QuoteID                  string                        `json:"quote_id,omitempty"`
+	Review                   review.Anchor                 `json:"review,omitzero"`
+	ReportSeq                uint64                        `json:"report_seq,omitempty"`
+	ExpectedPeerGeneration   uint64                        `json:"expected_peer_generation,omitempty"`
+	MessageID                string                        `json:"message_id,omitempty"`
+	ExpectedTargetGeneration uint64                        `json:"expected_target_generation,omitempty"`
+	Receipt                  string                        `json:"receipt,omitempty"`
+	ParkEnabled              bool                          `json:"park_enabled,omitempty"`
 }
 
 // EnterpriseOperationCaller is built only from the SQL runner's fenced and
@@ -57,14 +62,15 @@ type EnterpriseOperationIDs struct {
 // collector may receive it. Browser mutation replies must not serialize this
 // result indiscriminately. In particular it is not a ControlReceipt.
 type EnterpriseOperationResult struct {
-	Version     int                      `json:"version"`
-	Kind        EnterpriseOperationKind  `json:"kind"`
-	Message     *Message                 `json:"message,omitempty"`
-	Publication *Publication             `json:"publication,omitempty"`
-	Claim       *Claim                   `json:"claim,omitempty"`
-	Binding     *model.EnterpriseBinding `json:"binding,omitempty"`
-	HandedOff   bool                     `json:"handed_off,omitempty"`
-	Empty       bool                     `json:"empty,omitempty"`
+	Version         int                      `json:"version"`
+	Kind            EnterpriseOperationKind  `json:"kind"`
+	Message         *Message                 `json:"message,omitempty"`
+	Publication     *Publication             `json:"publication,omitempty"`
+	Claim           *Claim                   `json:"claim,omitempty"`
+	StructuredClaim *StructuredClaim         `json:"structured_claim,omitempty"`
+	Binding         *model.EnterpriseBinding `json:"binding,omitempty"`
+	HandedOff       bool                     `json:"handed_off,omitempty"`
+	Empty           bool                     `json:"empty,omitempty"`
 }
 
 // EnterpriseOperationPlan has zero or more ordered candidates. Candidate Seq
@@ -85,17 +91,26 @@ func ValidateEnterpriseOperationIntent(intent EnterpriseOperationIntent) error {
 	rest.Kind = ""
 	switch intent.Kind {
 	case EnterpriseOperationSend:
-		if intent.To != "" && intent.To != model.ActorUser && !intent.To.ValidParticipant() || validateBody(intent.Text) != nil || strings.TrimSpace(intent.Text) == "" {
+		if intent.To != "" && intent.To != model.ActorUser && !intent.To.ValidParticipant() || validateBody(intent.Text) != nil || strings.TrimSpace(intent.Text) == "" && intent.AttachmentIDs == (model.EnterpriseAttachmentIDs{}) || intent.AttachmentIDs.Validate() != nil {
 			return errors.New("invalid enterprise send intent")
 		}
+		if intent.QuoteID != "" && !validEnterpriseOperationID(intent.QuoteID) || intent.Review != (review.Anchor{}) && intent.Review.Validate() != nil {
+			return errors.New("invalid enterprise quote or review intent")
+		}
 		rest.To, rest.Text, rest.ExpectedPeerGeneration = "", "", 0
+		rest.AttachmentIDs = model.EnterpriseAttachmentIDs{}
+		rest.QuoteID, rest.Review = "", review.Anchor{}
 	case EnterpriseOperationReport:
 		if intent.ReportSeq == 0 || validateBody(intent.Text) != nil {
 			return errors.New("invalid enterprise report intent")
 		}
 		rest.ReportSeq, rest.Text, rest.ExpectedPeerGeneration = 0, "", 0
 	case EnterpriseOperationClaim:
+		if (intent.MessageID == "") != (intent.ExpectedTargetGeneration == 0) || intent.MessageID != "" && !validEnterpriseOperationID(intent.MessageID) {
+			return errors.New("invalid enterprise prepared claim")
+		}
 		rest.ParkEnabled = false
+		rest.MessageID, rest.ExpectedTargetGeneration = "", 0
 	case EnterpriseOperationAck:
 		if !validEnterpriseOperationID(intent.MessageID) || !validEnterpriseOperationID(intent.Receipt) {
 			return errors.New("invalid enterprise acknowledgement intent")
@@ -150,13 +165,19 @@ func ValidateEnterpriseOperationResult(result EnterpriseOperationResult) error {
 		rest.Publication = nil
 	case EnterpriseOperationClaim:
 		if result.Empty {
-			if result.Claim != nil {
+			if result.Claim != nil || result.StructuredClaim != nil {
 				return errors.New("empty enterprise claim contains a delivery")
 			}
-		} else if result.Claim == nil || !validEnterpriseOperationID(result.Claim.ID) || !validEnterpriseOperationID(result.Claim.Receipt) || result.Claim.PeerGeneration == 0 || result.Claim.Envelope == "" || !utf8.ValidString(result.Claim.Envelope) || len(result.Claim.Envelope) > MaxBodyBytes+(16<<10) {
+		} else if result.StructuredClaim != nil {
+			claim := result.StructuredClaim
+			if result.Claim != nil || !validEnterpriseOperationID(claim.ID) || claim.ID != claim.Message.ID || !validEnterpriseOperationID(claim.Receipt) || claim.PeerGeneration == 0 || len(claim.Message.Attachments) == 0 || !validOperationMessage(claim.Message) || claim.Message.State != "queued" {
+				return errors.New("invalid enterprise structured claim")
+			}
+		} else if result.Claim == nil || !validEnterpriseOperationID(result.Claim.ID) || !validEnterpriseOperationID(result.Claim.Receipt) || result.Claim.PeerGeneration == 0 || result.Claim.Envelope == "" || !utf8.ValidString(result.Claim.Envelope) || len(result.Claim.Envelope) > enterpriseEnvelopeBytes {
 			return errors.New("invalid enterprise claim result")
 		}
 		rest.Claim, rest.Empty = nil, false
+		rest.StructuredClaim = nil
 	case EnterpriseOperationAck:
 		if !result.HandedOff {
 			return errors.New("unsettled enterprise acknowledgement result")
@@ -187,13 +208,16 @@ func ValidateEnterpriseOperationResult(result EnterpriseOperationResult) error {
 }
 
 func validOperationMessage(message Message) bool {
-	if !validEnterpriseOperationID(message.ID) || message.From != model.ActorUser && !message.From.ValidParticipant() || message.To != model.ActorUser && !message.To.ValidParticipant() || validateBody(message.Text) != nil || !utf8.ValidString(message.Author) || message.Receipt != "" || len(message.Attachments) != 0 || message.Quote != nil || message.Review != nil || message.CreatedAt.IsZero() || message.UpdatedAt.IsZero() || !message.ClaimedAt.IsZero() {
+	if !validEnterpriseOperationID(message.ID) || message.From != model.ActorUser && !message.From.ValidParticipant() || message.To != model.ActorUser && !message.To.ValidParticipant() || validateBody(message.Text) != nil || !utf8.ValidString(message.Author) || message.Receipt != "" || validateEnterpriseAttachments(message.Attachments) != nil || !validEnterpriseQuote(message.Quote) || message.Review != nil && message.Review.Validate() != nil || message.CreatedAt.IsZero() || message.UpdatedAt.IsZero() || !message.ClaimedAt.IsZero() {
 		return false
 	}
 	if message.From.ValidParticipant() && (!message.FromRuntime.Valid() || message.FromRuntime != message.FromRuntime.Canonical() || message.FromGeneration == 0 || message.To.ValidParticipant() && message.To != model.OtherParticipant(message.From)) {
 		return false
 	}
 	if message.From == model.ActorUser && (message.FromRuntime != "" || message.FromGeneration != 0 || !message.To.ValidParticipant()) {
+		return false
+	}
+	if message.From == model.ActorUser && message.Author != "" && !ValidEnterpriseHumanAuthor(message.Author) {
 		return false
 	}
 	if message.State == "human" && message.To != model.ActorUser || message.State == "queued" && !message.To.ValidParticipant() {
@@ -203,6 +227,10 @@ func validOperationMessage(message Message) bool {
 		return false
 	}
 	return message.To == model.ActorUser && message.TargetGeneration == 0 || message.To.ValidParticipant() && message.TargetGeneration > 0
+}
+
+func validEnterpriseQuote(quote *model.AgentQuote) bool {
+	return quote == nil || (quote.FromHandle == "@user" || quote.FromHandle == "@agent1" || quote.FromHandle == "@agent2") && validateBody(quote.Text) == nil && (quote.Author == "" || quote.FromHandle == "@user" && ValidEnterpriseHumanAuthor(quote.Author))
 }
 
 func validEnterpriseOperationID(value string) bool {

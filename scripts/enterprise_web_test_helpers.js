@@ -9,6 +9,7 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
 class Element {
   constructor() { this.listeners = new Map(); this.children = []; this.textContent = ''; this.hidden = false; this.disabled = false; this.value = ''; }
   addEventListener(name, fn) { this.listeners.set(name, fn); }
+  setAttribute(name, value) { this[name] = value; }
   append(...values) { this.children.push(...values); }
   replaceChildren(...values) { this.children = values; }
   fire(name) { return this.listeners.get(name)({ preventDefault() {} }); }
@@ -35,21 +36,21 @@ class Hub {
   }
 }
 const session = (user = 'user-a', id = 'session-a') => ({ user_id: user, session_id: id, deployment_id: 'deployment-1', csrf: 'private-csrf-' + id, administrator: false });
-const history = (id = 'room-a', text = 'private-room-a') => ({ room_id: id, revision: 1, bindings: {}, messages: [{ from: 'user', to: 'slot1', state: 'queued', text }] });
+const history = (id = 'room-a', text = 'private-room-a') => ({ room_id: id, revision: 1, sequence: 1, total_messages: 1, total_audit: 0, bindings: {}, messages: [{ id: 'message-1', from: 'user', to: 'slot1', state: 'queued', text }] });
 const headers = (identity) => ({ get: (name) => ({ 'X-PairRoom-User': identity.user_id, 'X-PairRoom-Session': identity.session_id })[name] || null });
 function fixture(options = {}) {
   const elements = new Map(), requests = [], storage = options.storage || new Storage(), hub = options.hub || new Hub(), navigations = [];
   let identity = options.session || session(), nextID = 0;
   const element = (id) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  element('rooms-state').value = 'active'; element('collaboration-mode').value = 'default'; element('member-role').value = 'member'; element('send-target').value = 'slot1';
+  element('rooms-state').value = 'active'; element('collaboration-mode').value = 'default'; element('member-role').value = 'member'; element('send-target').value = 'slot1'; element('attachment-kind').value = 'file';
   function complete(request, status, data, chosen = identity) {
     request.resolved = true; request.resolve({ status, ok: status >= 200 && status < 300, headers: headers(chosen), json: async () => data });
   }
   const globals = {
     document: { getElementById: element, createElement: () => new Element() },
     window: { location: { origin: 'https://service.example.test', assign: (url) => navigations.push(url) }, localStorage: storage },
-    BroadcastChannel: hub.implementation(), AbortController, URL, URLSearchParams, Date, Blob, queueMicrotask,
-    crypto: { randomUUID: () => 'client-' + (++nextID) },
+    BroadcastChannel: hub.implementation(), AbortController, URL, URLSearchParams, Date, Blob, TextEncoder, queueMicrotask,
+    crypto: { randomUUID: () => 'client-' + (++nextID), subtle: require('node:crypto').webcrypto.subtle },
     // Ignoring cancellation is intentional: account/lane guards must reject
     // stale fetch and JSON results even when a transport cannot cancel them.
     fetch: (url, requestOptions) => {

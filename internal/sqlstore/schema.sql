@@ -15,7 +15,8 @@
 CREATE TABLE schema_meta (
   id      boolean PRIMARY KEY DEFAULT true CHECK (id),
   version integer NOT NULL,
-  fact_codec_version integer NOT NULL DEFAULT 2 CHECK(fact_codec_version=2)
+  fact_codec_version integer NOT NULL DEFAULT 2 CHECK(fact_codec_version=2),
+  object_schema_version integer NOT NULL DEFAULT 1 CHECK(object_schema_version=1)
 );
 
 -- The organization catalog. A row here is a directory entry and authorizes
@@ -272,7 +273,10 @@ CREATE TABLE audit (
   kind          text NOT NULL CHECK (kind <> ''),
   outcome       text NOT NULL CHECK (outcome <> ''),
   detail        text NOT NULL DEFAULT '',
-  at            timestamptz NOT NULL DEFAULT now()
+  at            timestamptz NOT NULL DEFAULT now(),
+  target_id text CHECK(target_id IS NULL OR target_id<>''),
+  operation_id text CHECK(operation_id IS NULL OR operation_id ~ '^operation-[a-f0-9]{64}$'),
+  invalidated_approval_count bigint CHECK(invalidated_approval_count IS NULL OR invalidated_approval_count>=0)
 );
 
 -- Deployment control has its own sequence and closed receipts. It never
@@ -673,7 +677,7 @@ CREATE TABLE device_enrollments (
   grant_id text NOT NULL UNIQUE CHECK(grant_id<>''),
   access_hash bytea NOT NULL UNIQUE CHECK(octet_length(access_hash)=32),
   refresh_hash bytea NOT NULL UNIQUE CHECK(octet_length(refresh_hash)=32),
-  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','completed')),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','completed','invalidated')),
   approved_user_id text REFERENCES users(user_id),
   code_hash bytea CHECK(code_hash IS NULL OR octet_length(code_hash)=32),
   approval_count integer NOT NULL DEFAULT 0 CHECK(approval_count BETWEEN 0 AND 3),
@@ -750,6 +754,7 @@ CREATE TABLE governance_actions (
   expires_at timestamptz NOT NULL,
   ready_at timestamptz,
   consumed_at timestamptz,
+  invalidated_at timestamptz,
   CHECK(expires_at>created_at AND expires_at<=created_at+interval '10 minutes'),
   CHECK(consumed_at IS NULL OR ready_at IS NOT NULL)
 );
@@ -766,7 +771,7 @@ END
 $fn$;
 CREATE TRIGGER governance_actions_no_delete BEFORE DELETE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
 CREATE TRIGGER governance_actions_identity_immutable BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_guard_columns('governance_actions_identity_immutable','action_id','actor_user_id','session_id','room_id','target_user_id','expected_owner_user_id','expected_revision','created_at','expires_at');
-CREATE TRIGGER governance_actions_once BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_columns_once('ready_at','consumed_at');
+CREATE TRIGGER governance_actions_once BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_columns_once('ready_at','consumed_at','invalidated_at');
 CREATE TABLE governance_operations (
   deployment_id text NOT NULL REFERENCES deployment(deployment_id),
   actor_user_id text NOT NULL REFERENCES users(user_id),
@@ -802,7 +807,7 @@ CREATE TABLE binding_requests (
   device_id text NOT NULL,
   family_id text NOT NULL REFERENCES device_families(family_id),
   restore_epoch text NOT NULL,
-  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','consumed')),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','consumed','invalidated')),
   requested_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
   approved_by text REFERENCES users(user_id),
@@ -922,3 +927,91 @@ CREATE TABLE catalog_operations (
   PRIMARY KEY(deployment_id,principal,op_kind,identifier)
 );
 CREATE TRIGGER catalog_operations_immutable BEFORE UPDATE OR DELETE ON catalog_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+
+-- Enterprise objects are opaque Room-scoped identities, never digest paths.
+CREATE TABLE attachments (
+  object_id text PRIMARY KEY CHECK(object_id ~ '^att-[a-f0-9]{24}$'),
+  room_id text NOT NULL REFERENCES rooms(room_id),
+  owner_user_id text NOT NULL REFERENCES users(user_id),
+  binding_id text NOT NULL DEFAULT '',
+  restore_epoch text NOT NULL,
+  state text NOT NULL CHECK(state IN ('reserved','verified','referenced','abandoned','deletion_pending')),
+  name text NOT NULL CHECK(octet_length(name) BETWEEN 1 AND 256),
+  kind text NOT NULL CHECK(kind IN ('file','image')),
+  size bigint NOT NULL CHECK(size BETWEEN 1 AND 5242880),
+  sha256 text NOT NULL CHECK(sha256 ~ '^[a-f0-9]{64}$'),
+  media_type text NOT NULL DEFAULT '',
+  width integer NOT NULL DEFAULT 0 CHECK(width>=0),
+  height integer NOT NULL DEFAULT 0 CHECK(height>=0),
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL CHECK(expires_at>created_at),
+  verified_at timestamptz,
+  abandoned_at timestamptz,
+  marked_at timestamptz,
+  deleted_at timestamptz,
+  UNIQUE(room_id,object_id),
+  CHECK(state NOT IN ('verified','referenced') OR (verified_at IS NOT NULL AND media_type<>'')),
+  CHECK(state NOT IN ('abandoned','deletion_pending') OR abandoned_at IS NOT NULL),
+  CHECK(state<>'deletion_pending' OR marked_at IS NOT NULL),
+  CHECK(deleted_at IS NULL OR state='deletion_pending')
+);
+CREATE INDEX attachments_room ON attachments(room_id,object_id);
+CREATE INDEX attachments_reclaim ON attachments(state,expires_at,abandoned_at) WHERE deleted_at IS NULL;
+CREATE TRIGGER attachments_no_delete BEFORE DELETE ON attachments FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER attachments_identity_immutable BEFORE UPDATE ON attachments FOR EACH ROW EXECUTE FUNCTION control_guard_columns('attachments_identity_immutable','object_id','room_id','owner_user_id','binding_id','restore_epoch','name','kind','size','sha256','created_at','expires_at');
+CREATE TRIGGER attachments_times_once BEFORE UPDATE ON attachments FOR EACH ROW EXECUTE FUNCTION control_columns_once('verified_at','abandoned_at','marked_at','deleted_at');
+CREATE TABLE attachment_usage (
+  scope text NOT NULL CHECK(scope IN ('deployment','room')),
+  scope_id text NOT NULL,
+  bytes bigint NOT NULL DEFAULT 0 CHECK(bytes>=0),
+  pending bigint NOT NULL DEFAULT 0 CHECK(pending>=0),
+  PRIMARY KEY(scope,scope_id)
+);
+CREATE TABLE attachment_references (
+  room_id text NOT NULL,
+  object_id text NOT NULL,
+  message_id text NOT NULL CHECK(message_id<>''),
+  first_seq bigint NOT NULL,
+  PRIMARY KEY(room_id,object_id,message_id),
+  FOREIGN KEY(room_id,object_id) REFERENCES attachments(room_id,object_id),
+  FOREIGN KEY(room_id,first_seq) REFERENCES room_events(room_id,seq)
+);
+CREATE TRIGGER attachment_references_immutable BEFORE UPDATE OR DELETE ON attachment_references FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+CREATE TABLE attachment_operations (
+  deployment_id text NOT NULL REFERENCES deployment(deployment_id),
+  room_id text NOT NULL DEFAULT '',
+  principal text NOT NULL,
+  op_kind text NOT NULL CHECK(op_kind IN ('reserve','verify','cancel','expire','mark','deleted','backup.begin','backup.end')),
+  identifier text NOT NULL,
+  intent_hash bytea NOT NULL CHECK(octet_length(intent_hash)=32),
+  result_version integer NOT NULL CHECK(result_version=1),
+  result_encoding bytea NOT NULL CHECK(octet_length(result_encoding) BETWEEN 1 AND 16384),
+  result_hash bytea NOT NULL CHECK(octet_length(result_hash)=32),
+  accepted_at timestamptz NOT NULL,
+  PRIMARY KEY(deployment_id,room_id,principal,op_kind,identifier)
+);
+CREATE TRIGGER attachment_operations_immutable BEFORE UPDATE OR DELETE ON attachment_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+CREATE TABLE attachment_backup_barriers (
+  barrier_id text PRIMARY KEY CHECK(barrier_id<>''),
+  created_at timestamptz NOT NULL,
+  ended_at timestamptz
+);
+CREATE TRIGGER attachment_backup_no_delete BEFORE DELETE ON attachment_backup_barriers FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER attachment_backup_identity BEFORE UPDATE ON attachment_backup_barriers FOR EACH ROW EXECUTE FUNCTION control_guard_columns('attachment_backup_identity','barrier_id','created_at');
+CREATE TRIGGER attachment_backup_once BEFORE UPDATE ON attachment_backup_barriers FOR EACH ROW EXECUTE FUNCTION control_columns_once('ended_at');
+
+-- Runtime restore barriers are deliberately excluded from backup data. No
+-- listener may open while a reserved/imported restore remains incomplete.
+CREATE TABLE restore_runs (
+  restore_id text PRIMARY KEY CHECK(restore_id<>''),
+  manifest_hash bytea NOT NULL CHECK(octet_length(manifest_hash)=32),
+  restore_epoch text NOT NULL CHECK(restore_epoch<>''),
+  started_at timestamptz NOT NULL,
+  imported_at timestamptz,
+  completed_at timestamptz,
+  CHECK(completed_at IS NULL OR imported_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX restore_one_pending ON restore_runs((true)) WHERE completed_at IS NULL;
+CREATE TRIGGER restore_runs_no_delete BEFORE DELETE ON restore_runs FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER restore_runs_identity BEFORE UPDATE ON restore_runs FOR EACH ROW EXECUTE FUNCTION control_guard_columns('restore_runs_identity','restore_id','manifest_hash','restore_epoch','started_at');
+CREATE TRIGGER restore_runs_once BEFORE UPDATE ON restore_runs FOR EACH ROW EXECUTE FUNCTION control_columns_once('imported_at','completed_at');

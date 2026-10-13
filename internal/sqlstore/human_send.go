@@ -14,6 +14,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
 )
 
 const (
@@ -49,8 +51,11 @@ const (
 // deployment, Room, principal and client identifier live in the operation key,
 // not here.
 type HumanSendIntent struct {
-	To   string
-	Text string
+	To            string
+	Text          string
+	AttachmentIDs model.EnterpriseAttachmentIDs
+	QuoteID       string
+	Review        review.Anchor
 }
 
 // HumanSendCommand is one human_send operation: a text-only human message on
@@ -69,25 +74,25 @@ type HumanSendCommand struct {
 // lists every field of the producer's message fact; the decoder rejects any
 // unknown field, so nothing can be smuggled past the typed binding.
 type humanSendPayload struct {
-	FromRuntime      string            `json:"from_runtime,omitempty"`
-	FromGeneration   uint64            `json:"from_generation,omitempty"`
-	Author           string            `json:"author,omitempty"`
-	Review           json.RawMessage   `json:"review,omitempty"`
-	ID               string            `json:"id"`
-	From             model.ActorID     `json:"from"`
-	To               model.ActorID     `json:"to"`
-	Text             string            `json:"text"`
-	Attachments      []json.RawMessage `json:"attachments,omitempty"`
-	Quote            json.RawMessage   `json:"quote,omitempty"`
-	TargetGeneration uint64            `json:"target_generation,omitempty"`
-	State            string            `json:"state"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-	ClaimedAt        time.Time         `json:"claimed_at,omitempty"`
-	RetryOf          string            `json:"retry_of,omitempty"`
-	Source           string            `json:"source"`
-	Receipt          string            `json:"receipt,omitempty"`
-	ClientKey        string            `json:"client_key,omitempty"`
+	FromRuntime      string             `json:"from_runtime,omitempty"`
+	FromGeneration   uint64             `json:"from_generation,omitempty"`
+	Author           string             `json:"author,omitempty"`
+	Review           *review.Anchor     `json:"review,omitempty"`
+	ID               string             `json:"id"`
+	From             model.ActorID      `json:"from"`
+	To               model.ActorID      `json:"to"`
+	Text             string             `json:"text"`
+	Attachments      []model.Attachment `json:"attachments,omitempty"`
+	Quote            *model.AgentQuote  `json:"quote,omitempty"`
+	TargetGeneration uint64             `json:"target_generation,omitempty"`
+	State            string             `json:"state"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
+	ClaimedAt        time.Time          `json:"claimed_at,omitempty"`
+	RetryOf          string             `json:"retry_of,omitempty"`
+	Source           string             `json:"source"`
+	Receipt          string             `json:"receipt,omitempty"`
+	ClientKey        string             `json:"client_key,omitempty"`
 }
 
 // CommitHumanSend runs the shared transaction state machine for one human_send
@@ -95,6 +100,11 @@ type humanSendPayload struct {
 // hash is accepted anywhere in this package — and the candidate fact must pass
 // the complete pinned producer-contract validation before any SQL.
 func (s *Store) CommitHumanSend(ctx context.Context, cmd HumanSendCommand) (Result, error) {
+	// Raw fact callers cannot attest a quoted source. The closed producer
+	// resolves it under the existing transaction through CommitHumanMessage.
+	if cmd.Intent.QuoteID != "" {
+		return refused(ClassInvalidRequest, nil)
+	}
 	key, class := humanSendKey(cmd)
 	if class != "" {
 		return refused(class, nil)
@@ -117,6 +127,7 @@ func (s *Store) CommitHumanSend(ctx context.Context, cmd HumanSendCommand) (Resu
 		hash:             humanSendHash(key, cmd.Intent),
 		expectedRevision: cmd.ExpectedRevision,
 		encodingBudget:   humanSendEncodingBudget,
+		human:            &cmd.Intent,
 	}
 	return s.commitWithRestarts(ctx, plan, cmd.Fact)
 }
@@ -132,7 +143,7 @@ func (s *Store) ResolveHumanSend(ctx context.Context, auth AuthContext, roomID, 
 	if auth.Deployment != s.cfg.DeploymentID {
 		return refused(ClassInvalidRequest, nil)
 	}
-	plan := opPlan{auth: auth, key: key, userID: auth.UserID, hash: humanSendHash(key, intent)}
+	plan := opPlan{auth: auth, key: key, userID: auth.UserID, hash: humanSendHash(key, intent), human: &intent}
 	return s.resolveWithFallback(ctx, plan)
 }
 
@@ -159,7 +170,11 @@ func humanSendKey(cmd HumanSendCommand) (OpKey, string) {
 		return key, ClassInvalidRequest
 	case cmd.Intent.To != string(model.ActorSlot1) && cmd.Intent.To != string(model.ActorSlot2):
 		return key, ClassInvalidRequest
-	case !utf8.ValidString(cmd.Intent.Text) || len(cmd.Intent.Text) > humanSendTextBytes || strings.TrimSpace(cmd.Intent.Text) == "":
+	case !utf8.ValidString(cmd.Intent.Text) || len(cmd.Intent.Text) > humanSendTextBytes || strings.TrimSpace(cmd.Intent.Text) == "" && cmd.Intent.AttachmentIDs == (model.EnterpriseAttachmentIDs{}):
+		return key, ClassInvalidRequest
+	case cmd.Intent.AttachmentIDs.Validate() != nil:
+		return key, ClassInvalidRequest
+	case cmd.Intent.QuoteID != "" && !validToken(cmd.Intent.QuoteID), cmd.Intent.Review != (review.Anchor{}) && cmd.Intent.Review.Validate() != nil:
 		return key, ClassInvalidRequest
 	}
 	return key, ""
@@ -181,9 +196,7 @@ func validateHumanSendFact(cmd HumanSendCommand) string {
 	switch {
 	case payload.FromRuntime != "" || payload.FromGeneration != 0:
 		return ClassInvalidFact
-	case payload.Author != "":
-		return ClassInvalidFact
-	case payload.Review != nil || payload.Quote != nil || len(payload.Attachments) != 0:
+	case payload.Author != "" && payload.Author != relay.EnterpriseHumanAuthor(cmd.Auth.UserID):
 		return ClassInvalidFact
 	case !validToken(payload.ID):
 		return ClassInvalidFact
@@ -204,6 +217,9 @@ func validateHumanSendFact(cmd HumanSendCommand) string {
 		// attestation.
 		return ClassInvalidFact
 	case payload.ClientKey != humanSendClientKey(cmd.Auth.UserID, cmd.ClientID):
+		return ClassInvalidFact
+	}
+	if relay.MatchEnterpriseSendEvidence(relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, AttachmentIDs: cmd.Intent.AttachmentIDs, QuoteID: cmd.Intent.QuoteID, Review: cmd.Intent.Review}, relay.Message{Attachments: payload.Attachments, Quote: payload.Quote, Review: payload.Review}) != nil {
 		return ClassInvalidFact
 	}
 	return ""
@@ -230,7 +246,14 @@ func decodeHumanSendPayload(data []byte) (humanSendPayload, error) {
 // generation) cannot change it while any stable change conflicts.
 func humanSendHash(key OpKey, intent HumanSendIntent) [32]byte {
 	h := sha256.New()
-	writePart(h, []byte("sqlstore.mutation.human_send.v1"))
+	version := "sqlstore.mutation.human_send.v1"
+	if intent.AttachmentIDs != (model.EnterpriseAttachmentIDs{}) {
+		version = "sqlstore.mutation.human_send.v2"
+	}
+	if intent.QuoteID != "" || intent.Review != (review.Anchor{}) {
+		version = "sqlstore.mutation.human_send.v3"
+	}
+	writePart(h, []byte(version))
 	writePart(h, []byte(key.Namespace))
 	writePart(h, []byte(key.Deployment))
 	writePart(h, []byte(key.RoomID))
@@ -243,6 +266,16 @@ func humanSendHash(key OpKey, intent HumanSendIntent) [32]byte {
 	writePart(h, []byte(key.Principal))
 	writePart(h, []byte(intent.To))
 	writePart(h, []byte(intent.Text))
+	if intent.AttachmentIDs != (model.EnterpriseAttachmentIDs{}) {
+		for _, id := range intent.AttachmentIDs.Slice() {
+			writePart(h, []byte(id))
+		}
+	}
+	if version == "sqlstore.mutation.human_send.v3" {
+		writePart(h, []byte(intent.QuoteID))
+		encoded, _ := json.Marshal(intent.Review)
+		writePart(h, encoded)
+	}
 	var sum [32]byte
 	copy(sum[:], h.Sum(nil))
 	return sum
