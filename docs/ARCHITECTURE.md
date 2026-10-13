@@ -29,7 +29,8 @@ Each Room has one authoritative Event Log on its host. A LAN guest connects dire
 | Native client/hooks | `internal/relayclient/` | Session/workspace discovery, private local state, publication reconciliation and collection |
 | LAN transport and client | `internal/lanshare/`, `internal/lanclient/` | Pinned TLS, direct guest membership, evidence cache and original delivery/wake receipt recovery |
 | Native identity ownership | `internal/nativeidentity/` | Same-user Runtime/session reservations across local Services and direct LAN bindings |
-| Wake and review evidence | `internal/claudewake/`, `internal/review/` | Private Claude inbox transport and bounded opt-in Git observations; neither grants execution authority |
+| Native wake transport and inspection | `internal/claudewake/`, `internal/codexwake/` | Private Claude inbox transport and bounded read-only Codex queue inspection; neither grants execution authority |
+| Review evidence | `internal/review/` | Bounded opt-in Git observations, without execution authority |
 | Protocol and prompts | `internal/protocol/`, `internal/prompt/` | Versioned contracts, stable instructions, dynamic envelopes |
 | Configuration | `internal/config/`, `internal/model/`, `internal/ccswitch/` | Strict selection/configuration and read-only supported Provider resolution |
 | Persistence/media | `internal/store/`, `internal/attachment/`, `internal/archive/`, `internal/atomicfile/` | JSONL integrity/replay, verified attachments and bounded backup/restore |

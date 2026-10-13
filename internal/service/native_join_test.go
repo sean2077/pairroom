@@ -109,7 +109,7 @@ func TestNativeJoinGuideNeverGuidesALANGuestSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := startNativeHostRuntime(ctx, registry, project, room, "127.0.0.1", nativeWakerConfig{Mock: true}, nil)
+	runtime, err := startNativeHostRuntime(ctx, registry, project, room, "127.0.0.1", nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Mock: true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

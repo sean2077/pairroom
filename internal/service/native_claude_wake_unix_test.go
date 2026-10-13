@@ -21,7 +21,7 @@ import (
 // Real local HTTP + actual UDS transport, with a deterministic inbox fixture.
 // This is deliberately NOT authenticated Claude/model-acceptance E2E.
 func TestNativeClaudeBindHookAndSocketWakeEndToEnd(t *testing.T) {
-	f := nativeHTTPWithWake(t, nativeWakerConfig{Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { t.Error("Claude wake spawned CLI"); return nil }})
+	f := nativeHTTPWithWake(t, nativeWakerConfig{QueuePending: emptyNativeWakeQueue, Wait: func(context.Context, time.Duration) error { return nil }, Run: func(context.Context, string, ...string) error { t.Error("Claude wake spawned CLI"); return nil }})
 	dir, err := os.MkdirTemp("", "prw-")
 	if err != nil {
 		t.Fatal(err)

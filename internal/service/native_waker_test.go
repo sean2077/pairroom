@@ -102,7 +102,7 @@ func newTestNativeWaker(now *time.Time, relayState *fakeNativeWakeRelay, run nat
 	relayState.mu.Lock()
 	relayState.reservationNow = func() time.Time { return *now }
 	relayState.mu.Unlock()
-	return newNativeWaker(nativeWakerConfig{
+	return newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Relay: relayState,
 		Now:   func() time.Time { return *now },
 		Run:   run,
@@ -340,7 +340,7 @@ func TestNativeWakerReservesRateSlotAtomically(t *testing.T) {
 	}}
 	var calls int
 	var callsMu sync.Mutex
-	waker := newNativeWaker(nativeWakerConfig{
+	waker := newNativeWaker(nativeWakerConfig{QueuePending: emptyNativeWakeQueue,
 		Relay:       state,
 		Now:         func() time.Time { return now.Add(time.Duration(ticks.Add(1)) * time.Second) },
 		MinInterval: time.Millisecond,

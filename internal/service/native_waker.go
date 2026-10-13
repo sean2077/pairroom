@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/claudewake"
+	"github.com/sean2077/pairroom/internal/codexwake"
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
 )
@@ -20,13 +21,15 @@ const (
 	nativeWakeMinimumInterval = time.Minute
 	nativeWakeHourlyLimit     = 10
 	nativeWakeCommandTimeout  = 10 * time.Second
+	nativeWakeProbeRecheck    = 30 * time.Second
+	nativeWakeQueueMaxBackoff = 5 * time.Minute
 )
 
 var errNativeWakeAudit = errors.New("native wake audit is unavailable")
 
 // nativeWakeRelay is deliberately narrower than Engine: the Service waker can
 // inspect only a bounded candidate and append only fixed audit facts. Its
-// in-memory SessionID is used solely as the vendor command argument; it never
+// in-memory SessionID is used only with the bound vendor transport; it never
 // reaches the Event Log, diagnostics, or relay body.
 type nativeWakeRelay interface {
 	WakeCandidate(messageID string) (relay.WakeCandidate, bool)
@@ -40,6 +43,7 @@ type nativeWakePrepare func(relay.WakeCandidate) (claudewake.Send, error)
 
 type nativeWakeRun func(context.Context, string, ...string) error
 type nativeWakeWait func(context.Context, time.Duration) error
+type nativeWakeQueuePending func(context.Context, string, string, string) (bool, error)
 
 type nativeWakerConfig struct {
 	CodexCommand string
@@ -51,8 +55,10 @@ type nativeWakerConfig struct {
 	MinInterval  time.Duration
 	HourlyLimit  int
 	Timeout      time.Duration
+	QueueTimeout time.Duration
 	Run          nativeWakeRun
 	Wait         nativeWakeWait
+	QueuePending nativeWakeQueuePending
 }
 
 // nativeWaker belongs to one active native Room runtime. Its durable
@@ -69,8 +75,10 @@ type nativeWaker struct {
 	minInterval  time.Duration
 	hourlyLimit  int
 	timeout      time.Duration
+	queueTimeout time.Duration
 	run          nativeWakeRun
 	wait         nativeWakeWait
+	queuePending nativeWakeQueuePending
 	attempts     []relay.WakeReservation
 	pending      map[model.ActorID]struct{}
 	// attempting covers reservation admission through outcome recording, so a
@@ -100,11 +108,17 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = nativeWakeCommandTimeout
 	}
+	if cfg.QueueTimeout <= 0 {
+		cfg.QueueTimeout = codexwake.DefaultTimeout
+	}
 	if cfg.Run == nil {
 		cfg.Run = runNativeWakeCommand
 	}
 	if cfg.Wait == nil {
 		cfg.Wait = waitNativeWake
+	}
+	if cfg.QueuePending == nil {
+		cfg.QueuePending = codexwake.Pending
 	}
 	w := &nativeWaker{
 		codexCommand: cfg.CodexCommand,
@@ -116,8 +130,10 @@ func newNativeWaker(cfg nativeWakerConfig) *nativeWaker {
 		minInterval:  cfg.MinInterval,
 		hourlyLimit:  cfg.HourlyLimit,
 		timeout:      cfg.Timeout,
+		queueTimeout: cfg.QueueTimeout,
 		run:          cfg.Run,
 		wait:         cfg.Wait,
+		queuePending: cfg.QueuePending,
 		pending:      map[model.ActorID]struct{}{},
 		attempting:   map[model.ActorID]struct{}{},
 		deferred:     map[model.ActorID]nativeWakeDeferred{},
@@ -159,9 +175,10 @@ func (w *nativeWaker) Close() {
 }
 
 type nativeWakeDeferred struct {
-	MessageID string
-	At        time.Time
-	Reason    string
+	MessageID  string
+	At         time.Time
+	Reason     string
+	QueueDelay time.Duration
 }
 
 type nativeWakeHeadSource interface{ WakeHeads() []relay.WakeCandidate }
@@ -220,7 +237,8 @@ func (w *nativeWaker) Reconcile(ctx context.Context) {
 
 // A deferred rate-limited head holds the Native runtime lease until it can be
 // reconsidered (the Room hourly budget may exceed the ordinary idle timeout), as
-// does a nudge_pending head for at most WakeRenewAfter, and
+// does a nudge_pending head for at most WakeRenewAfter or a Codex queue_pending
+// head until its existing native prompt leaves the queue, and
 // a wake's reservation admission holds it until its outcome settles. Unsupported, unbound
 // or capability-missing sessions never pin idle runtimes: their periodic probe
 // carries no reservation and no pending vendor effect.
@@ -238,7 +256,7 @@ func (w *nativeWaker) inUseLocked() bool {
 		return true
 	}
 	for _, d := range w.deferred {
-		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" || d.Reason == "nudge_pending" {
+		if d.Reason == "minimum_interval" || d.Reason == "hourly_limit" || d.Reason == "nudge_pending" || d.Reason == "queue_pending" {
 			return true
 		}
 	}
@@ -252,6 +270,31 @@ func (w *nativeWaker) deferCandidate(c relay.WakeCandidate, at time.Time, reason
 		return
 	}
 	w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: at, Reason: reason}
+}
+
+// Persistent native queue prompts and probe errors both back off read-only
+// subprocesses. Only a known pending prompt retains the waiting-input lease.
+// A different head, changed result or admitted wake decision resets the delay;
+// this scheduling state never authorizes a wake effect.
+func (w *nativeWaker) deferQueueProbe(c relay.WakeCandidate, reason string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing {
+		return
+	}
+	delay := nativeWakeProbeRecheck
+	previous := w.deferred[c.Target]
+	if previous.MessageID == c.MessageID && previous.Reason == reason {
+		delay = min(max(previous.QueueDelay*2, delay), nativeWakeQueueMaxBackoff)
+	}
+	w.deferred[c.Target] = nativeWakeDeferred{MessageID: c.MessageID, At: w.now().Add(delay), Reason: reason, QueueDelay: delay}
+}
+
+func (w *nativeWaker) queueProbeDeferred(c relay.WakeCandidate) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	next := w.deferred[c.Target]
+	return next.MessageID == c.MessageID && next.QueueDelay > 0 && (next.Reason == "queue_pending" || next.Reason == "capability_unavailable") && w.now().Before(next.At)
 }
 
 // Wake evaluates one post-enqueue message. A durable reservation is appended
@@ -283,6 +326,11 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	if reason := nativeWakeSuppression(candidate); reason != "" {
 		return w.suppress(candidate, reason)
 	}
+	// Publication callbacks share maintenance's backoff. Repeated callbacks for
+	// the same unattempted head must not bypass it or extend the deadline.
+	if w.queueProbeDeferred(candidate) {
+		return nil
+	}
 	target := candidate.Target
 	if err := w.wait(ctx, w.grace); err != nil {
 		// Runtime shutdown/cancellation must not manufacture a vendor attempt.
@@ -305,12 +353,12 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 	switch candidate.Runtime.NativeWakePolicy().Transport {
 	case model.NativeWakeClaudeInbox:
 		if w.claude == nil {
-			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
+			w.deferCandidate(candidate, w.now().Add(nativeWakeProbeRecheck), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
 		claudeSend, err := w.claude(candidate)
 		if err != nil || claudeSend == nil {
-			w.deferCandidate(candidate, w.now().Add(30*time.Second), "capability_unavailable")
+			w.deferCandidate(candidate, w.now().Add(nativeWakeProbeRecheck), "capability_unavailable")
 			return w.record("suppressed", "capability_unavailable", candidate.Target)
 		}
 		attempt = func(ctx context.Context) (string, string) {
@@ -327,6 +375,30 @@ func (w *nativeWaker) Wake(ctx context.Context, messageID string) error {
 			return "failed", reason
 		}
 	case model.NativeWakeCodexQueue:
+		// Relay activity and the renewal clock cannot observe the native queue.
+		// Even after either releases Engine suppression, a long-running Desktop
+		// turn may still hold the original prompt. Never append another one or
+		// spend a reservation/rate slot until the queue was read successfully.
+		if !w.mock {
+			command := w.codexCommand
+			if strings.TrimSpace(command) == "" {
+				command = "codex"
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, w.queueTimeout)
+			pending, err := w.queuePending(probeCtx, command, candidate.SessionID, nativeWakeNudge)
+			cancel()
+			if err != nil {
+				w.deferQueueProbe(candidate, "capability_unavailable")
+				return w.record("suppressed", "capability_unavailable", candidate.Target)
+			}
+			if pending {
+				w.deferQueueProbe(candidate, "queue_pending")
+				return w.record("suppressed", "nudge_pending", candidate.Target)
+			}
+			// Keep an existing waiting-input lease until beginAttempt and
+			// reserveRate transfer it below. An empty probe followed by caller
+			// cancellation must not let idle close strand unattempted input.
+		}
 		attempt = func(ctx context.Context) (string, string) {
 			err := w.run(ctx, "codex", "queue", "--thread", candidate.SessionID, "--message", nativeWakeNudge)
 			commandContextErr := ctx.Err()
