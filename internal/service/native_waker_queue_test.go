@@ -120,7 +120,7 @@ func TestNativeCodexQueueProbeFailureDoesNotReserveOrSpendRateBudget(t *testing.
 		t.Fatal("unavailable queue probe spent a reservation, rate budget or effect lease")
 	}
 	f.waker.queuePending = emptyNativeWakeQueue
-	f.advance(nativeWakeQueueRecheck)
+	f.advance(nativeWakeProbeRecheck)
 	f.waker.Reconcile(context.Background())
 	f.waker.workers.Wait()
 	f.expect(1, 1)
@@ -278,5 +278,91 @@ func TestNativeCodexQueueEmptyProbeCancellationRetainsWaitingLease(t *testing.T)
 	f.expect(1, 1)
 	if f.waker.InUse() {
 		t.Fatal("completed effect retained the waiting lease")
+	}
+}
+
+func TestNativeCodexQueueErrorsBackOffWithoutKeepingRuntimeAlive(t *testing.T) {
+	f := newNudgeFixture(t)
+	probes := 0
+	f.waker.queuePending = func(context.Context, string, string, string) (bool, error) {
+		probes++
+		return false, errors.New("unavailable queue")
+	}
+	id := f.send("waiting")
+	for _, delay := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute} {
+		before := probes
+		f.advance(delay - time.Second)
+		f.waker.Reconcile(context.Background())
+		f.waker.workers.Wait()
+		if err := f.waker.Wake(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+		if probes != before {
+			t.Fatal("failed queue probe retried before its backoff deadline")
+		}
+		f.advance(time.Second)
+		f.waker.Reconcile(context.Background())
+		f.waker.workers.Wait()
+		if probes != before+1 || f.waker.InUse() {
+			t.Fatal("failed probe lost its retry or pinned the idle runtime")
+		}
+		f.expect(0, 0)
+	}
+	if f.audits("wake suppressed (capability_unavailable)") != 1 || len(f.waker.attempts) != 0 {
+		t.Fatal("failed probes spent wake budget or duplicated audit facts")
+	}
+	f.waker.queuePending = emptyNativeWakeQueue
+	f.advance(5 * time.Minute)
+	f.waker.Reconcile(context.Background())
+	f.waker.workers.Wait()
+	f.expect(1, 1)
+}
+
+func TestNativeCodexQueueProbeUsesSeparateCallerBoundedBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		configured, want, parent time.Duration
+	}{
+		{"default", 0, 15 * time.Second, 0},
+		{"longer configured", 45 * time.Second, 45 * time.Second, 0},
+		{"shorter caller", 45 * time.Second, time.Second, time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNudgeFixture(t)
+			ctx := context.Background()
+			if tc.parent > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.parent)
+				defer cancel()
+			}
+			started := time.Now()
+			f.waker = newNativeWaker(nativeWakerConfig{
+				Relay: f.engine, Now: func() time.Time { return f.now }, Timeout: time.Millisecond, QueueTimeout: tc.configured,
+				Wait: func(context.Context, time.Duration) error { return nil },
+				Run:  func(context.Context, string, ...string) error { f.runs++; return nil },
+				QueuePending: func(probeCtx context.Context, _, _, _ string) (bool, error) {
+					deadline, ok := probeCtx.Deadline()
+					if !ok {
+						t.Fatal("queue probe was not bounded")
+					}
+					if parentDeadline, hasParent := ctx.Deadline(); hasParent {
+						if !deadline.Equal(parentDeadline) {
+							t.Fatal("shorter caller deadline was lost")
+						}
+					} else if deadline.Before(started.Add(tc.want)) || deadline.After(time.Now().Add(tc.want)) {
+						t.Fatal("queue probe inherited the effect timeout or ignored its configured budget")
+					}
+					return false, nil
+				},
+			})
+			m, err := f.engine.Send(f.auth[model.ActorSlot1], relay.SendRequest{ID: "waiting", Text: "task"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.waker.Wake(ctx, m.ID); err != nil {
+				t.Fatal(err)
+			}
+			f.expect(1, 1)
+		})
 	}
 }

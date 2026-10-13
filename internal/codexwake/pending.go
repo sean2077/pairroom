@@ -11,27 +11,30 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/sean2077/pairroom/internal/execx"
 )
 
 const (
-	probeTimeout  = 5 * time.Second
-	maxLineBytes  = 1 << 20
-	maxTotalBytes = 4 << 20
-	maxPages      = 16
+	// DefaultTimeout bounds queue probes when the caller supplies no deadline.
+	DefaultTimeout = 15 * time.Second
+	maxLineBytes   = 16 << 20 // Match the existing Codex app-server transport.
+	maxTotalBytes  = 32 << 20
+	maxPages       = 16
 )
 
 // Pending reports whether the existing native queue contains a submission with
 // exactly one text input equal to exactNudge. Errors mean the queue could not be established,
 // never that it is empty. All errors are deliberately independent of queue
 // contents, thread identity, executable paths, and native diagnostic output.
+// A caller deadline is honored as supplied; otherwise DefaultTimeout applies.
 func Pending(ctx context.Context, executable, sessionID, exactNudge string) (bool, error) {
 	if executable == "" || sessionID == "" || exactNudge == "" {
 		return false, errors.New("codex wake queue: invalid probe configuration")
 	}
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	ctx, cancel := probeContext(ctx)
 	defer cancel()
 	if ctx.Err() != nil {
 		return false, errors.New("codex wake queue: probe canceled")
@@ -85,6 +88,13 @@ func Pending(ctx context.Context, executable, sessionID, exactNudge string) (boo
 	return inspect(ctx, stdin, stdout, sessionID, exactNudge)
 }
 
+func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, DefaultTimeout)
+}
+
 type response struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
@@ -93,7 +103,8 @@ type response struct {
 }
 
 func inspect(ctx context.Context, input io.Writer, output io.Reader, sessionID, nudge string) (bool, error) {
-	scanner := bufio.NewScanner(io.LimitReader(output, maxTotalBytes+1))
+	limited := &io.LimitedReader{R: output, N: maxTotalBytes + 1}
+	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 4096), maxLineBytes)
 	encoder := json.NewEncoder(input)
 	used := 0
@@ -103,27 +114,39 @@ func inspect(ctx context.Context, input io.Writer, output io.Reader, sessionID, 
 		}
 		for scanner.Scan() {
 			used += len(scanner.Bytes()) + 1
-			if used > maxTotalBytes || ctx.Err() != nil {
+			if used > maxTotalBytes || limited.N == 0 {
 				return nil, errors.New("codex wake queue: probe limit exceeded")
+			}
+			if ctx.Err() != nil {
+				return nil, errors.New("codex wake queue: probe canceled")
 			}
 			var reply response
 			if err := json.Unmarshal(scanner.Bytes(), &reply); err != nil {
 				return nil, errors.New("codex wake queue: invalid response")
 			}
-			if len(reply.ID) == 0 && reply.Method != "" {
+			if len(reply.Error) != 0 && !bytes.Equal(reply.Error, []byte("null")) {
+				return nil, errors.New("codex wake queue: request unavailable")
+			}
+			if (len(reply.ID) == 0 || bytes.Equal(reply.ID, []byte("null"))) && reply.Method != "" {
 				continue // Unrelated app-server notifications are never retained.
 			}
 			var replyID int
 			if json.Unmarshal(reply.ID, &replyID) != nil || replyID != id || reply.Method != "" {
 				return nil, errors.New("codex wake queue: unexpected response")
 			}
-			if len(reply.Error) != 0 && !bytes.Equal(reply.Error, []byte("null")) {
-				return nil, errors.New("codex wake queue: request unavailable")
-			}
 			if len(reply.Result) == 0 || reply.Result[0] != '{' {
 				return nil, errors.New("codex wake queue: invalid result")
 			}
 			return reply.Result, nil
+		}
+		if ctx.Err() != nil {
+			return nil, errors.New("codex wake queue: probe canceled")
+		}
+		if limited.N == 0 || errors.Is(scanner.Err(), bufio.ErrTooLong) {
+			return nil, errors.New("codex wake queue: probe limit exceeded")
+		}
+		if scanner.Err() != nil {
+			return nil, errors.New("codex wake queue: response read failed")
 		}
 		return nil, errors.New("codex wake queue: incomplete response")
 	}
@@ -200,7 +223,10 @@ func inspectPage(raw json.RawMessage, nudge string) (bool, string, error) {
 			switch input.Type {
 			case "text":
 				valid = input.Text != nil
-				if valid && len(item.Input) == 1 && len(input.TextElements) == 0 && *input.Text == nudge {
+				if valid && strings.Contains(*input.Text, nudge) {
+					if len(item.Input) != 1 || len(input.TextElements) != 0 || *input.Text != nudge {
+						return false, "", errors.New("codex wake queue: ambiguous nudge input")
+					}
 					found = true
 				}
 			case "image":

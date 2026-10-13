@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -89,6 +90,10 @@ func runAppServerFixture(scenario string) {
 			result = queueFixture(`[{"type":"text","text":` + quoted(fixtureNudge) + `},{"type":"image","url":"private-image"}]`)
 		case "text-elements":
 			result = queueFixture(`[{"type":"text","text":` + quoted(fixtureNudge) + `,"text_elements":[{"byteRange":{"start":0,"end":1}}]}]`)
+		case "ordinary-text":
+			result = queueFixture(`[{"type":"text","text":"ordinary user input","text_elements":[]}]`)
+		case "large-valid-response":
+			result = queueFixture(`[{"type":"text","text":` + quoted(strings.Repeat("X", 2<<20)) + `}]`)
 		case "other-inputs":
 			result = queueFixture(`[{"type":"localImage","path":"private-path"},{"type":"localAudio","path":"private-path"},{"type":"audio","url":"private-url"},{"type":"image","fileId":"private-file"},{"type":"skill","name":"private","path":"private"},{"type":"mention","name":"private","path":"private"}]`)
 		case "rpc-error":
@@ -130,11 +135,21 @@ func runAppServerFixture(scenario string) {
 			fmt.Println(strings.Repeat("X", maxLineBytes+1))
 			return
 		case "total-limit":
-			for range 5 {
-				fmt.Printf("{\"method\":\"notification\",\"params\":%s}\n", quoted(strings.Repeat("X", maxLineBytes-100)))
+			for range maxTotalBytes/(512<<10) + 1 {
+				fmt.Printf("{\"method\":\"notification\",\"params\":%s}\n", quoted(strings.Repeat("X", 512<<10)))
 			}
 		case "notifications":
 			fmt.Println(`{"method":"thread/status/changed","params":{"private":"SECRET-QUEUE-CONTENT"}}`)
+		case "null-id-notification":
+			fmt.Println(`{"id":null,"method":"thread/status/changed","params":{"private":"SECRET-QUEUE-CONTENT"}}`)
+		case "null-id-error":
+			fmt.Println(`{"id":null,"error":{"message":"SECRET-QUEUE-CONTENT"}}`)
+		case "notification-error", "null-id-notification-error":
+			if scenario == "notification-error" {
+				fmt.Println(`{"method":"thread/status/changed","error":{"message":"SECRET-QUEUE-CONTENT"}}`)
+			} else {
+				fmt.Println(`{"id":null,"method":"thread/status/changed","error":{"message":"SECRET-QUEUE-CONTENT"}}`)
+			}
 		}
 		fmt.Printf("{\"id\":%s,\"result\":%s}\n", id, result)
 		if scenario != "paginated" && scenario != "page-limit" && scenario != "repeated-cursor" {
@@ -150,7 +165,7 @@ func queueFixture(input string) string {
 }
 
 func TestPendingAppServerBoundary(t *testing.T) {
-	for _, scenario := range []string{"empty", "pending", "paginated", "substring", "multiple-inputs", "text-elements", "other-inputs", "notifications"} {
+	for _, scenario := range []string{"empty", "pending", "paginated", "ordinary-text", "large-valid-response", "other-inputs", "notifications", "null-id-notification"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("PAIRROOM_CODEX_QUEUE_FIXTURE", scenario)
 			got, err := Pending(context.Background(), os.Args[0], "private-thread-id", fixtureNudge)
@@ -163,12 +178,15 @@ func TestPendingAppServerBoundary(t *testing.T) {
 }
 
 func TestPendingFailsClosedAndRedacts(t *testing.T) {
-	for _, scenario := range []string{"rpc-error", "malformed", "truncated", "missing-data", "null-data", "wrong-data", "missing-input", "empty-input", "missing-text", "unknown-type", "missing-cursor", "wrong-cursor", "empty-cursor", "wrong-id", "repeated-cursor", "page-limit", "line-limit", "total-limit"} {
+	for _, scenario := range []string{"rpc-error", "malformed", "truncated", "missing-data", "null-data", "wrong-data", "missing-input", "empty-input", "missing-text", "unknown-type", "missing-cursor", "wrong-cursor", "empty-cursor", "wrong-id", "repeated-cursor", "page-limit", "line-limit", "total-limit", "substring", "multiple-inputs", "text-elements", "null-id-error", "notification-error", "null-id-notification-error"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("PAIRROOM_CODEX_QUEUE_FIXTURE", scenario)
 			got, err := Pending(context.Background(), os.Args[0], "private-thread-id", fixtureNudge)
 			if got || err == nil {
 				t.Fatalf("Pending = %v, %v; want false, error", got, err)
+			}
+			if (scenario == "line-limit" || scenario == "total-limit") && err.Error() != "codex wake queue: probe limit exceeded" {
+				t.Fatalf("resource exhaustion was not distinguished: %v", err)
 			}
 			for _, secret := range []string{"SECRET", "private-thread-id", fixtureNudge, os.Args[0]} {
 				if strings.Contains(err.Error(), secret) {
@@ -176,6 +194,46 @@ func TestPendingFailsClosedAndRedacts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProbeContextDeadlinePolicy(t *testing.T) {
+	before := time.Now()
+	ctx, cancel := probeContext(context.Background())
+	defer cancel()
+	after := time.Now()
+	deadline, ok := ctx.Deadline()
+	if !ok || deadline.Before(before.Add(15*time.Second)) || deadline.After(after.Add(15*time.Second)) {
+		t.Fatalf("default deadline = %v, present = %v; want 15 seconds", deadline, ok)
+	}
+	for _, duration := range []time.Duration{100 * time.Millisecond, 30 * time.Second} {
+		t.Run(duration.String(), func(t *testing.T) {
+			want := time.Now().Add(duration)
+			caller, callerCancel := context.WithDeadline(context.Background(), want)
+			defer callerCancel()
+			probe, probeCancel := probeContext(caller)
+			defer probeCancel()
+			if got, ok := probe.Deadline(); !ok || !got.Equal(want) {
+				t.Fatalf("caller deadline changed: got %v, present = %v; want %v", got, ok, want)
+			}
+			callerCancel()
+			if probe.Err() != context.Canceled {
+				t.Fatal("caller cancellation did not reach probe")
+			}
+		})
+	}
+}
+
+type failedReader struct{}
+
+func (failedReader) Read([]byte) (int, error) {
+	return 0, errors.New("SECRET-NATIVE-DIAGNOSTIC private-thread-id")
+}
+
+func TestInspectReadErrorIsDistinctAndRedacted(t *testing.T) {
+	got, err := inspect(context.Background(), io.Discard, failedReader{}, "private-thread-id", fixtureNudge)
+	if got || err == nil || err.Error() != "codex wake queue: response read failed" {
+		t.Fatalf("inspect read failure = %v, %v", got, err)
 	}
 }
 

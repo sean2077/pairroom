@@ -6,7 +6,7 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
-- Check the bound Codex session's native queue before submitting a wake, so a prompt still queued during a long Desktop turn prevents another identical prompt after relay suppression expires or infers progress. Recheck an unchanged pending head with exponential backoff from 30 seconds to five minutes without spending wake reservations or rate budget; unavailable queue inspection fails closed and leaves foreground collection available.
+- Check the bound Codex session's native queue before submitting a wake, so a prompt still queued during a long Desktop turn prevents another identical prompt after relay suppression expires or infers progress. Recheck an unchanged pending head with exponential backoff from 30 seconds to five minutes without spending wake reservations or rate budget; unavailable queue inspection fails closed and leaves foreground collection available. Back off repeated inspection failures, expose the actual queue suppression in read-only diagnostics, and retain bounded support for large queue responses and explicit probe deadlines.
 
 ## [v5.16.0] — 2026-10-12
 

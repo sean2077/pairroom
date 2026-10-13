@@ -96,6 +96,22 @@ type nativeReachability struct {
 	NextAction      string            `json:"next_action"`
 }
 
+// queueDeferral observes only the current unattempted head. Replacement retires
+// its queued messages, so matching the immutable message ID also fences the old
+// binding generation. This neither refreshes the deadline nor probes Codex.
+func (w *nativeWaker) queueDeferral(head relay.WakeCandidate) nativeWakeDeferred {
+	if w == nil || head.MessageID == "" || head.Remote || head.SessionID == "" || head.Reserved || !head.Enabled {
+		return nativeWakeDeferred{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	d := w.deferred[head.Target]
+	if w.closing || d.MessageID != head.MessageID || (d.Reason != "queue_pending" && d.Reason != "capability_unavailable") {
+		return nativeWakeDeferred{}
+	}
+	return d
+}
+
 // A local read-only report: no socket write, vendor invocation, transcript read,
 // guessed liveness or automatic permission change occurs here.
 func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
@@ -137,6 +153,7 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 		if reason, due := n.waker.RateWindow(slot); reason != "" {
 			d.NextEligibleAt = &due
 		}
+		deferred := n.waker.queueDeferral(head)
 		switch {
 		case !state.Active || !state.Associated:
 			d.Reason = "unbound"
@@ -159,6 +176,14 @@ func (n *nativeHostRuntime) nativeDiagnostics() map[string]any {
 		case head.MessageID != "" && !kind.NativeWakePolicy().Transport.Supported():
 			d.Reason = "capability_unavailable"
 			d.NextAction = "collect_in_native_session"
+		case deferred.Reason == "queue_pending":
+			d.Reason = "nudge_pending"
+			d.NextAction = "collect_in_native_session"
+			d.NextEligibleAt = &deferred.At
+		case deferred.Reason == "capability_unavailable":
+			d.Reason = "capability_unavailable"
+			d.NextAction = "collect_in_native_session"
+			d.NextEligibleAt = &deferred.At
 		case head.MessageID != "" && d.Capability == "unavailable":
 			d.Reason = "capability_unavailable"
 			d.NextAction = "rebind_or_collect_in_native_session"
