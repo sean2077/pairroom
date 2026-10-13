@@ -20,10 +20,6 @@ GOLANGCI_LINT_VERSION := v2.14.0
 GOLANGCI_LINT ?= golangci-lint
 VERSION_PKG := github.com/sean2077/pairroom/internal/version
 LDFLAGS := -s -w -X '$(VERSION_PKG).Commit=$(COMMIT)' -X '$(VERSION_PKG).BuildDate=$(BUILD_DATE)' -X '$(VERSION_PKG).LastTag=$(LAST_TAG)' -X '$(VERSION_PKG).CommitsSinceTag=$(COMMITS_SINCE_TAG)'
-# Sources in this worktree only. `find .` would also scan sibling
-# `.worktrees/*` checkouts and fail `make check` on unrelated dirty files;
-# filter deleted index entries so format checks remain valid during migrations.
-GO_FILES := $(shell git ls-files --cached --others --exclude-standard -- '*.go' | while read f; do test -f "$$f" && printf '%s\n' "$$f"; done)
 GOEXE ?= $(shell go env GOEXE)
 GOBIN ?= $(shell go env GOBIN)
 ifeq ($(strip $(GOBIN)),)
@@ -75,7 +71,7 @@ vuln-binary:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -mode=binary "$(DIST)/pairroom-cli-v$(VERSION)-linux-amd64"
 
 fmt:
-	gofmt -w $(GO_FILES)
+	"$(PYTHON)" scripts/gofmt.py --write
 
 coverage-contract:
 	"$(PYTHON)" scripts/test_check_coverage.py
@@ -88,7 +84,8 @@ cover:
 	go tool cover -func=.coverage
 
 check: lint coverage-contract env-check-contract test race vet agent-contract release-contract docs-check desktop-check js-check
-	@test -z "$$(gofmt -l $(GO_FILES))" || { echo 'Go files are not gofmt-clean'; gofmt -l $(GO_FILES); exit 1; }
+	"$(PYTHON)" scripts/test_gofmt.py
+	"$(PYTHON)" scripts/gofmt.py --check
 	@go test scripts/check_dependencies.go scripts/check_dependencies_test.go
 	@go run scripts/check_dependencies.go
 	# The vendored upstream UMD intentionally retains its published trailing
