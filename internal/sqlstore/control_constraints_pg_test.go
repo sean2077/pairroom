@@ -1041,6 +1041,7 @@ func TestControlSchemaLoadAndRollback(t *testing.T) {
 			"room_slots_insert_guard": true, "room_slots_head_guard": true,
 			"bindings_active_generation_check": true, "owner_record_consistency_check": true,
 			"browser_session_revoke_once": true, "identity_bootstrap_once": true,
+			"control_columns_once": true, "project_owner_record_consistency_check": true,
 		}
 		rows, err := f.admin.Query(ctx, `
 			SELECT p.proname, COALESCE(p.proconfig @> ARRAY['search_path=pg_catalog'],false)
@@ -1069,16 +1070,15 @@ func TestControlSchemaLoadAndRollback(t *testing.T) {
 		if len(expected) != 0 {
 			t.Fatalf("missing trigger functions: %v", expected)
 		}
-		var deferrable int
-		if err := f.admin.QueryRow(ctx, `
-			SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
-			JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname = $1 AND t.tgdeferrable AND NOT t.tgisinternal`, f.schema).Scan(&deferrable); err != nil {
+		var deferrable []string
+		if err := f.admin.QueryRow(ctx, `SELECT COALESCE(array_agg(t.tgname::text ORDER BY t.tgname),ARRAY[]::text[]) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND t.tgdeferrable AND t.tginitdeferred AND NOT t.tgisinternal`, f.schema).Scan(&deferrable); err != nil {
 			t.Fatal(err)
 		}
-		if deferrable != 4 {
-			t.Fatalf("deferrable constraint triggers: %d of 4", deferrable)
+		expectedTriggers := "bindings_active_generation_check,project_members_owner_record_check,projects_owner_record_check,room_members_owner_record_check,room_slots_active_generation_check,rooms_owner_record_check"
+		if strings.Join(deferrable, ",") != expectedTriggers {
+			t.Fatalf("deferred constraint trigger set: %v", deferrable)
 		}
+
 	})
 }
 

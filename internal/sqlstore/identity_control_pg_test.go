@@ -626,7 +626,7 @@ func TestIdentityControlUnknownLoginBothRealCommitOutcomes(t *testing.T) {
 	}
 }
 
-func TestIdentityControlUserDisableWithLiveBindingIsFailClosedUntilRevocationSlice(t *testing.T) {
+func TestIdentityControlUserDisableWithUnreplayableBindingIsFailClosed(t *testing.T) {
 	f := identityPGFixture(t, nil)
 	ctx := context.Background()
 	_, admin := identityPGLogin(t, f, "operator-selected", "binding-admin")
@@ -654,14 +654,14 @@ func TestIdentityControlUserDisableWithLiveBindingIsFailClosedUntilRevocationSli
 	}
 	before := identityPGCounts(t, f)
 	result, err := f.store.SetUserEnabled(ctx, admin.Auth, "blocked-binding-disable", member.Auth.UserID, false)
-	if kerr := kernelErr(t, result, err); kerr.Class != ClassUnsupportedControlState {
-		t.Fatalf("unsupported Binding revocation was simulated: %+v", result)
+	if kerr := kernelErr(t, result, err); kerr.Class != ClassStoredFactUnreadable {
+		t.Fatalf("unreplayable Binding revocation was simulated: %+v", result)
 	}
 	if got := identityPGCounts(t, f); got != before {
-		t.Fatal("unsupported revocation changed control facts")
+		t.Fatal("unreplayable revocation changed control facts")
 	}
 	if _, err := f.store.AuthenticateSession(ctx, memberCmd.Session.TokenHash); err != nil {
-		t.Fatalf("unsupported revocation partially killed browser session: %v", err)
+		t.Fatalf("unreplayable revocation partially killed browser session: %v", err)
 	}
 }
 
@@ -708,7 +708,7 @@ func TestIdentityControlExpiredSessionAndDisabledOrganizationAreRefused(t *testi
 // Until Binding retirement is implemented in this transaction, neither an
 // active member's downgrade nor re-admission of a disabled member as viewer
 // may leave that user's original active Binding usable or restorable.
-func TestIdentityControlViewerTransitionWithLiveBindingIsFailClosed(t *testing.T) {
+func TestIdentityControlViewerTransitionWithUnreplayableBindingIsFailClosed(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disabled=%v", disabled), func(t *testing.T) {
 			f, cmd := membershipFixture(t)
@@ -726,12 +726,12 @@ func TestIdentityControlViewerTransitionWithLiveBindingIsFailClosed(t *testing.T
 			}
 			before := creationCounts(t, f, cmd.RoomID)
 			result, err := f.store.CommitRoomMembership(context.Background(), cmd)
-			if kerr := kernelErr(t, result, err); kerr.Class != ClassUnsupportedControlState || result.Fact.ID != "" {
+			if kerr := kernelErr(t, result, err); kerr.Class != ClassStoredFactUnreadable || result.Fact.ID != "" {
 				t.Fatalf("viewer transition left an active Binding under reduced authority: %+v", result)
 			}
 			requireMembership(t, f, cmd.RoomID, "u-target", "member", disabled)
 			if got := creationCounts(t, f, cmd.RoomID); got != before {
-				t.Fatalf("unsupported viewer transition wrote control/history/audit: %v -> %v", before, got)
+				t.Fatalf("unreplayable viewer transition wrote control/history/audit: %v -> %v", before, got)
 			}
 			var retired bool
 			var generation int64
@@ -739,7 +739,7 @@ func TestIdentityControlViewerTransitionWithLiveBindingIsFailClosed(t *testing.T
 				t.Fatal(err)
 			}
 			if retired || generation != 1 {
-				t.Fatal("unsupported viewer transition partially changed Binding authority")
+				t.Fatal("unreplayable viewer transition partially changed Binding authority")
 			}
 		})
 	}

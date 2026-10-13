@@ -2,7 +2,6 @@ package sqlstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -190,14 +189,10 @@ func TestReadonlySnapshotWaitsOnExternalWriterCommit(t *testing.T) {
 	}
 	created := time.Now().UTC().Truncate(time.Microsecond)
 	event := model.Event{Seq: 1, ID: "evt-ext-1", RoomID: "room-1", Kind: humanSendKind, Actor: model.ActorUser, CreatedAt: created, Data: []byte(`{"note":"external writer"}`)}
-	encoding, err := json.Marshal(event)
-	if err != nil {
+	if err := f.store.writeStoredRoomEvent(ctx, tx, event, userFactOrigin("u-owner")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+f.store.table("room_events")+` (room_id, seq, event_id, fact_version, event_encoding, kind, actor, created_at, origin_user) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		"room-1", 1, event.ID, factCodecVersion, encoding, event.Kind, string(event.Actor), created, "u-owner"); err != nil {
-		t.Fatal(err)
-	}
+
 	if _, err := tx.Exec(ctx, `UPDATE `+f.store.table("rooms")+` SET current_seq = 1, revision = 1 WHERE room_id = 'room-1'`); err != nil {
 		t.Fatal(err)
 	}

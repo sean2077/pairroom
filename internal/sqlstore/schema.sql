@@ -14,7 +14,8 @@
 
 CREATE TABLE schema_meta (
   id      boolean PRIMARY KEY DEFAULT true CHECK (id),
-  version integer NOT NULL
+  version integer NOT NULL,
+  fact_codec_version integer NOT NULL DEFAULT 2 CHECK(fact_codec_version=2)
 );
 
 -- The organization catalog. A row here is a directory entry and authorizes
@@ -236,7 +237,9 @@ CREATE TABLE room_events (
   kind           text NOT NULL CHECK (kind <> ''),
   actor          text NOT NULL CHECK (actor <> ''),
   created_at     timestamptz NOT NULL,      -- derived index projection (microsecond precision); authoritative ns value lives in event_encoding
-  origin_user    text NOT NULL REFERENCES users(user_id),
+  origin_kind    text NOT NULL CHECK(origin_kind IN ('user','operator')),
+  origin_user    text REFERENCES users(user_id),
+  CONSTRAINT room_events_origin_check CHECK((origin_kind='user' AND origin_user IS NOT NULL) OR (origin_kind='operator' AND origin_user IS NULL AND actor='system')),
   PRIMARY KEY (room_id, seq),
   UNIQUE (room_id, event_id)
 );
@@ -264,8 +267,8 @@ CREATE TABLE audit (
   deployment_id text NOT NULL REFERENCES deployment(deployment_id),
   room_id       text REFERENCES rooms,
   user_id       text REFERENCES users(user_id),
-  actor_kind    text NOT NULL DEFAULT 'user' CHECK (actor_kind IN ('user', 'operator')),
-  CONSTRAINT audit_actor_check CHECK ((actor_kind = 'user' AND user_id IS NOT NULL) OR (actor_kind = 'operator' AND user_id IS NULL)),
+  actor_kind    text NOT NULL DEFAULT 'user' CHECK (actor_kind IN ('user', 'operator', 'client')),
+  CONSTRAINT audit_actor_check CHECK ((actor_kind = 'user' AND user_id IS NOT NULL) OR (actor_kind IN ('operator', 'client') AND user_id IS NULL)),
   kind          text NOT NULL CHECK (kind <> ''),
   outcome       text NOT NULL CHECK (outcome <> ''),
   detail        text NOT NULL DEFAULT '',
@@ -324,9 +327,9 @@ CREATE TABLE control_events (
 );
 
 CREATE TABLE control_operations (
-  op_namespace text NOT NULL CHECK (op_namespace IN ('operator', 'oidc', 'human')),
+  op_namespace text NOT NULL CHECK (op_namespace IN ('operator', 'oidc', 'human', 'device')),
   deployment_id text NOT NULL REFERENCES deployment(deployment_id),
-  op_kind text NOT NULL CHECK (op_kind IN ('identity.configure', 'identity.login', 'session.revoke', 'identity.admission', 'user.status', 'administrator.set')),
+  op_kind text NOT NULL CHECK (op_kind IN ('identity.configure', 'identity.login', 'session.revoke', 'identity.admission', 'user.status', 'administrator.set', 'device.enrollment.begin', 'device.enrollment.decide', 'device.enrollment.complete', 'device.rotate', 'device.recover', 'device.revoke', 'agent.register')),
   identifier text NOT NULL CHECK (identifier <> ''),
   principal text NOT NULL CHECK (principal <> ''),
   intent_hash bytea NOT NULL CHECK (octet_length(intent_hash) = 32),
@@ -629,3 +632,293 @@ CREATE CONSTRAINT TRIGGER room_members_owner_record_check AFTER INSERT OR UPDATE
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION owner_record_consistency_check();
 CREATE CONSTRAINT TRIGGER rooms_owner_record_check AFTER UPDATE ON rooms
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION owner_record_consistency_check();
+
+-- Batch Relay receipts retain the accepted cursor even when no Room fact was
+-- emitted. Room history remains the only durable fact log.
+CREATE TABLE relay_operations (
+  op_namespace text NOT NULL CHECK (op_namespace IN ('human','binding')),
+  deployment_id text NOT NULL REFERENCES deployment(deployment_id),
+  room_id text NOT NULL REFERENCES rooms(room_id),
+  binding_id text NOT NULL,
+  generation bigint NOT NULL,
+  op_kind text NOT NULL CHECK (op_kind <> ''),
+  identifier text NOT NULL CHECK (identifier <> ''),
+  principal text NOT NULL CHECK (principal <> ''),
+  intent_hash bytea NOT NULL CHECK (octet_length(intent_hash)=32),
+  result_hash bytea NOT NULL CHECK (octet_length(result_hash)=32),
+  expected_revision bigint NOT NULL CHECK (expected_revision>=0),
+  result_revision bigint NOT NULL CHECK (result_revision=expected_revision+1),
+  result_seq bigint NOT NULL CHECK (result_seq>=0),
+  result_version integer NOT NULL CHECK (result_version=1),
+  result_encoding bytea NOT NULL CHECK (octet_length(result_encoding) BETWEEN 1 AND 2097152),
+  fact_first bigint,
+  fact_last bigint,
+  committed_at timestamptz NOT NULL,
+  CHECK ((op_namespace='human' AND binding_id='' AND generation=0) OR (op_namespace='binding' AND binding_id<>'' AND generation>0)),
+  CHECK ((fact_first IS NULL AND fact_last IS NULL) OR (fact_first IS NOT NULL AND fact_last IS NOT NULL AND fact_first>0 AND fact_last>=fact_first AND result_seq=fact_last)),
+  FOREIGN KEY(room_id,fact_first) REFERENCES room_events(room_id,seq),
+  FOREIGN KEY(room_id,fact_last) REFERENCES room_events(room_id,seq),
+  PRIMARY KEY(op_namespace,deployment_id,room_id,binding_id,generation,op_kind,identifier,principal)
+);
+CREATE TRIGGER relay_operations_immutable BEFORE UPDATE OR DELETE ON relay_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+
+CREATE TABLE device_enrollments (
+  request_id text PRIMARY KEY CHECK(request_id<>''),
+  device_id text NOT NULL CHECK(device_id<>''),
+  label text NOT NULL CHECK(length(label) BETWEEN 1 AND 128),
+  origin text NOT NULL CHECK(origin<>''),
+  callback_uri text NOT NULL,
+  client_state text NOT NULL,
+  proof_hash bytea NOT NULL CHECK(octet_length(proof_hash)=32),
+  grant_id text NOT NULL UNIQUE CHECK(grant_id<>''),
+  access_hash bytea NOT NULL UNIQUE CHECK(octet_length(access_hash)=32),
+  refresh_hash bytea NOT NULL UNIQUE CHECK(octet_length(refresh_hash)=32),
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','completed')),
+  approved_user_id text REFERENCES users(user_id),
+  code_hash bytea CHECK(code_hash IS NULL OR octet_length(code_hash)=32),
+  approval_count integer NOT NULL DEFAULT 0 CHECK(approval_count BETWEEN 0 AND 3),
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  CHECK(expires_at>created_at AND expires_at<=created_at+interval '10 minutes'),
+  CHECK(status NOT IN ('approved','completed') OR (approved_user_id IS NOT NULL AND code_hash IS NOT NULL AND approval_count>0))
+);
+CREATE TRIGGER device_enrollments_no_delete BEFORE DELETE ON device_enrollments FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER device_enrollments_identity_immutable BEFORE UPDATE ON device_enrollments FOR EACH ROW EXECUTE FUNCTION control_guard_columns('device_enrollments_identity_immutable','request_id','device_id','label','origin','callback_uri','client_state','proof_hash','grant_id','access_hash','refresh_hash','created_at','expires_at');
+
+CREATE TABLE device_families (
+  family_id text PRIMARY KEY REFERENCES device_enrollments(request_id),
+  device_id text NOT NULL REFERENCES devices(device_id),
+  user_id text NOT NULL REFERENCES users(user_id),
+  origin text NOT NULL,
+  proof_hash bytea NOT NULL CHECK(octet_length(proof_hash)=32),
+  restore_epoch text NOT NULL,
+  current_grant_id text NOT NULL,
+  previous_grant_id text,
+  recovery_rotation_id text,
+  recovery_hash bytea CHECK(recovery_hash IS NULL OR octet_length(recovery_hash)=32),
+  recovery_until timestamptz,
+  recovery_used_at timestamptz,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL CHECK(expires_at>created_at),
+  revoked_at timestamptz,
+  CHECK((previous_grant_id IS NULL AND recovery_rotation_id IS NULL AND recovery_hash IS NULL AND recovery_until IS NULL AND recovery_used_at IS NULL) OR (previous_grant_id IS NOT NULL AND recovery_rotation_id IS NOT NULL AND recovery_hash IS NOT NULL AND recovery_until IS NOT NULL))
+);
+CREATE INDEX device_families_device_key ON device_families(device_id);
+CREATE TRIGGER device_families_no_delete BEFORE DELETE ON device_families FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER device_families_identity_immutable BEFORE UPDATE ON device_families FOR EACH ROW EXECUTE FUNCTION control_guard_columns('device_families_identity_immutable','family_id','device_id','user_id','origin','proof_hash','restore_epoch','created_at','expires_at');
+CREATE TRIGGER device_families_revoked_once BEFORE UPDATE ON device_families FOR EACH ROW EXECUTE FUNCTION browser_session_revoke_once();
+
+CREATE TABLE device_grants (
+  grant_id text PRIMARY KEY CHECK(grant_id<>''),
+  family_id text NOT NULL REFERENCES device_families(family_id),
+  access_hash bytea NOT NULL UNIQUE CHECK(octet_length(access_hash)=32),
+  refresh_hash bytea NOT NULL UNIQUE CHECK(octet_length(refresh_hash)=32),
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL CHECK(expires_at>created_at),
+  revoked_at timestamptz
+);
+ALTER TABLE device_families ADD CONSTRAINT device_families_current_fkey FOREIGN KEY(current_grant_id) REFERENCES device_grants(grant_id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE device_families ADD CONSTRAINT device_families_previous_fkey FOREIGN KEY(previous_grant_id) REFERENCES device_grants(grant_id) DEFERRABLE INITIALLY DEFERRED;
+CREATE TRIGGER device_grants_no_delete BEFORE DELETE ON device_grants FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER device_grants_identity_immutable BEFORE UPDATE ON device_grants FOR EACH ROW EXECUTE FUNCTION control_guard_columns('device_grants_identity_immutable','grant_id','family_id','access_hash','refresh_hash','created_at','expires_at');
+CREATE TRIGGER device_grants_revoked_once BEFORE UPDATE ON device_grants FOR EACH ROW EXECUTE FUNCTION browser_session_revoke_once();
+
+CREATE TABLE binding_grants (
+  grant_id text PRIMARY KEY CHECK(grant_id<>''),
+  binding_id text NOT NULL REFERENCES bindings(binding_id),
+  family_id text NOT NULL REFERENCES device_families(family_id),
+  token_hash bytea NOT NULL UNIQUE CHECK(octet_length(token_hash)=32),
+  restore_epoch text NOT NULL,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL CHECK(expires_at>created_at),
+  revoked_at timestamptz
+);
+CREATE INDEX binding_grants_binding_key ON binding_grants(binding_id);
+CREATE TRIGGER binding_grants_no_delete BEFORE DELETE ON binding_grants FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER binding_grants_identity_immutable BEFORE UPDATE ON binding_grants FOR EACH ROW EXECUTE FUNCTION control_guard_columns('binding_grants_identity_immutable','grant_id','binding_id','family_id','token_hash','restore_epoch','created_at','expires_at');
+CREATE TRIGGER binding_grants_revoked_once BEFORE UPDATE ON binding_grants FOR EACH ROW EXECUTE FUNCTION browser_session_revoke_once();
+
+CREATE TABLE governance_actions (
+  action_id text PRIMARY KEY CHECK(action_id<>''),
+  actor_user_id text NOT NULL REFERENCES users(user_id),
+  session_id text NOT NULL REFERENCES browser_sessions(session_id),
+  room_id text NOT NULL REFERENCES rooms(room_id),
+  target_user_id text NOT NULL REFERENCES users(user_id),
+  expected_owner_user_id text NOT NULL REFERENCES users(user_id),
+  expected_revision bigint NOT NULL CHECK(expected_revision>=0),
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  ready_at timestamptz,
+  consumed_at timestamptz,
+  CHECK(expires_at>created_at AND expires_at<=created_at+interval '10 minutes'),
+  CHECK(consumed_at IS NULL OR ready_at IS NOT NULL)
+);
+CREATE FUNCTION control_columns_once() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $fn$
+DECLARE col text;
+BEGIN
+  FOREACH col IN ARRAY TG_ARGV LOOP
+    IF (to_jsonb(OLD)->>col) IS NOT NULL AND (to_jsonb(NEW)->>col) IS DISTINCT FROM (to_jsonb(OLD)->>col) THEN
+      RAISE EXCEPTION USING ERRCODE='23514', CONSTRAINT=TG_TABLE_NAME || '_' || col || '_once', MESSAGE='write-once control state cannot be restored';
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END
+$fn$;
+CREATE TRIGGER governance_actions_no_delete BEFORE DELETE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER governance_actions_identity_immutable BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_guard_columns('governance_actions_identity_immutable','action_id','actor_user_id','session_id','room_id','target_user_id','expected_owner_user_id','expected_revision','created_at','expires_at');
+CREATE TRIGGER governance_actions_once BEFORE UPDATE ON governance_actions FOR EACH ROW EXECUTE FUNCTION control_columns_once('ready_at','consumed_at');
+CREATE TABLE governance_operations (
+  deployment_id text NOT NULL REFERENCES deployment(deployment_id),
+  actor_user_id text NOT NULL REFERENCES users(user_id),
+  op_kind text NOT NULL CHECK(op_kind IN ('prepare','finish','transfer')),
+  identifier text NOT NULL CHECK(identifier<>''),
+  intent_hash bytea NOT NULL CHECK(octet_length(intent_hash)=32),
+  result_hash bytea NOT NULL CHECK(octet_length(result_hash)=32),
+  result_version integer NOT NULL CHECK(result_version=1),
+  result_encoding bytea NOT NULL CHECK(octet_length(result_encoding) BETWEEN 1 AND 262144),
+  committed_at timestamptz NOT NULL,
+  PRIMARY KEY(deployment_id,actor_user_id,op_kind,identifier)
+);
+CREATE TRIGGER governance_operations_immutable BEFORE UPDATE OR DELETE ON governance_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+CREATE TRIGGER agents_runtime_once BEFORE UPDATE ON agents FOR EACH ROW EXECUTE FUNCTION control_columns_once('runtime_kind','runtime_recorded_at');
+
+-- A Device request and a live Room Owner decision are independent authorities.
+-- The request freezes its native proof and candidate Binding grant; the final
+-- typed Room transaction consumes it together with the Binding fact.
+CREATE TABLE binding_requests (
+  request_id text PRIMARY KEY CHECK(request_id<>''),
+  org_id text NOT NULL REFERENCES configured_org(org_id),
+  room_id text NOT NULL,
+  slot text NOT NULL CHECK(slot IN ('slot1','slot2')),
+  observed_generation bigint NOT NULL CHECK(observed_generation>0),
+  replacement boolean NOT NULL,
+  agent_id text NOT NULL,
+  binding_id text NOT NULL UNIQUE CHECK(binding_id<>''),
+  grant_id text NOT NULL UNIQUE CHECK(grant_id<>''),
+  token_hash bytea NOT NULL UNIQUE CHECK(octet_length(token_hash)=32),
+  proof_hash bytea NOT NULL CHECK(octet_length(proof_hash)=32),
+  park_enabled boolean NOT NULL,
+  user_id text NOT NULL,
+  device_id text NOT NULL,
+  family_id text NOT NULL REFERENCES device_families(family_id),
+  restore_epoch text NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','denied','consumed')),
+  requested_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  approved_by text REFERENCES users(user_id),
+  decided_at timestamptz,
+  consumed_at timestamptz,
+  FOREIGN KEY(org_id,room_id) REFERENCES rooms(org_id,room_id),
+  FOREIGN KEY(org_id,user_id) REFERENCES users(org_id,user_id),
+  FOREIGN KEY(org_id,device_id) REFERENCES devices(org_id,device_id),
+  FOREIGN KEY(org_id,agent_id) REFERENCES agents(org_id,agent_id),
+  FOREIGN KEY(room_id,slot,observed_generation) REFERENCES slot_generations(room_id,slot,generation),
+  CHECK(expires_at>requested_at AND expires_at<=requested_at+interval '10 minutes'),
+  CHECK(status NOT IN ('approved','denied','consumed') OR (approved_by IS NOT NULL AND decided_at IS NOT NULL)),
+  CHECK(status<>'consumed' OR consumed_at IS NOT NULL),
+  CHECK(consumed_at IS NULL OR (status='consumed' AND decided_at IS NOT NULL))
+);
+CREATE TRIGGER binding_requests_no_delete BEFORE DELETE ON binding_requests FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER binding_requests_identity_immutable BEFORE UPDATE ON binding_requests FOR EACH ROW EXECUTE FUNCTION control_guard_columns('binding_requests_identity_immutable','request_id','org_id','room_id','slot','observed_generation','replacement','agent_id','binding_id','grant_id','token_hash','proof_hash','park_enabled','user_id','device_id','family_id','restore_epoch','requested_at','expires_at');
+CREATE TRIGGER binding_requests_decision_once BEFORE UPDATE ON binding_requests FOR EACH ROW EXECUTE FUNCTION control_columns_once('approved_by','decided_at','consumed_at');
+CREATE TABLE binding_operations (
+  deployment_id text NOT NULL REFERENCES deployment(deployment_id),
+  room_id text NOT NULL REFERENCES rooms(room_id),
+  principal text NOT NULL REFERENCES users(user_id),
+  op_kind text NOT NULL CHECK(op_kind IN ('request','decide','complete','renew')),
+  identifier text NOT NULL CHECK(identifier<>''),
+  intent_hash bytea NOT NULL CHECK(octet_length(intent_hash)=32),
+  result_version integer NOT NULL CHECK(result_version=1),
+  result_encoding bytea NOT NULL CHECK(octet_length(result_encoding) BETWEEN 1 AND 262144),
+  result_hash bytea NOT NULL CHECK(octet_length(result_hash)=32),
+  result_seq bigint NOT NULL CHECK(result_seq>=0),
+  result_revision bigint NOT NULL CHECK(result_revision>=0),
+  accepted_at timestamptz NOT NULL,
+  PRIMARY KEY(deployment_id,room_id,principal,op_kind,identifier)
+);
+CREATE TRIGGER binding_operations_immutable BEFORE UPDATE OR DELETE ON binding_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+
+
+-- Startup recovery is keyed by ownership epoch, never by a guessed timestamp.
+-- A completed run cannot later reap claims created in the same incarnation.
+CREATE TABLE startup_room_recoveries (
+  ownership_epoch bigint NOT NULL CHECK(ownership_epoch>0),
+  room_id text NOT NULL REFERENCES rooms(room_id),
+  result_seq bigint NOT NULL CHECK(result_seq>=0),
+  result_revision bigint NOT NULL CHECK(result_revision>=0),
+  reaped_count bigint NOT NULL CHECK(reaped_count>=0),
+  recovered_at timestamptz NOT NULL,
+  PRIMARY KEY(ownership_epoch,room_id)
+);
+CREATE TABLE startup_recovery_runs (
+  ownership_epoch bigint PRIMARY KEY CHECK(ownership_epoch>0),
+  room_count bigint NOT NULL CHECK(room_count>=0),
+  reaped_count bigint NOT NULL CHECK(reaped_count>=0),
+  completed_at timestamptz NOT NULL
+);
+CREATE TRIGGER startup_room_recoveries_immutable BEFORE UPDATE OR DELETE ON startup_room_recoveries FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+CREATE TRIGGER startup_recovery_runs_immutable BEFORE UPDATE OR DELETE ON startup_recovery_runs FOR EACH ROW EXECUTE FUNCTION control_reject_change();
+
+-- Merge into schema.sql after control_guard_columns/control_reject_change exist.
+-- Defaults preserve pre-catalog primitive fixtures. A missing Project Owner
+-- never grants discovery or write access; production creates both explicitly.
+ALTER TABLE projects ADD COLUMN display_name text NOT NULL DEFAULT '' CHECK(octet_length(display_name)<=160);
+ALTER TABLE projects ADD COLUMN owner_user_id text;
+ALTER TABLE projects ADD COLUMN revision bigint NOT NULL DEFAULT 1 CHECK(revision>0);
+ALTER TABLE projects ADD CONSTRAINT projects_owner_fkey FOREIGN KEY(org_id,owner_user_id) REFERENCES users(org_id,user_id);
+ALTER TABLE rooms ADD COLUMN display_name text NOT NULL DEFAULT '' CHECK(octet_length(display_name)<=160);
+
+CREATE TABLE project_members (
+  project_id text NOT NULL,
+  org_id text NOT NULL REFERENCES configured_org(org_id),
+  user_id text NOT NULL,
+  role text NOT NULL CHECK(role IN ('owner','member')),
+  disabled boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(project_id,user_id),
+  FOREIGN KEY(org_id,project_id) REFERENCES projects(org_id,project_id),
+  FOREIGN KEY(org_id,user_id) REFERENCES users(org_id,user_id)
+);
+CREATE UNIQUE INDEX project_members_owner_key ON project_members(project_id) WHERE role='owner' AND NOT disabled;
+CREATE INDEX project_members_user_key ON project_members(user_id,project_id) WHERE NOT disabled;
+CREATE TRIGGER project_members_no_delete BEFORE DELETE ON project_members FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER project_members_identity_immutable BEFORE UPDATE ON project_members FOR EACH ROW EXECUTE FUNCTION control_guard_columns('project_members_identity_immutable','project_id','org_id','user_id','created_at');
+CREATE TRIGGER projects_no_delete BEFORE DELETE ON projects FOR EACH ROW EXECUTE FUNCTION control_reject_delete();
+CREATE TRIGGER projects_identity_immutable BEFORE UPDATE ON projects FOR EACH ROW EXECUTE FUNCTION control_guard_columns('projects_identity_immutable','project_id','org_id','owner_user_id','created_at');
+
+CREATE FUNCTION project_owner_record_consistency_check() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $fn$
+DECLARE
+  selected_project text := COALESCE(NEW.project_id, OLD.project_id);
+  selected_owner text;
+  matching bigint;
+  stray bigint;
+BEGIN
+  EXECUTE format('SELECT owner_user_id FROM %I.projects WHERE project_id=$1 FOR UPDATE', TG_TABLE_SCHEMA)
+    INTO selected_owner USING selected_project;
+  EXECUTE format('SELECT count(*) FILTER (WHERE user_id=$2 AND NOT disabled),count(*) FILTER (WHERE user_id IS DISTINCT FROM $2) FROM %I.project_members WHERE project_id=$1 AND role=''owner''', TG_TABLE_SCHEMA)
+    INTO matching,stray USING selected_project,selected_owner;
+  IF stray<>0 OR (selected_owner IS NOT NULL AND matching<>1) THEN
+    RAISE EXCEPTION USING ERRCODE='23514', CONSTRAINT='project_owner_record_consistency_check', MESSAGE='Project Owner and owner membership disagree';
+  END IF;
+  RETURN NULL;
+END
+$fn$;
+CREATE CONSTRAINT TRIGGER project_members_owner_record_check AFTER INSERT OR UPDATE OR DELETE ON project_members DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION project_owner_record_consistency_check();
+CREATE CONSTRAINT TRIGGER projects_owner_record_check AFTER INSERT OR UPDATE ON projects DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION project_owner_record_consistency_check();
+
+CREATE TABLE catalog_operations (
+  deployment_id text NOT NULL REFERENCES deployment(deployment_id),
+  principal text NOT NULL REFERENCES users(user_id),
+  op_kind text NOT NULL CHECK(op_kind IN ('project.create','project.rename','project.archive','project.restore','project.member.add','project.member.remove','room.rename','room.archive','room.restore','room.project','session.revoke','agent.retire')),
+  identifier text NOT NULL CHECK(identifier<>''),
+  intent_hash bytea NOT NULL CHECK(octet_length(intent_hash)=32),
+  result_version integer NOT NULL CHECK(result_version=1),
+  result_encoding bytea NOT NULL CHECK(octet_length(result_encoding)>0 AND octet_length(result_encoding)<=16384),
+  result_hash bytea NOT NULL CHECK(octet_length(result_hash)=32),
+  accepted_at timestamptz NOT NULL,
+  PRIMARY KEY(deployment_id,principal,op_kind,identifier)
+);
+CREATE TRIGGER catalog_operations_immutable BEFORE UPDATE OR DELETE ON catalog_operations FOR EACH ROW EXECUTE FUNCTION control_reject_change();

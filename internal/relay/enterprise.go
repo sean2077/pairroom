@@ -57,7 +57,9 @@ type EnterpriseAuth struct {
 	UserID     string
 	// SessionID is the enterprise application's authenticated session ID,
 	// never a vendor-native SessionID or a caller-supplied command field.
-	SessionID string
+	SessionID      string
+	DeviceGrantID  string
+	BindingGrantID string
 }
 
 // EnterpriseSendIntent is the typed stable intent of one human send.
@@ -259,6 +261,16 @@ func validateEnterpriseSnapshot(roomID, deploymentID string, snapshot Enterprise
 		if event.Kind == model.EnterpriseMembershipKind {
 			if _, err := model.DecodeEnterpriseMembershipChange(event); err != nil {
 				return fmt.Errorf("relay: enterprise membership history: %w", err)
+			}
+		}
+		if event.Kind == model.EnterpriseOwnershipKind {
+			if _, err := model.DecodeEnterpriseOwnershipChange(event); err != nil {
+				return fmt.Errorf("relay: enterprise ownership history: %w", err)
+			}
+		}
+		if event.Kind == model.EnterpriseRoomMetadataKind {
+			if _, err := model.DecodeEnterpriseRoomMetadata(event); err != nil {
+				return fmt.Errorf("relay: enterprise Room metadata: %w", err)
 			}
 		}
 	}

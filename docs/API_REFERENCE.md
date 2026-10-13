@@ -162,6 +162,27 @@ For `grok.permission` and `gemini.permission`, use the advertised native `detail
 
 PairRoom passes that exact, unique `optionId` to ACP. `cancel` returns ACP's cancelled outcome, not a remembered rejection. Legacy `accept` selects an unambiguous `allow_once`; `acceptForSession` selects an unambiguous native `allow_always`, whose scope is defined by the selected Runtime. Neither grants a different scope if that kind is unavailable. Legacy `decline` selects `reject_once` or cancels if no unique one-time rejection exists. Invalid grant/option choices leave the approval pending. The Grok-specific `grok.planExit` accepts only `accept`, `decline`, or `cancel`; Gemini does not expose that extension.
 
+## Enterprise candidate API
+
+The enterprise candidate uses a separate canonical HTTPS origin and explicit PostgreSQL deployment. The generated route inventory below describes the existing Local/Embedded listeners; it is not an enterprise authorization map. Enterprise browser requests use deployment-scoped Secure/HttpOnly cookies and same-origin CSRF for writes. Native requests use `X-PairRoom-Deployment` plus the exact credential class required by that route, and reject browser cookies/Origin. Neither namespace exposes Local Management, filesystem registration, vendor sessions or process controls.
+
+| Family | Entry and authority |
+|---|---|
+| Browser identity | `/enterprise/auth/login`, `/enterprise/auth/callback`, and `/enterprise/api/v1/session`; a completed verified identity is admitted and persisted before cookie issuance |
+| Device enrollment | `/enterprise/device/v1/enrollments` and its completion; original endpoint proof plus explicit browser decision at `/enterprise/api/v1/device-enrollments/{request}/decision` |
+| Device credentials | `/enterprise/device/v1/credentials/rotate` or `/recover`; exact current refresh or bounded predecessor recovery, never a browser session or Binding grant |
+| Agent registration | `/enterprise/device/v1/agents`; current Device access, opaque endpoint-owned source identity, actual Runtime |
+| Binding admission | `/enterprise/device/v1/rooms/{room}/binding-requests` and request completion/resolution; current Device and exact original request. Browser decisions require the current live Room Owner |
+| Binding renewal | `/enterprise/device/v1/rooms/{room}/bindings/{binding}/renew` and `/resolve-renewal`; current Device, exact User/Device/Agent/Binding/generation, with no replacement effect |
+| Native Relay | `/enterprise/device/v1/rooms/{room}/relay`, `/relay/resolve`, `/relay/context`; current narrow Binding credential for the exact Room/generation. Context is read-only and body-free |
+| Browser Room writes | `/enterprise/api/v1/rooms`, `/rooms/{room}/messages`, `/memberships`, `/ownership` and corresponding explicit resolution routes; live Room authority inside each transaction |
+| Browser queue | `/enterprise/api/v1/rooms/{room}/queue` and `/resolve-queue`; `{client_id,expected_revision,intent:{kind:"retry" or "cancel",message_id}}`, current Owner only, no automatic retry of uncertainty |
+| Catalog | `/enterprise/api/v1/catalog/{resource}` for rooms, room, projects, room-members, project-members, devices, agents and sessions; current filtered resource access, keyset `after` and bounded `limit`. Catalog mutations use `/catalog/commands` and `/catalog/resolve` |
+
+Browser responses expose public projections or closed operation metadata, never raw stored facts, grant hashes, private claim receipts or original native session/workspace identity. Authenticated browser responses carry nonsecret `X-PairRoom-User` and `X-PairRoom-Session` scope markers so delayed replies cannot be displayed in another authenticated session; these markers do not authorize a request. Device preflight `/enterprise/device/v1/deployment` is unauthenticated and must match the selected origin/deployment before credentials are sent. Redirects never migrate credentials.
+
+Every protected entry repeats current authority under the database ownership fence. An accepted operation can be resolved by its original key and intent only while the caller still has current read authority. `unknown` is not permission to repeat the effect. Room archive preserves authorized history, accepted results and original delivery settlement while refusing new work. Logical Project membership and Room membership are independent. Restricted governance uses fresh, action-bound OIDC reauthentication and grants no administrator Room content access. See [enterprise decisions and acceptance scope](design/enterprise-service.md#14-device-binding-and-startup-decisions-2026-10-13).
+
 ## Current source route inventory
 
 The following method/path patterns are extracted from production HTTP registrations in `internal/server/` and `internal/service/`, including named constants. Test URLs, query examples, and rejected path-traversal inputs are not API routes. Patterns without a method are the same-origin surface gateway; their allowed operations are enforced by its handler.

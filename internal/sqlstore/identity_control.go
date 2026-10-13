@@ -44,6 +44,7 @@ type controlMutation struct {
 	connectionID, issuer string
 	expectedOrgID        string
 	identity             *enterpriseauth.VerifiedIdentity
+	device               *deviceMutation
 }
 
 type controlDependencies struct {
@@ -60,6 +61,8 @@ type controlDependencies struct {
 	targetMissing, targetDisabled, targetAdmin bool
 	credential                                 sessionDependency
 	candidate                                  sessionDependency
+	device                                     deviceDependencies
+	revocationDigest                           [32]byte
 }
 
 func equalControlDependencies(a, b *controlDependencies) bool {
@@ -269,6 +272,9 @@ func (s *Store) readControlDependencies(ctx context.Context, q rowQuerier, plan 
 	if err := q.QueryRow(ctx, `SELECT d.org_id,o.disabled FROM `+s.table("deployment")+` d JOIN `+s.table("organizations")+` o USING(org_id) WHERE d.deployment_id=$1`, s.cfg.DeploymentID).Scan(&d.orgID, &d.orgDisabled); err != nil {
 		return nil, err
 	}
+	if plan.control.device != nil {
+		return s.readDeviceControlDependencies(ctx, q, plan, lock, d)
+	}
 	if plan.control.kind == controlReadiness {
 		if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+s.table("trust_connections")+` WHERE connection_id=$1 AND issuer=$2)`, plan.control.connectionID, plan.control.issuer).Scan(&d.connectionKnown); err != nil {
 			return nil, err
@@ -384,6 +390,12 @@ func (s *Store) readControlDependencies(ctx context.Context, q rowQuerier, plan 
 			return nil, err
 		}
 	}
+	if plan.control.kind == controlUserStatus && !plan.control.enabled {
+		d.revocationDigest, err = s.readAuthorityRevocation(ctx, q, authorityRevocationScope{UserID: plan.control.targetUser}, lock)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if lock != "" && !d.missing {
 		stateLock := lockExclusive
 		if plan.control.kind == controlAuthenticate || plan.control.kind == controlReadiness {
@@ -399,6 +411,12 @@ func (s *Store) readControlDependencies(ctx context.Context, q rowQuerier, plan 
 }
 
 func (s *Store) controlReadAllowed(plan opPlan, d *controlDependencies) bool {
+	if plan.control.device != nil {
+		return s.deviceReadAllowed(plan, d)
+	}
+	if plan.auth.DeviceGrantID != "" || plan.auth.BindingGrantID != "" {
+		return false
+	}
 	switch plan.control.kind {
 	case controlConfigure:
 		return true
@@ -457,6 +475,9 @@ func (s *Store) resolveControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, 
 	if !s.controlReadAllowed(plan, d) {
 		return refused(ClassAuthorization, nil)
 	}
+	if plan.control.device != nil {
+		return s.resolveDeviceControl(ctx, tx, plan, d)
+	}
 	if plan.control.kind == controlReadiness {
 		return Result{Outcome: OutcomeReplayed}, nil
 	}
@@ -486,6 +507,9 @@ func (s *Store) resolveControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, 
 func (s *Store) applyControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d *controlDependencies) (Result, error) {
 	if !s.controlReadAllowed(plan, d) {
 		return refused(ClassAuthorization, nil)
+	}
+	if plan.control.device != nil {
+		return s.applyDeviceControl(ctx, tx, plan, d)
 	}
 	result, found, err := s.lookupControl(ctx, tx, plan)
 	if err != nil {
@@ -568,7 +592,7 @@ func (s *Store) applyControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 				return controlStatementFailure(s, ctx, err)
 			}
 			if remaining == 0 {
-				return refused("last_administrator", nil)
+				return refused(ClassLastAdministrator, nil)
 			}
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("identity_admissions")+`(connection_id,issuer,subject,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(connection_id,issuer,subject) DO UPDATE SET enabled=EXCLUDED.enabled`, identity.ConnectionID, identity.Issuer, identity.Subject, plan.control.enabled); err != nil {
@@ -586,15 +610,20 @@ func (s *Store) applyControlPlan(ctx context.Context, tx pgx.Tx, plan opPlan, d 
 				return controlStatementFailure(s, ctx, err)
 			}
 			if admins == 0 {
-				return refused("last_administrator", nil)
+				return refused(ClassLastAdministrator, nil)
 			}
 		}
-		var active bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+s.table("bindings")+` b JOIN `+s.table("agents")+` a USING(agent_id) JOIN `+s.table("devices")+` d USING(device_id) WHERE d.user_id=$1 AND b.retired_at IS NULL)`, plan.control.targetUser).Scan(&active); err != nil {
-			return controlStatementFailure(s, ctx, err)
-		}
-		if active {
-			return refused(ClassUnsupportedControlState, nil)
+		if plan.control.kind == controlUserStatus && !plan.control.enabled {
+			scope := authorityRevocationScope{UserID: plan.control.targetUser}
+			if err := s.retireAuthorityBindings(ctx, tx, scope, actor); err != nil {
+				if isStoredFactCorruption(err) {
+					return refused(ClassStoredFactUnreadable, err)
+				}
+				return controlStatementFailure(s, ctx, err)
+			}
+			if err := s.revokeNativeCredentials(ctx, tx, scope); err != nil {
+				return controlStatementFailure(s, ctx, err)
+			}
 		}
 		if plan.control.kind == controlUserStatus {
 			if _, err := tx.Exec(ctx, `UPDATE `+s.table("users")+` SET disabled=$2 WHERE user_id=$1`, plan.control.targetUser, !plan.control.enabled); err != nil {
@@ -681,6 +710,9 @@ func (s *Store) appendControlResult(ctx context.Context, tx pgx.Tx, plan opPlan,
 	if actor == "" {
 		actorValue = nil
 		actorKind = "operator"
+		if plan.control.device != nil {
+			actorKind = "client"
+		}
 	}
 	now := time.Now().UTC()
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("control_events")+`(seq,event_id,codec_version,kind,actor_user_id,receipt_encoding,created_at) VALUES($1,$2,1,$3,$4,$5,$6)`, int64(receipt.Seq), id, receipt.Kind, actorValue, encoding, now); err != nil {

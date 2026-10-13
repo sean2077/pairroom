@@ -14,6 +14,9 @@ import (
 // Call only after matching the exact native caller; this reads local authority
 // without opening a network connection, repairing state, or consuming receipts.
 func currentDirectBinding(s State) (bool, error) {
+	if validEnterpriseRoute(s) {
+		return true, nil
+	}
 	if s.Schema == 2 && s.LAN == nil {
 		return true, nil
 	}

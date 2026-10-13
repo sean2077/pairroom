@@ -55,6 +55,9 @@ func (s *Store) ResolveRoomMembership(ctx context.Context, auth AuthContext, roo
 }
 
 func (s *Store) roomMembershipPlan(cmd RoomMembershipCommand) (opPlan, string) {
+	if cmd.Auth.DeviceGrantID != "" || cmd.Auth.BindingGrantID != "" {
+		return opPlan{}, ClassAuthorization
+	}
 	if cmd.Auth.Deployment != s.cfg.DeploymentID || !validRoomCreateIdentity(cmd.Auth.Deployment) || !validRoomCreateIdentity(cmd.Auth.UserID) || !validRoomCreateIdentity(cmd.RoomID) || !validRoomCreateIdentity(cmd.ClientID) || cmd.ExpectedRevision > math.MaxInt64 {
 		return opPlan{}, ClassInvalidRequest
 	}
@@ -89,6 +92,7 @@ type membershipTargetState struct {
 	userMissing, userDisabled     bool
 	memberMissing, memberDisabled bool
 	memberRole                    string
+	authorityDigest               [32]byte
 }
 
 // readPlanDependencies preserves the original operation path, and expands a
@@ -96,6 +100,26 @@ type membershipTargetState struct {
 // independently, and the target membership takes UPDATE from the outset;
 // there is no later lock upgrade, including when actor and target coincide.
 func (s *Store) readPlanDependencies(ctx context.Context, q rowQuerier, plan opPlan, d *dependencyState, lock string) error {
+	if plan.catalog != nil {
+		var err error
+		d.catalog, err = s.readCatalogDependencies(ctx, q, plan, lock)
+		return err
+	}
+	if plan.recovery != nil {
+		var err error
+		d.recovery, err = s.readRecoveryDependencies(ctx, q, plan, lock)
+		return err
+	}
+	if plan.binding != nil {
+		var err error
+		d.binding, err = s.readBindingDependencies(ctx, q, plan, lock)
+		return err
+	}
+	if plan.governance != nil {
+		var err error
+		d.governance, err = s.readGovernanceDependencies(ctx, q, plan, lock)
+		return err
+	}
 	if plan.control != nil {
 		var err error
 		d.control, err = s.readControlDependencies(ctx, q, plan, lock)
@@ -150,7 +174,17 @@ func (s *Store) readPlanDependencies(ctx context.Context, q rowQuerier, plan opP
 			d.target.memberRole, d.target.memberMissing, d.target.memberDisabled = role, missing, disabled
 		}
 	}
+	if membershipRevokes(*plan.roomMembership) {
+		d.target.authorityDigest, err = s.readAuthorityRevocation(ctx, q, authorityRevocationScope{UserID: targetID, RoomID: plan.key.RoomID}, lock)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func membershipRevokes(intent RoomMembershipIntent) bool {
+	return intent.Action == MembershipRemove || intent.Role == RoomViewer
 }
 
 // prepareMembership performs the operation-specific state checks after live
@@ -173,21 +207,6 @@ func (s *Store) prepareMembership(ctx context.Context, tx pgx.Tx, plan opPlan, l
 	case MembershipRemove:
 		if locked.target.memberMissing || locked.target.memberDisabled {
 			return model.Event{}, ClassInvalidControlState, nil
-		}
-	}
-	if intent.Action == MembershipRemove || intent.Role == RoomViewer {
-		// Until the full Binding/grant retirement plan is available, refuse
-		// removal or viewer admission/demotion with an active Binding rather
-		// than preserving a grant that a later promotion could revive.
-		// The exclusive ownership guard excludes managed Binding mutations
-		// throughout this read and commit. Scope is strictly this Room; the
-		// same User's Bindings in other Rooms are unaffected.
-		var active bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.table("bindings")+` b JOIN `+s.table("agents")+` a ON a.agent_id = b.agent_id JOIN `+s.table("devices")+` d ON d.device_id = a.device_id WHERE b.room_id = $1 AND d.user_id = $2 AND b.retired_at IS NULL)`, plan.key.RoomID, intent.TargetUserID).Scan(&active); err != nil {
-			return model.Event{}, "", err
-		}
-		if active {
-			return model.Event{}, ClassUnsupportedControlState, nil
 		}
 	}
 	if locked.currentSeq < 1 {

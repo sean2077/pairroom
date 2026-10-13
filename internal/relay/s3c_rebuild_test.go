@@ -442,10 +442,10 @@ func storedFactMessage(t *testing.T, admin *pgx.Conn, room string, seq int64) (s
 	t.Helper()
 	var id, createdText, text, to string
 	err := admin.QueryRow(context.Background(), `
-		SELECT convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'id',
-		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'created_at',
-		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'text',
-		       convert_from(event_encoding, 'UTF8')::jsonb -> 'data' ->> 'to'
+		SELECT convert_from(event_encoding, 'UTF8')::jsonb -> 'event' -> 'data' ->> 'id',
+		       convert_from(event_encoding, 'UTF8')::jsonb -> 'event' -> 'data' ->> 'created_at',
+		       convert_from(event_encoding, 'UTF8')::jsonb -> 'event' -> 'data' ->> 'text',
+		       convert_from(event_encoding, 'UTF8')::jsonb -> 'event' -> 'data' ->> 'to'
 		FROM room_events WHERE room_id = $1 AND seq = $2`, room, seq).Scan(&id, &createdText, &text, &to)
 	if err != nil {
 		t.Fatal(err)

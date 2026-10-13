@@ -23,4 +23,24 @@ input { flex: 1; min-width: 160px; font: inherit; padding: 11px; border: 1px sol
 .message-label { color: #68806e; font-size: 12px; }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 [hidden] { display: none !important; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+.tabs button { flex: 1; white-space: nowrap; background: #e6efe8; }
+.cards { list-style: none; padding: 0; display: grid; gap: 12px; }
+.cards > li { border: 1px solid #e2e8df; border-radius: 10px; padding: 14px; overflow-wrap: anywhere; }
+.cards > li p { margin: 8px 0; }
+.cards > li button { margin-right: 8px; }
+details { margin: 20px 0; padding-top: 18px; border-top: 1px solid #e3e9e1; }
+summary { cursor: pointer; font-weight: 650; margin-bottom: 18px; }
+form { margin: 18px 0; }
+form > label { margin-top: 14px; }
+form > button { margin-top: 14px; }
+textarea, select { font: inherit; padding: 10px; border: 1px solid #c7d5cb; border-radius: 8px; background: #fff; color: inherit; max-width: 100%; }
+textarea { display: block; width: 100%; resize: vertical; }
+.muted, .empty { color: #68766c; font-size: 13px; line-height: 1.55; }
+#pending { border-color: #bd9856; background: #fffaf0; }
+#room-identity { font-family: ui-monospace, monospace; font-size: 12px; color: #68766c; overflow-wrap: anywhere; }
+#slots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#room-members, #project-members, #binding-requests { padding-left: 20px; }
+#room-members li, #project-members li { margin: 10px 0; }
+#room-members button, #project-members button { margin-left: 8px; padding: 5px 9px; }
 @media (max-width: 640px) { main { margin-top: 28px; } .account { align-items: flex-start; flex-direction: column; } section { padding: 20px; } }

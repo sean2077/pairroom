@@ -51,16 +51,22 @@ type IdentityConfig struct {
 // operation. It is not a Room fact and never contains application credentials,
 // CSRF verifiers, upstream tokens, Room contents or arbitrary caller detail.
 type ControlReceipt struct {
-	Version       int       `json:"version"`
-	Kind          string    `json:"kind"`
-	Seq           uint64    `json:"seq"`
-	UserID        string    `json:"user_id,omitempty"`
-	SessionID     string    `json:"session_id,omitempty"`
-	ExpiresAt     time.Time `json:"expires_at,omitempty"`
-	Administrator bool      `json:"administrator,omitempty"`
-	TargetUserID  string    `json:"target_user_id,omitempty"`
-	Enabled       bool      `json:"enabled,omitempty"`
-	IdentityHash  string    `json:"identity_hash,omitempty"`
+	Version          int       `json:"version"`
+	Kind             string    `json:"kind"`
+	Seq              uint64    `json:"seq"`
+	UserID           string    `json:"user_id,omitempty"`
+	SessionID        string    `json:"session_id,omitempty"`
+	ExpiresAt        time.Time `json:"expires_at,omitempty"`
+	Administrator    bool      `json:"administrator,omitempty"`
+	TargetUserID     string    `json:"target_user_id,omitempty"`
+	Enabled          bool      `json:"enabled,omitempty"`
+	IdentityHash     string    `json:"identity_hash,omitempty"`
+	RequestID        string    `json:"request_id,omitempty"`
+	DeviceID         string    `json:"device_id,omitempty"`
+	AgentID          string    `json:"agent_id,omitempty"`
+	GrantID          string    `json:"grant_id,omitempty"`
+	Status           string    `json:"status,omitempty"`
+	RefreshExpiresAt time.Time `json:"refresh_expires_at,omitzero"`
 }
 
 // RequiresSessionAuth lets a public adapter reject a Store configured only

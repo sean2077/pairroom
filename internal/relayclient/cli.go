@@ -29,24 +29,26 @@ import (
 )
 
 type options struct {
-	review                                         bool
-	reviewRepo, reviewBase                         string
-	repo, room, slot, kind, endpoint, text, id, to string
-	name, peer, share, invitation, receipt         string
-	textFile, outputFile                           string
-	cursor, since                                  string
-	limit                                          int
-	pending                                        bool
-	references                                     stringsFlag
-	replace, purge, enabled, discard, resend       bool
-	localOnly                                      bool
-	joinCheck                                      bool
-	create, brief                                  bool
-	repoExplicit                                   bool
-	timeout                                        int
-	inlineMax                                      int
-	peerGeneration                                 uint64
-	attachments, files                             stringsFlag
+	review                                                                    bool
+	reviewRepo, reviewBase                                                    string
+	repo, room, slot, kind, endpoint, text, id, to                            string
+	name, peer, share, invitation, receipt                                    string
+	textFile, outputFile                                                      string
+	cursor, since                                                             string
+	limit                                                                     int
+	pending                                                                   bool
+	references                                                                stringsFlag
+	replace, purge, enabled, discard, resend                                  bool
+	localOnly                                                                 bool
+	joinCheck                                                                 bool
+	create, brief                                                             bool
+	repoExplicit                                                              bool
+	timeout                                                                   int
+	inlineMax                                                                 int
+	peerGeneration                                                            uint64
+	enterpriseOrigin, enterpriseDeployment, enterpriseCA, enterpriseDirectory string
+	renewCredential, ackDelivery                                              bool
+	attachments, files                                                        stringsFlag
 }
 type stringsFlag []string
 
@@ -103,6 +105,12 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex, grok or gemini; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
+	flags.StringVar(&o.enterpriseOrigin, "enterprise-service", "", "bind: exact HTTPS enterprise origin from Device login")
+	flags.StringVar(&o.enterpriseDeployment, "deployment", "", "bind: expected enterprise deployment ID")
+	flags.StringVar(&o.enterpriseCA, "enterprise-ca", "", "bind: original optional enterprise CA file")
+	flags.StringVar(&o.enterpriseDirectory, "enterprise-state-dir", "", "bind: original owner-private enterprise Device state directory")
+	flags.BoolVar(&o.renewCredential, "renew-credential", false, "bind: explicitly renew the existing enterprise Binding credential")
+	flags.BoolVar(&o.ackDelivery, "ack-delivery", false, "reconcile: explicitly resend only the saved ACK after prior stdout and a proven absent ACK operation")
 	flags.BoolVar(&o.joinCheck, "join", false, "preflight: check readiness to join a LAN Room without a local Service")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin unless --text-file or --ref is used")
 	flags.StringVar(&o.textFile, "text-file", "", "send/exchange: read UTF-8 body from a file, or - for stdin")
@@ -161,6 +169,21 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if (o.enterpriseOrigin == "") != (o.enterpriseDeployment == "") {
+		return errors.New("enterprise selection requires both --enterprise-service and --deployment")
+	}
+	if o.enterpriseOrigin != "" && (o.endpoint != "" || o.create || o.share != "" || action == "join") {
+		return errors.New("enterprise binding requires an existing Room and its explicit HTTPS deployment")
+	}
+	if (o.enterpriseCA != "" || o.enterpriseDirectory != "") && o.enterpriseOrigin == "" {
+		return errors.New("enterprise trust/state selectors require --enterprise-service and --deployment")
+	}
+	if o.renewCredential && (action != "bind" || o.replace) {
+		return errors.New("--renew-credential applies only to bind without --replace")
+	}
+	if o.ackDelivery && action != "reconcile" {
+		return errors.New("--ack-delivery applies only to explicit reconcile")
+	}
 	if provided["join"] && action != "preflight" {
 		return errors.New("--join applies only to preflight")
 	}
@@ -326,6 +349,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if action == "unbind" && o.localOnly {
 		// Offline path: never reads the endpoint file, so a stopped or
 		// unreachable Service cannot block local cleanup.
+		if strings.HasPrefix(o.room, "ent_") {
+			return unbindEnterpriseLocalOnly(ctx, root, dir, out)
+		}
 		return unbindLocalOnly(ctx, root, dir, o, out)
 	}
 	release, err := lockSlot(ctx, dir)
@@ -339,7 +365,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	defer c.close()
 	noteServiceEndpoint(ctx, c.State.EndpointPath)
-	if c.State.LAN != nil {
+	if c.State.LAN != nil || c.State.Enterprise != nil {
 		noteLANTransport(ctx)
 	}
 	if err := validateCommandCaller(c); err != nil {
@@ -366,6 +392,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 	}
 	release()
+	var enterpriseRecovery any
+	if action == "reconcile" && c.State.Enterprise != nil {
+		var recoverErr error
+		enterpriseRecovery, recoverErr = reconcileEnterpriseTransport(ctx, c, o.ackDelivery)
+		if recoverErr != nil {
+			return recoverErr
+		}
+	} else if o.ackDelivery {
+		return errors.New("--ack-delivery requires an enterprise Binding")
+	}
 	if action == "wait" || action == "exchange" {
 		releaseCollector, err := acquireCollector(ctx, dir)
 		if err != nil {
@@ -408,6 +444,22 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			to = model.ActorUser
 		}
 		expectedPeerGeneration, err := c.publicationPeerGeneration(o.peerGeneration)
+		if c.Enterprise != nil {
+			if len(o.attachments) > 0 || len(o.files) > 0 || o.review {
+				return errors.New("enterprise Native text relay does not yet accept uploads or review attachments")
+			}
+			original, found, lookupErr := c.Enterprise.PendingSend(ctx, c.localAuth(), o.id)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if found {
+				if original.Text != text || original.To != to || o.peerGeneration != 0 && original.ExpectedPeerGeneration != o.peerGeneration {
+					return errors.New("saved enterprise send differs from this command; keep its original ID, body, target and peer generation")
+				}
+				expectedPeerGeneration, err = original.ExpectedPeerGeneration, nil
+				o.peerGeneration = original.ExpectedPeerGeneration
+			}
+		}
 		if to == model.ActorUser {
 			if o.peerGeneration != 0 {
 				return errors.New("--peer-generation cannot target @user")
@@ -592,6 +644,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			local["held_publications"] = len(c.State.Held)
 		}
 		result := map[string]any{"local": local, "relay": status}
+		if enterpriseRecovery != nil {
+			result["transport_recovery"] = enterpriseRecovery
+		}
 		if o.brief {
 			if summary, ok := status.(*relay.Summary); ok {
 				result["presence"] = presenceLine(summary, c.State.Slot, time.Now())

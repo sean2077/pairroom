@@ -431,11 +431,14 @@ func TestEnterpriseLocalSQLFactParity(t *testing.T) {
 	if err := admin.QueryRow(context.Background(), `SELECT event_encoding FROM room_events WHERE room_id = 'room-1' AND seq = 2`).Scan(&encoding); err != nil {
 		t.Fatal(err)
 	}
-	var sqlFact model.Event
-	if err := json.Unmarshal(encoding, &sqlFact); err != nil {
+	var record struct {
+		Event model.Event `json:"event"`
+	}
+	if err := json.Unmarshal(encoding, &record); err != nil {
 		t.Fatal(err)
 	}
 
+	sqlFact := record.Event
 	normalize := func(event model.Event) map[string]any {
 		var payload map[string]any
 		if err := json.Unmarshal(event.Data, &payload); err != nil {

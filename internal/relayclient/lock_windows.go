@@ -19,7 +19,7 @@ import (
 // A named, process-owned kernel mutex has no filesystem footprint and remains
 // stable when credentials/state are atomically replaced. Abandoned is acquired.
 func lockSlot(ctx context.Context, dir string) (func(), error) {
-	if directLANLockDirectory(dir) {
+	if directLANLockDirectory(dir) || enterprisePrivateStatePath(dir) {
 		if err := privatefile.CheckDirectory(dir); err != nil {
 			return nil, err
 		}
@@ -81,7 +81,7 @@ func directLANLockDirectory(dir string) bool {
 // must remain retirable; concurrent normal users of the directory hold the same
 // lock, so exclusion is unchanged.
 func lockSlotRecovery(ctx context.Context, dir string) (func(), error) {
-	if directLANLockDirectory(dir) {
+	if directLANLockDirectory(dir) || enterprisePrivateStatePath(dir) {
 		return privatelock.Lock(ctx, dir)
 	}
 	return lockSlot(ctx, dir)

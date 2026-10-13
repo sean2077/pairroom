@@ -94,7 +94,14 @@ func makeHTTPPolicy(cfg Config) (httpPolicy, error) {
 }
 
 func (p httpPolicy) accepts(r *http.Request) bool {
-	if r.Host != p.host || r.URL.User != nil || r.URL.Fragment != "" || r.URL.RawPath != "" || len(r.URL.RawQuery) > 16<<10 || r.Header.Get("Authorization") != "" {
+	return len(r.Header.Values("Authorization")) == 0 && p.acceptsTransport(r)
+}
+
+// acceptsTransport validates only the operator-pinned origin and TLS path.
+// Browser cookies and native credentials retain separate route-specific
+// authentication policies; passing this check never grants either authority.
+func (p httpPolicy) acceptsTransport(r *http.Request) bool {
+	if r.Host != p.host || r.URL.User != nil || r.URL.Fragment != "" || r.URL.RawPath != "" || len(r.URL.RawQuery) > 16<<10 {
 		return false
 	}
 	if r.URL.Host != "" && r.URL.Host != p.host {
@@ -168,14 +175,18 @@ func clearCookie(w http.ResponseWriter, name string, httpOnly bool) {
 }
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
+	return decodeRequestLimit(w, r, target, maxRequestBytes)
+}
+
+func decodeRequestLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) bool {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		return false
 	}
-	if r.ContentLength > maxRequestBytes {
+	if r.ContentLength > limit {
 		return false
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil || !utf8.Valid(body) || !uniqueJSONKeys(body) {
 		return false
 	}

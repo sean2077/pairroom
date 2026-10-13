@@ -256,13 +256,29 @@ func (e *Engine) apply(ev model.Event) error {
 	if e.enterprise && (ev.Kind == EventBinding || ev.Kind == EventLANInvite || ev.Kind == EventLANJoin || ev.Kind == EventLANMember) {
 		return errors.New("enterprise Room cannot replay Local or LAN binding authority")
 	}
-	if !e.enterprise && ev.Kind == model.EnterpriseBindingUpdatedKind {
-		return errors.New("local or LAN Room cannot replay enterprise Binding authority")
+	if !e.enterprise && (ev.Kind == model.EnterpriseBindingUpdatedKind || ev.Kind == model.EnterpriseMembershipKind || ev.Kind == model.EnterpriseOwnershipKind || ev.Kind == model.EnterpriseRoomMetadataKind) {
+		return errors.New("local or LAN Room cannot replay enterprise authority history")
 	}
 	e.sequence = ev.Seq
 	e.initIndexes()
 	detail := ""
 	switch ev.Kind {
+	case model.EnterpriseRoomMetadataKind:
+		// The catalog owns current metadata and access. Replaying a rename,
+		// archive or Project association cannot change a Binding or ACL.
+		if _, err := model.DecodeEnterpriseRoomMetadata(ev); err != nil {
+			return err
+		}
+	case model.EnterpriseMembershipKind:
+		if _, err := model.DecodeEnterpriseMembershipChange(ev); err != nil {
+			return err
+		}
+	case model.EnterpriseOwnershipKind:
+		// These facts describe history only. Live SQL rows, never replay,
+		// authorize membership and ownership.
+		if _, err := model.DecodeEnterpriseOwnershipChange(ev); err != nil {
+			return err
+		}
 	case model.EnterpriseBindingUpdatedKind:
 		if err := e.applyEnterpriseBinding(ev); err != nil {
 			return err
@@ -754,12 +770,7 @@ func (e *Engine) Unbind(slot model.ActorID) error {
 	if !ok || !b.Active {
 		return nil
 	}
-	b.Active = false
-	b.CredentialHash = ""
-	b.SessionID = ""
-	b.TranscriptPath = ""
-	b.LastActivity = e.cfg.Now()
-	return e.commitBinding(b)
+	return e.commitBinding(planLocalRetirement(b, e.cfg.Now()))
 }
 func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 	if err := e.requireLocalMutation(); err != nil {
@@ -780,10 +791,10 @@ func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 	if !ok || !b.Active {
 		return ErrAuth
 	}
-	if b.ParkEnabled == enabled {
+	b, changed := planParkBinding(b, enabled)
+	if !changed {
 		return nil
 	}
-	b.ParkEnabled = enabled
 	// A park toggle changes no identity: append its binding fact directly so it
 	// cannot run the Registry CommitBinding checkpoint, whose write failure
 	// would poison the whole Registry fail-closed until restart.
@@ -817,18 +828,7 @@ func (e *Engine) generation(slot model.ActorID) uint64 {
 }
 func (e *Engine) makeMessage(from, to model.ActorID, text, source string) Message {
 	now := e.cfg.Now()
-	state := "queued"
-	var generation uint64
-	if to == model.ActorUser {
-		state = "human"
-	} else {
-		generation = e.generation(to)
-	}
-	m := Message{ID: model.NewID("relay"), From: from, To: to, Text: text, State: state, TargetGeneration: generation, CreatedAt: now, UpdatedAt: now, Source: source}
-	if e.cfg.DynamicBindings && from.ValidParticipant() {
-		m.FromRuntime, m.FromGeneration = e.bindings[from].Runtime, e.bindings[from].Generation
-	}
-	return m
+	return planMessage(e.messagePlanSource(from, to), model.NewID("relay"), now, text, source)
 }
 func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration ...uint64) (Publication, error) {
 	if err := e.requireLocalMutation(); err != nil {
@@ -850,54 +850,18 @@ func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration 
 		e.noteLANActivityLocked(a)
 		return clonePublication(existing), nil
 	}
-	// An already accepted report is recovered by its own receipt above, so this
-	// guard never blocks idempotent recovery. A new report must name at most one
-	// expected peer generation: any other arity would be silently treated as "no
-	// expectation" and terminate as peer_changed without reaching a peer.
-	if len(expectedPeerGeneration) > 1 {
-		return Publication{}, errors.New("report accepts at most one expected peer generation")
+	decision, err := decidePublication(e.publicationPlanState(a.Slot), seq, text, expectedPeerGeneration)
+	if err != nil {
+		return Publication{}, err
 	}
-	last := e.lastReport[bindingKey(a.BindID, a.Generation)]
-	if seq <= last {
-		return Publication{}, errors.New("report_seq regressed; reconcile the original publication")
-	}
-	p := Publication{BindID: a.BindID, Generation: a.Generation, ReportSeq: seq}
-	parsed := prompt.ParseMentions(text, a.Slot, e.cfg.Runtimes)
-	if e.cfg.DynamicBindings {
-		if len(expectedPeerGeneration) == 1 {
-			p.ExpectedPeerGeneration = expectedPeerGeneration[0]
-		}
-		parsed = prompt.ParseNativeMentions(text, a.Slot)
-	}
-	var to model.ActorID
-	if len(parsed.Targets) > 0 {
-		to = model.OtherParticipant(a.Slot)
-	} else if parsed.Human {
-		to = model.ActorUser
-	}
-	if to != "" {
-		if e.cfg.DynamicBindings && to.ValidParticipant() {
-			if p.ExpectedPeerGeneration == 0 || p.ExpectedPeerGeneration != e.generation(to) {
-				p.Outcome = PeerChangedCode
-			}
-		}
-		if p.Outcome == "" {
-			m := e.makeMessage(a.Slot, to, text, "stop")
-			if e.cfg.DynamicBindings && to.ValidParticipant() {
-				m.TargetGeneration = p.ExpectedPeerGeneration
-			}
-			p.Message = &m
-		}
-	}
-	kind := EventPublication
-	if seq > last+1 {
-		p.GapFrom = last + 1
-		p.GapTo = seq - 1
-		kind = EventPublicationGap
+	p := decision.publication
+	if decision.to != "" && p.Outcome == "" {
+		m := e.makeMessage(a.Slot, decision.to, text, "stop")
+		p.Message = &m
 	}
 	// Acceptance and optional enqueue share one durable append. A non-routed
 	// boundary records only its idempotency receipt, never the private reply.
-	if err := e.append(kind, a.Slot, p); err != nil {
+	if err := e.append(decision.kind, a.Slot, p); err != nil {
 		return Publication{}, err
 	}
 	e.noteLANActivityLocked(a)
@@ -1183,13 +1147,12 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			return nil, err
 		}
 		busy := e.counts[a.Slot].Delivering > 0
-		var next *Message
+		var head *Message
 		if ids := e.queued[a.Slot]; len(ids) > 0 {
 			m := e.messages[ids[0]]
-			if m.TargetGeneration == a.Generation {
-				next = &m
-			}
+			head = &m
 		}
+		next := selectClaimMessage(head, busy, a.Generation)
 		if !busy && next != nil {
 			envelope, err := e.envelope(*next)
 			if err != nil {
@@ -1205,11 +1168,8 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 				e.mu.Unlock()
 				return nil, err
 			}
-			next.State = "delivering"
-			next.ClaimedAt = e.cfg.Now()
-			next.UpdatedAt = next.ClaimedAt
-			next.Receipt = receipt
-			if err := e.append(EventMessage, a.Slot, messageFact{Message: *next, Receipt: receipt}); err != nil {
+			fact := planClaimFact(*next, receipt, e.cfg.Now())
+			if err := e.append(EventMessage, a.Slot, fact); err != nil {
 				e.mu.Unlock()
 				return nil, err
 			}
@@ -1285,18 +1245,11 @@ func (e *Engine) Cancel(id string) error {
 		return err
 	}
 	m, ok := e.messages[id]
-	if !ok {
-		return errors.New("message not found")
+	change, err := decideCancellation(m, ok)
+	if err != nil || !change {
+		return err
 	}
-	if m.State == "cancelled" {
-		return nil
-	}
-	if m.State != "queued" {
-		return errors.New("Cancel only removes queued native messages; it cannot stop native work")
-	}
-	m.State = "cancelled"
-	m.UpdatedAt = e.cfg.Now()
-	return e.append(EventMessage, model.ActorUser, messageFact{Message: m})
+	return e.append(EventMessage, model.ActorUser, planCancellationFact(m, e.cfg.Now()))
 }
 func (e *Engine) Retry(id string) (Message, error) {
 	if err := e.requireLocalMutation(); err != nil {
@@ -1519,12 +1472,7 @@ func (e *Engine) UnbindAs(a Auth) error {
 	if err != nil {
 		return err
 	}
-	b.Active = false
-	b.CredentialHash = ""
-	b.SessionID = ""
-	b.TranscriptPath = ""
-	b.LastActivity = e.cfg.Now()
-	return e.commitBinding(b)
+	return e.commitBinding(planLocalRetirement(b, e.cfg.Now()))
 }
 func (e *Engine) ParkAs(a Auth, enabled bool) error {
 	if err := e.requireLocalMutation(); err != nil {
@@ -1536,10 +1484,10 @@ func (e *Engine) ParkAs(a Auth, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if b.ParkEnabled == enabled {
+	b, changed := planParkBinding(b, enabled)
+	if !changed {
 		return nil
 	}
-	b.ParkEnabled = enabled
 	// See Park: a park toggle must not run the Registry CommitBinding hook.
 	return e.appendBindingFact(b)
 }

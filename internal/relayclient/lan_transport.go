@@ -19,6 +19,9 @@ func (c *Client) localAuth() relay.Auth {
 }
 
 func (c *Client) close() {
+	if c.enterpriseParent != nil {
+		c.enterpriseParent.Close()
+	}
 	if c.LAN != nil {
 		c.LAN.Close()
 	}
@@ -117,6 +120,9 @@ func directMetadataState(meta lanclient.Metadata) (*State, error) {
 }
 
 func selectDirectWorkspace(ctx context.Context, meta lanclient.Metadata, action string, o *options) (string, error) {
+	if o.enterpriseOrigin != "" {
+		return "", errors.New("explicit enterprise target conflicts with this session's original LAN association")
+	}
 	noteLANTransport(ctx)
 	if action == "bind" && o.create {
 		return "", errors.New("this native session already has a direct LAN association; use relay bind to resume it or a separate session to create a Room")

@@ -10,7 +10,7 @@ The standalone `serve` command is Embedded-only; Native is the recommended defau
 |---|---|
 | `pairroom daemon` | Install and manage pairroom service in the OS service manager |
 | `pairroom service` | Start the multi-Project / multi-Room Management Shell |
-| `pairroom enterprise` | Explicitly initialize or serve the PostgreSQL-backed enterprise browser slice; see [current scope and configuration](OPERATIONS.md#enterprise-entrypoint-under-implementation) |
+| `pairroom enterprise` | Operator initialization/serving and explicit endpoint login, status, refresh or local logout; see [current scope and configuration](OPERATIONS.md#enterprise-entrypoint-under-implementation) |
 | `pairroom serve` | Start a current-format standalone Embedded Room |
 | `pairroom doctor` | Validate Git and vendor CLI installation |
 | `pairroom providers` | Read and validate the sanitized CC Switch Profile catalog without changing current state |
@@ -65,6 +65,29 @@ Project and Room lifecycle is managed by the `pairroom service` Management Shell
 
 Backup and Restore target one Room, not a multi-Room Service root. Backup and diagnostics output paths must be outside the source Room data directory. See [Operations](OPERATIONS.md#backup) for complete-Service rollback scope.
 
+## Enterprise endpoint commands
+
+Use the exact operator-provided HTTPS origin and deployment identity. First perform an explicit foreground Device login; approve that specific Device in the browser. `--ca-file` extends system roots when a private CA is required, and `--state-dir` selects an owner-private endpoint directory. Keep these selections fixed for subsequent commands.
+
+```sh
+pairroom enterprise login --service-origin https://pairroom.example.test --deployment pairroom-example
+pairroom enterprise status --service-origin https://pairroom.example.test --deployment pairroom-example
+pairroom enterprise refresh --service-origin https://pairroom.example.test --deployment pairroom-example
+pairroom enterprise logout --service-origin https://pairroom.example.test --deployment pairroom-example
+```
+
+`login --recover` reconciles the original enrollment. `refresh --recover` uses the original predecessor/candidate in its bounded one-use recovery window; `refresh --retry` is permitted only after the saved operation is proven not committed. No hook starts login or refresh. Logout is local: it stops use of the active endpoint credential while retaining uncertain private evidence; server Device registration and Bindings remain until explicitly revoked through My Devices.
+
+Create a Room in the enterprise browser, install and approve the normal project hooks in each native session, then bind an existing Room:
+
+```sh
+pairroom relay bind --enterprise-service https://pairroom.example.test --deployment pairroom-example --room ROOM_ID --slot 1
+```
+
+Each endpoint requests its own slot. The first response supplies an Owner approval URL; the actual Room Owner approves that exact request, and the original endpoint repeats the same bind command to complete it. A second session may use slot 2 with the same or another Runtime. Optional `--enterprise-ca` and `--enterprise-state-dir` must select the same CA and Device state as login. Explicit `--replace` requests replacement of the observed occupied slot; it never inherits the old endpoint's consent. `bind --renew-credential` renews this session's current narrow Binding credential with its current Device login, preserving Binding and generation.
+
+After binding, normal `send`, `wait`, `exchange`, `hook`, `status` and `reconcile` discover the original private association. Changing cwd never changes its enterprise origin, Room or session. `reconcile` verifies uncertain original operation IDs without printing an old envelope; `reconcile --ack-delivery` can explicitly resend only a saved ACK after stdout succeeded and its ACK operation was proven absent. `unbind --local-only` detaches locally while preserving evidence and server authority. A queued or handed-off message is not proof of native model acceptance. Attachment and other first-phase gates remain under implementation in this candidate.
+
 ## Exit and errors
 
 - Argument, configuration, and security-precondition errors return a non-zero exit code;
@@ -77,11 +100,13 @@ Backup and Restore target one Room, not a multi-Room Service root. Backup and di
 The following names are extracted from `cmd/pairroom/*.go` and `internal/relayclient/cli.go`. Use them to find omissions; they do not mean every flag applies to every command.
 
 <!-- generated:flags -->
+- `--ack-delivery`
 - `--actor`
 - `--attach`
 - `--auto-start`
 - `--bootstrap-subject`
 - `--brief`
+- `--ca-file`
 - `--cc-switch-db`
 - `--claude-command`
 - `--claude-effort`
@@ -105,8 +130,12 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--data-dir`
 - `--data-root`
 - `--database`
+- `--deployment`
 - `--discard`
 - `--enabled`
+- `--enterprise-ca`
+- `--enterprise-service`
+- `--enterprise-state-dir`
 - `--f`
 - `--file`
 - `--follow`
@@ -120,6 +149,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--input`
 - `--join`
 - `--json`
+- `--label`
 - `--legacy-native`
 - `--limit`
 - `--listen`
@@ -135,12 +165,15 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--peer-runtime`
 - `--pending`
 - `--purge-hooks`
+- `--recover`
 - `--recover-stale-lock`
 - `--ref`
+- `--renew-credential`
 - `--replace`
 - `--repo`
 - `--resend`
 - `--resume-pending`
+- `--retry`
 - `--review`
 - `--review-base`
 - `--review-repo`
@@ -148,11 +181,13 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--runtime`
 - `--runtime-limit`
 - `--service-file`
+- `--service-origin`
 - `--share`
 - `--shutdown-timeout`
 - `--since`
 - `--slot`
 - `--stall-warning-seconds`
+- `--state-dir`
 - `--text`
 - `--text-file`
 - `--timeout`

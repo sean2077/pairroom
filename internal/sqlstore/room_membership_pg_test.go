@@ -206,7 +206,7 @@ func TestRoomMembershipAuditFailureRollsBackControlAndFacts(t *testing.T) {
 	}
 }
 
-func TestRoomMembershipRemoveRefusesActiveBindingWithoutPartialRevocation(t *testing.T) {
+func TestRoomMembershipRemoveRefusesUnreplayableBindingWithoutPartialRevocation(t *testing.T) {
 	f, cmd := membershipFixture(t)
 	commitMembership(t, f, cmd)
 	membershipExec(t, f.admin, `INSERT INTO devices(device_id,org_id,user_id) VALUES('device-target','org-test','u-target')`)
@@ -215,8 +215,8 @@ func TestRoomMembershipRemoveRefusesActiveBindingWithoutPartialRevocation(t *tes
 	cmd.ClientID, cmd.ExpectedRevision, cmd.Intent.Action, cmd.Intent.Role = "remove", 2, MembershipRemove, ""
 	before := creationCounts(t, f, cmd.RoomID)
 	result, err := f.store.CommitRoomMembership(context.Background(), cmd)
-	if got := kernelErr(t, result, err); got.Class != ClassUnsupportedControlState {
-		t.Fatalf("unsupported retirement must be explicit: %+v", result)
+	if got := kernelErr(t, result, err); got.Class != ClassStoredFactUnreadable {
+		t.Fatalf("unreplayable retirement must be explicit: %+v", result)
 	}
 	requireMembership(t, f, cmd.RoomID, "u-target", "member", false)
 	if counts := creationCounts(t, f, cmd.RoomID); counts != before {
@@ -271,7 +271,7 @@ func TestRoomMembershipCorruptReceiptIsRefusedWithoutDisclosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoding, err := json.Marshal(original.Fact)
+	encoding, err := encodeStoredFact(original.Fact, userFactOrigin(cmd.Auth.UserID))
 	if err != nil {
 		t.Fatal(err)
 	}

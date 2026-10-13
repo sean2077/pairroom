@@ -133,8 +133,23 @@ func (s *Store) resolvePlanned(ctx context.Context, plan opPlan, conn *pgx.Conn)
 		}
 		return resolveIncomplete(ctx, err)
 	}
+	if plan.catalog != nil {
+		return s.resolveCatalogPlan(ctx, tx, plan, locked.catalog)
+	}
+	if plan.recovery != nil {
+		return s.resolveRecoveryPlan(ctx, tx, plan, locked.recovery)
+	}
 	if plan.control != nil {
 		return s.resolveControlPlan(ctx, tx, plan, locked.control)
+	}
+	if plan.governance != nil {
+		return s.resolveGovernancePlan(ctx, tx, plan, locked.governance)
+	}
+	if plan.binding != nil {
+		return s.resolveBindingPlan(ctx, tx, plan, locked.binding)
+	}
+	if plan.relay != nil {
+		return s.resolveRelayPlan(ctx, tx, plan, locked)
 	}
 
 	if plan.roomCreate != nil {

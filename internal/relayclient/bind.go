@@ -28,6 +28,12 @@ type bindAttempt struct {
 }
 
 func bind(ctx context.Context, root string, o options, out io.Writer) (resultErr error) {
+	if o.enterpriseOrigin != "" || strings.HasPrefix(o.room, "ent_") {
+		return bindEnterprise(ctx, root, o, out)
+	}
+	if o.renewCredential {
+		return errors.New("credential renewal requires an existing enterprise Binding")
+	}
 	o.slot = normalizeSlot(o.slot)
 	slot := model.ActorID(o.slot)
 	if o.slot != "" && !slot.ValidParticipant() {

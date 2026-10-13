@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Approve device · PairRoom</title><link rel="stylesheet" href="/enterprise/assets/style.css"><script src="/enterprise/assets/device.js" defer></script></head>
+<body><main>
+<header><p class="eyebrow">PAIRROOM</p><h1>Connect your device.</h1><p class="intro">Approve only a request you started in your own CLI. Room access is granted separately.</p></header>
+<section class="account"><div><h2>Account</h2><p id="device-account">Checking your session…</p></div><div class="actions"><a id="device-sign-in" href="/enterprise/auth/login" target="_blank" rel="noopener noreferrer" hidden>Sign in in a new tab</a><button id="device-refresh" type="button">Refresh status</button><a href="/enterprise/" target="_blank" rel="noopener noreferrer">Manage account</a></div></section>
+<section id="device-details" hidden><h2 id="device-label"></h2><dl><dt>Service</dt><dd id="device-origin"></dd><dt>Device</dt><dd id="device-id"></dd><dt>Request expires</dt><dd id="device-expiry"></dd></dl><p id="device-request-state"></p><div class="actions"><button id="device-approve" type="button" disabled>Approve device</button><button id="device-deny" type="button" disabled>Deny request</button></div></section>
+<p id="device-status" role="status" aria-live="polite"></p>
+<noscript><p>Enable JavaScript to review and explicitly approve this request.</p></noscript>
+</main></body></html>

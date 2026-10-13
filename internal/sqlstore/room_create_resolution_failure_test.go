@@ -40,7 +40,7 @@ func TestRoomCreateResolveInterruptedStoredReads(t *testing.T) {
 		match func(string) bool
 	}{
 		{"fact", func(query string) bool {
-			return strings.Contains(query, "SELECT event_id, fact_version, kind, actor, event_encoding FROM")
+			return strings.Contains(query, "SELECT event_id, fact_version, kind, actor, event_encoding, origin_kind, origin_user FROM")
 		}},
 		{"configured-organization", func(query string) bool {
 			return strings.Contains(query, "SELECT org_id FROM") && strings.Contains(query, "deployment_id = $1")

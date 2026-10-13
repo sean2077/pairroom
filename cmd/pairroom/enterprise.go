@@ -28,8 +28,12 @@ func runEnterprise(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Println("Usage: pairroom enterprise init --config FILE --bootstrap-subject SUBJECT")
 		fmt.Println("       pairroom enterprise serve --config FILE")
+		fmt.Println("       pairroom enterprise login|status|refresh|logout --service-origin HTTPS_ORIGIN --deployment ID")
 		fmt.Println("Initialization explicitly enrolls the selected administrator; serving never bootstraps an administrator.")
 		return nil
+	}
+	if args[0] == "login" || args[0] == "status" || args[0] == "refresh" || args[0] == "logout" {
+		return runEnterpriseClient(args)
 	}
 	if args[0] != "init" && args[0] != "serve" {
 		return errors.New("unsupported enterprise command; use enterprise help")
@@ -129,6 +133,9 @@ func serveEnterprise(ctx context.Context, cfg enterpriseFileConfig, storeConfig 
 	defer store.Close()
 	if err := store.CheckIdentityConfiguration(ctx, cfg.OrganizationID, cfg.OIDC.ConnectionID, cfg.OIDC.Issuer); err != nil {
 		return errors.New("enterprise identity configuration is not initialized or does not match; run the explicit operator initialization first")
+	}
+	if _, err := store.RecoverDeliveries(ctx); err != nil {
+		return errors.New("enterprise startup recovery is not complete; no public listener was opened")
 	}
 	transactions, err := enterpriseauth.NewMemoryStore(cfg.PendingLoginLimit)
 	if err != nil {

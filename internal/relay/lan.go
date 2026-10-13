@@ -543,11 +543,9 @@ func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, p
 	if err != nil {
 		return nil, err
 	}
-	m.State = "delivering"
-	m.ClaimedAt = e.cfg.Now()
-	m.UpdatedAt = m.ClaimedAt
-	m.Receipt = receipt
-	if err = e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt}); err != nil {
+	fact := planClaimFact(m, receipt, e.cfg.Now())
+	m = fact.Message
+	if err = e.append(EventMessage, a.Slot, fact); err != nil {
 		return nil, err
 	}
 	e.noteLANActivityLocked(a)

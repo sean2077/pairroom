@@ -39,6 +39,9 @@ type RoomSnapshot struct {
 // content; an incomplete read is an unknown-class error, never a partial
 // snapshot.
 func (s *Store) ReadonlySnapshot(ctx context.Context, auth AuthContext, roomID string) (RoomSnapshot, error) {
+	if auth.DeviceGrantID != "" || auth.BindingGrantID != "" && auth.SessionID != "" {
+		return RoomSnapshot{}, refusedError(ClassAuthorization, nil)
+	}
 	if auth.Deployment == "" || !validToken(auth.UserID) || !validToken(roomID) {
 		return RoomSnapshot{}, refusedError(ClassInvalidRequest, nil)
 	}
@@ -124,12 +127,20 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 	switch {
 	case locked.roomMissing:
 		return RoomSnapshot{}, refusedError(ClassRoomNotFound, nil)
-	case !locked.readAllowed():
+	case !locked.readAllowed() || auth.BindingGrantID != "" && (locked.credential.kind != CredentialBinding || locked.credential.roomID != roomID):
 		// Disabled or removed principals learn nothing about the Room.
 		return RoomSnapshot{}, refusedError(ClassAuthorization, nil)
 	}
 
-	rows, err := tx.Query(ctx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding, origin_user FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
+	return s.readRoomEvents(ctx, tx, RoomSnapshot{RoomID: roomID, DeploymentID: s.cfg.DeploymentID, OrgID: orgID, HostMode: hostMode, Seq: locked.currentSeq, Revision: locked.revision})
+}
+
+// readRoomEvents is shared by an already authorized/fenced read and a new
+// Relay command after its accepted-receipt lookup and revision check. It
+// never begins a transaction, authorizes a caller or applies a transition.
+func (s *Store) readRoomEvents(ctx context.Context, tx pgx.Tx, snapshot RoomSnapshot) (RoomSnapshot, error) {
+	roomID := snapshot.RoomID
+	rows, err := tx.Query(ctx, `SELECT seq, event_id, fact_version, kind, actor, event_encoding, origin_kind, origin_user FROM `+s.table("room_events")+` WHERE room_id = $1 ORDER BY seq`, roomID)
 	if err != nil {
 		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
@@ -142,33 +153,36 @@ func (s *Store) snapshotOnce(ctx context.Context, auth AuthContext, roomID strin
 	var expected uint64 = 1
 	for rows.Next() {
 		var seq int64
-		var eventID, kind, actor, originUser string
+		var eventID, kind, actor, originKind string
+		var originUser *string
 		var factVersion int
 		var encoding []byte
-		if err := rows.Scan(&seq, &eventID, &factVersion, &kind, &actor, &encoding, &originUser); err != nil {
+		if err := rows.Scan(&seq, &eventID, &factVersion, &kind, &actor, &encoding, &originKind, &originUser); err != nil {
 			return RoomSnapshot{}, incompleteError(ctx, err)
 		}
 		if uint64(seq) != expected {
 			return RoomSnapshot{}, refusedError(ClassStateInvalid, fmt.Errorf("event sequence %d does not immediately follow %d", seq, expected-1))
 		}
-		event, err := decodeStoredFact(roomID, uint64(seq), eventID, factVersion, kind, actor, encoding)
+		event, err := decodeStoredFact(roomID, uint64(seq), eventID, factVersion, kind, actor, encoding, originKind, originUser)
 		if err != nil {
 			return RoomSnapshot{}, refusedError(ClassStateInvalid, err)
 		}
 		events = append(events, event)
 		if seq == 1 {
-			creationUserID = originUser
+			if originUser != nil {
+				creationUserID = *originUser
+			}
 		}
 		expected++
 	}
 	if err := rows.Err(); err != nil {
 		return RoomSnapshot{}, incompleteError(ctx, err)
 	}
-	if expected-1 != locked.currentSeq {
-		return RoomSnapshot{}, refusedError(ClassStateInvalid, fmt.Errorf("event log ends at %d but the room row records sequence %d", expected-1, locked.currentSeq))
+	if expected-1 != snapshot.Seq {
+		return RoomSnapshot{}, refusedError(ClassStateInvalid, fmt.Errorf("event log ends at %d but the room row records sequence %d", expected-1, snapshot.Seq))
 	}
-	return RoomSnapshot{RoomID: roomID, DeploymentID: s.cfg.DeploymentID, OrgID: orgID, CreationUserID: creationUserID,
-		HostMode: hostMode, Events: events, Seq: locked.currentSeq, Revision: locked.revision}, nil
+	snapshot.Events, snapshot.CreationUserID = events, creationUserID
+	return snapshot, nil
 }
 
 // refusedError is the error form of a definite refusal for read-only APIs

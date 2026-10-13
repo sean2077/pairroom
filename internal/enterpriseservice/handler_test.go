@@ -696,9 +696,12 @@ func TestLandingIsFunctionalWithoutExposingAuthenticationState(t *testing.T) {
 		if w.Code != http.StatusOK || len(w.Result().Cookies()) != 0 || w.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("landing resource %s: %d", path, w.Code)
 		}
-		if strings.Contains(w.Header().Get("Content-Security-Policy"), "unsafe-inline") || strings.Contains(w.Body.String(), "localStorage") || strings.Contains(w.Body.String(), "sessionStorage") {
-			t.Fatal("landing permits inline code or persists credentials in browser storage")
+		if strings.Contains(w.Header().Get("Content-Security-Policy"), "unsafe-inline") {
+			t.Fatal("landing permits inline code")
 		}
+		// The bounded recovery journal intentionally persists noncredential
+		// command metadata. Actual JS behavior tests verify its field allowlist,
+		// account/deployment isolation, and zero implicit resend after reload.
 	}
 	if b.authenticateCalls != 0 {
 		t.Fatal("public static shell disclosed session state")

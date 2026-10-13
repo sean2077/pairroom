@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sean2077/pairroom/internal/atomicfile"
+	"github.com/sean2077/pairroom/internal/enterpriseclient"
 	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/lanshare"
 	"github.com/sean2077/pairroom/internal/model"
@@ -53,16 +54,17 @@ var errReplyTooLarge = errors.New("final reply exceeds bounded publication size;
 var errPublicationBacklogFull = errors.New("local publication backlog is full; reply not retained")
 
 type State struct {
-	Schema          int               `json:"schema"`
-	Room            string            `json:"room"`
-	Slot            model.ActorID     `json:"slot"`
-	Runtime         model.RuntimeKind `json:"runtime"`
-	Workspace       string            `json:"workspace"`
-	EndpointPath    string            `json:"endpoint_path,omitempty"`
-	LAN             *LANTransport     `json:"lan,omitempty"`
-	BindID          string            `json:"bind_id"`
-	Generation      uint64            `json:"generation"`
-	DynamicBindings bool              `json:"dynamic_bindings,omitempty"`
+	Schema          int                  `json:"schema"`
+	Room            string               `json:"room"`
+	Slot            model.ActorID        `json:"slot"`
+	Runtime         model.RuntimeKind    `json:"runtime"`
+	Workspace       string               `json:"workspace"`
+	EndpointPath    string               `json:"endpoint_path,omitempty"`
+	LAN             *LANTransport        `json:"lan,omitempty"`
+	Enterprise      *EnterpriseTransport `json:"enterprise,omitempty"`
+	BindID          string               `json:"bind_id"`
+	Generation      uint64               `json:"generation"`
+	DynamicBindings bool                 `json:"dynamic_bindings,omitempty"`
 	// The automatic target is captured before bootstrap/inbound output and
 	// stays fixed for this binding. A later observed peer is diagnostic only:
 	// without reliable native turn provenance it cannot retarget a late Stop.
@@ -108,9 +110,12 @@ type LANTransport struct {
 // loopback Service capability. Discovery validates routing before selecting it.
 func validStateFormat(s State) bool {
 	if s.Schema == 2 {
-		return s.LAN == nil
+		return s.LAN == nil && s.Enterprise == nil
 	}
-	if s.Schema != 3 || s.LAN == nil || s.EndpointPath != "" {
+	if s.Schema == 4 {
+		return validEnterpriseRoute(s)
+	}
+	if s.Schema != 3 || s.LAN == nil || s.EndpointPath != "" || s.Enterprise != nil {
 		return false
 	}
 	v := s.LAN
@@ -124,13 +129,15 @@ type credentials struct {
 }
 
 type Client struct {
-	Dir      string
-	State    State
-	Secret   string
-	Endpoint relay.Endpoint
-	HTTP     *http.Client
-	LAN      *lanclient.Client
-	Save     func(State) error // injected only by deterministic crash-window tests
+	Dir              string
+	State            State
+	Secret           string
+	Endpoint         relay.Endpoint
+	HTTP             *http.Client
+	LAN              *lanclient.Client
+	Enterprise       *enterpriseclient.BindingClient
+	enterpriseParent *enterpriseclient.Client
+	Save             func(State) error // injected only by deterministic crash-window tests
 	// endpointErr defers a missing Service endpoint to the first relay call, so
 	// a Stop hook can still save its reply WAL while the Service is stopped.
 	endpointErr error
@@ -147,7 +154,7 @@ func secureDir(root string, parts ...string) (string, error) {
 			return "", errors.New("invalid relay state path component")
 		}
 		path = filepath.Join(path, part)
-		if lanPrivateStatePath(path) {
+		if lanPrivateStatePath(path) || enterprisePrivateStatePath(path) {
 			// LAN transport directories hold credentials: create them with the
 			// owner-private boundary the LAN slot lock and privatefile.WriteJSON
 			// require, not with an inherited Windows DACL that would make the
@@ -190,7 +197,7 @@ func readPrivate(path string, value any) error {
 	if json.Unmarshal(data, value) != nil {
 		return errors.New("invalid relay state; inspect before rebind")
 	}
-	if s, ok := value.(*State); ok && s.Schema == 3 {
+	if s, ok := value.(*State); ok && (s.Schema == 3 || s.Schema == 4) {
 		// Direct credentials use the stronger cross-platform private-file
 		// boundary. Validate the opened file, including its Windows DACL.
 		return privatefile.ReadJSON(path, maxPrivateFileBytes, value)
@@ -277,6 +284,9 @@ func loadLocalWith(dir string, expected *lanclient.Metadata) (*Client, bool, err
 	if lanPrivateStatePath(dir) && state.LAN == nil {
 		return nil, recovered, errors.New("direct LAN workspace state cannot use a local Service transport")
 	}
+	if enterprisePrivateStatePath(dir) && state.Enterprise == nil {
+		return nil, recovered, errors.New("enterprise workspace state cannot use another transport")
+	}
 	if !state.Slot.ValidParticipant() || state.Room == "" || state.BindID == "" {
 		return nil, recovered, errors.New("invalid relay state identity")
 	}
@@ -288,7 +298,7 @@ func loadLocalWith(dir string, expected *lanclient.Metadata) (*Client, bool, err
 	}
 	var cred credentials
 	readCredential := readPrivate
-	if state.LAN != nil {
+	if state.LAN != nil || state.Enterprise != nil {
 		readCredential = func(path string, value any) error { return privatefile.ReadJSON(path, maxPrivateFileBytes, value) }
 	}
 	credentialRecovered, err := readBindingFile(filepath.Join(dir, "credentials"), &cred, readCredential, expected != nil)
@@ -301,6 +311,11 @@ func loadLocalWith(dir string, expected *lanclient.Metadata) (*Client, bool, err
 	}
 	c := &Client{Dir: dir, State: state, Secret: cred.Secret, HTTP: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 40 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	c.Save = func(s State) error { return relay.AtomicJSON(filepath.Join(dir, "state.json"), s) }
+	if state.Enterprise != nil {
+		c.Save = func(s State) error { return privatefile.WriteJSON(filepath.Join(dir, "state.json"), s) }
+		c.endpointErr = c.loadEnterprise()
+		return c, recovered, nil
+	}
 	if state.LAN != nil {
 		c.Save = func(s State) error { return privatefile.WriteJSON(filepath.Join(dir, "state.json"), s) }
 		c.endpointErr = c.loadLAN()
@@ -322,11 +337,21 @@ func (c *Client) authHeaders(req *http.Request) {
 	req.Header.Set("X-PairRoom-Runtime", string(c.State.Runtime))
 }
 func (c *Client) call(ctx context.Context, action string, payload any, result any) error {
-	if c.State.LAN != nil {
+	if c.State.LAN != nil || c.State.Enterprise != nil {
 		noteLANTransport(ctx)
 	}
 	if c.endpointErr != nil {
 		return c.endpointErr
+	}
+	if c.State.Enterprise != nil {
+		if c.Enterprise == nil {
+			return errors.New("enterprise binding has no original client transport")
+		}
+		body, err := enterprisePayload(c, action, payload)
+		if err != nil {
+			return err
+		}
+		return normalizeEnterpriseError(c.Enterprise.Relay(ctx, c.localAuth(), action, body, result))
 	}
 	if c.State.LAN != nil {
 		if c.LAN == nil {

@@ -44,6 +44,7 @@ type Handler struct {
 	provider     LoginProvider
 	transactions enterpriseauth.TransactionStore
 	backend      Backend
+	devices      *DeviceHandler
 }
 
 func New(cfg Config, provider LoginProvider, transactions enterpriseauth.TransactionStore, backend Backend) (*Handler, error) {
@@ -51,17 +52,51 @@ func New(cfg Config, provider LoginProvider, transactions enterpriseauth.Transac
 	if err != nil || nilDependency(provider) || nilDependency(transactions) || nilDependency(backend) || !backend.RequiresSessionAuth() {
 		return nil, ErrConfiguration
 	}
-	return &Handler{policy: policy, provider: provider, transactions: transactions, backend: backend}, nil
+	handler := &Handler{policy: policy, provider: provider, transactions: transactions, backend: backend}
+	if deviceBackend, ok := backend.(DeviceBackend); ok {
+		handler.devices, err = NewDeviceHandler(cfg, deviceBackend)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return handler, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Bound the whole request, including sequential authentication, provider,
+	// verification and commit calls. A per-statement SQL timeout alone cannot
+	// bound an HTTP operation that crosses several such calls.
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	r = r.WithContext(ctx)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	if strings.HasPrefix(r.URL.Path, "/enterprise/device/v1/") {
+		w.Header().Set(DeviceDeploymentHeader, h.policy.deployment)
+		if h.devices == nil {
+			fail(w, http.StatusServiceUnavailable, "device_authorization_unavailable")
+			return
+		}
+		if h.devices.relayTransport(w, r) {
+			return
+		}
+		if h.devices.bindingTransport(w, r) {
+			return
+		}
+		h.devices.ServeHTTP(w, r)
+		return
+	}
 	if !h.policy.accepts(r) {
 		fail(w, http.StatusBadRequest, "invalid_service_origin")
+		return
+	}
+	if r.Method == http.MethodGet && h.serveDeviceApproval(w, r) {
+		return
+	}
+	if r.Method == http.MethodGet && h.serveBindingApproval(w, r) {
 		return
 	}
 	if r.Method == http.MethodGet && h.serveLanding(w, r) {
@@ -79,7 +114,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "not_found")
 		return
 	}
-	if r.URL.RawQuery != "" {
+	if (r.URL.RawQuery != "" || r.URL.ForceQuery) && !catalogQueryAllowed(r) {
 		fail(w, http.StatusBadRequest, "invalid_query")
 		return
 	}
@@ -95,22 +130,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// These are non-bearer application identifiers for rejecting late replies
+	// across accounts/tabs. They are never vendor/native session identities.
+	w.Header().Set("X-PairRoom-User", session.Auth.UserID)
+	w.Header().Set("X-PairRoom-Session", session.Auth.SessionID)
 	if r.Method == http.MethodPost && (len(r.Header.Values(CSRFHeader)) != 1 || !validOpaqueSecret(r.Header.Get(CSRFHeader)) || subtle.ConstantTimeCompare([]byte(r.Header.Get(CSRFHeader)), []byte(csrf)) != 1) {
 		fail(w, http.StatusForbidden, "invalid_csrf")
+		return
+	}
+	if h.bindingBrowser(w, r, session) {
+		return
+	}
+	if h.catalogBrowser(w, r, session) {
 		return
 	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/enterprise/api/v1/session":
 		writeJSON(w, http.StatusOK, struct {
+			DeploymentID  string    `json:"deployment_id"`
+			SessionID     string    `json:"session_id"`
 			UserID        string    `json:"user_id"`
 			Administrator bool      `json:"administrator"`
 			ExpiresAt     time.Time `json:"expires_at"`
 			CSRF          string    `json:"csrf"`
-		}{session.Auth.UserID, session.Administrator, session.ExpiresAt, csrf})
+		}{session.Auth.Deployment, session.Auth.SessionID, session.Auth.UserID, session.Administrator, session.ExpiresAt, csrf})
 	case r.Method == http.MethodPost && r.URL.Path == "/enterprise/api/v1/session/logout":
 		h.logout(w, r, session)
 	case r.Method == http.MethodPost && r.URL.Path == "/enterprise/api/v1/rooms":
 		h.createRoom(w, r, session)
+	case strings.HasPrefix(r.URL.Path, "/enterprise/api/v1/device-enrollments/") || strings.HasPrefix(r.URL.Path, "/enterprise/api/v1/devices/"):
+		h.deviceBrowser(w, r, session)
+	case r.Method == http.MethodPost && r.URL.Path == "/enterprise/api/v1/governance/actions":
+		h.beginReauth(w, r, session)
+	case r.Method == http.MethodGet && (r.URL.Path == "/enterprise/api/v1/governance/actions" || strings.HasPrefix(r.URL.Path, "/enterprise/api/v1/governance/actions/")):
+		h.governanceActions(w, r, session)
 	case strings.HasPrefix(r.URL.Path, "/enterprise/api/v1/rooms/"):
 		h.room(w, r, session)
 	default:
@@ -173,6 +226,10 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusServiceUnavailable
 		}
 		fail(w, status, "login_invalid")
+		return
+	}
+	if query.Get("error") == "" && completion.Purpose == enterpriseauth.PurposeReauthenticate {
+		h.finishReauth(w, r, completion)
 		return
 	}
 	if query.Get("error") != "" || completion.Purpose != enterpriseauth.PurposeLogin || completion.FreshReauthentication || !safeReturnPath(completion.ReturnPath) {
@@ -305,6 +362,16 @@ func (h *Handler) room(w http.ResponseWriter, r *http.Request, session sqlstore.
 		return
 	}
 	switch parts[1] {
+	case "messages":
+		h.humanSend(w, r, session, roomID)
+	case "resolve-message":
+		h.resolveHumanMessage(w, r, session, roomID)
+	case "queue", "resolve-queue":
+		h.controlHumanQueue(w, r, session, roomID, parts[1] == "resolve-queue")
+	case "ownership":
+		h.transferOwnership(w, r, session, roomID)
+	case "resolve-ownership":
+		h.resolveOwnership(w, r, session, roomID)
 	case "resolve-create":
 		var request struct {
 			ClientID string                     `json:"client_id"`

@@ -149,6 +149,8 @@ func humanSendKey(cmd HumanSendCommand) (OpKey, string) {
 		Principal:  cmd.Auth.UserID,
 	}
 	switch {
+	case cmd.Auth.DeviceGrantID != "" || cmd.Auth.BindingGrantID != "":
+		return key, ClassAuthorization
 	case cmd.Auth.Deployment == "" || !validToken(cmd.Auth.UserID):
 		return key, ClassInvalidRequest
 	case !validToken(cmd.RoomID) || !validToken(cmd.ClientID):

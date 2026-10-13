@@ -36,10 +36,11 @@ func TestCommitAppendsFactOperationAndAuditAtomically(t *testing.T) {
 	if err := f.admin.QueryRow(ctx, `SELECT event_encoding FROM room_events WHERE room_id = 'room-1' AND seq = 1`).Scan(&encoding); err != nil {
 		t.Fatal(err)
 	}
-	var stored model.Event
-	if err := json.Unmarshal(encoding, &stored); err != nil {
+	var record storedEventRecord
+	if err := json.Unmarshal(encoding, &record); err != nil {
 		t.Fatal(err)
 	}
+	stored := record.Event
 	if stored.ID != cmd.Mutation.Fact.ID || stored.Seq != 1 || stored.Kind != "room.note" ||
 		!bytes.Equal(stored.Data, cmd.Mutation.Fact.Data) || !stored.CreatedAt.Equal(cmd.Mutation.Fact.CreatedAt) {
 		t.Fatalf("stored encoding differs from the committed fact: %+v", stored)
@@ -144,10 +145,11 @@ func TestStoredEncodingPreservesNanosecondsAndEventID(t *testing.T) {
 	if err := f.admin.QueryRow(ctx, `SELECT event_encoding FROM room_events WHERE room_id = 'room-1' AND seq = 1`).Scan(&encoding); err != nil {
 		t.Fatal(err)
 	}
-	var stored model.Event
-	if err := json.Unmarshal(encoding, &stored); err != nil {
+	var record storedEventRecord
+	if err := json.Unmarshal(encoding, &record); err != nil {
 		t.Fatal(err)
 	}
+	stored := record.Event
 	if stored.ID != cmd.Mutation.Fact.ID || stored.CreatedAt.Nanosecond() != 123456789 {
 		t.Fatalf("nanoseconds or event id lost: %+v", stored)
 	}

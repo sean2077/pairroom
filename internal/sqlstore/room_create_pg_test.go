@@ -591,7 +591,7 @@ func TestRoomCreateCorruptStoredCreationCannotReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			encoding, err := json.Marshal(first.Fact)
+			encoding, err := encodeStoredFact(first.Fact, userFactOrigin(cmd.Auth.UserID))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/sean2077/pairroom/internal/model"
 )
 
 type sessionDependency struct {
@@ -14,6 +15,10 @@ type sessionDependency struct {
 	userID, sessionID                                                                       string
 	csrfHash                                                                                [32]byte
 	expiresAt                                                                               time.Time
+	kind, deviceID, agentID, roomID, bindingID, familyID, grantID, origin                   string
+	slot                                                                                    model.ActorID
+	generation                                                                              uint64
+	refreshExpiresAt                                                                        time.Time
 }
 
 func (d sessionDependency) allowed() bool {
@@ -24,7 +29,19 @@ func (d sessionDependency) allowed() bool {
 // transaction, after the User guard and before membership or Room guards.
 // Authentication middleware alone cannot close a concurrent-revocation race.
 func (s *Store) readCredential(ctx context.Context, q rowQuerier, auth AuthContext, lock string) (sessionDependency, error) {
-	d := sessionDependency{required: s.cfg.RequireSessionAuth || auth.SessionID != "", provided: auth.SessionID != "", sessionID: auth.SessionID}
+	selectors := 0
+	for _, id := range []string{auth.SessionID, auth.DeviceGrantID, auth.BindingGrantID} {
+		if id != "" {
+			selectors++
+		}
+	}
+	if selectors > 1 {
+		return sessionDependency{required: true, provided: true, missing: true}, nil
+	}
+	if auth.DeviceGrantID != "" || auth.BindingGrantID != "" {
+		return s.readNativeCredential(ctx, q, auth, lock)
+	}
+	d := sessionDependency{required: s.cfg.RequireSessionAuth || auth.SessionID != "", provided: auth.SessionID != "", sessionID: auth.SessionID, kind: CredentialBrowser}
 	if !d.required {
 		return d, nil
 	}

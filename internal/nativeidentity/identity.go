@@ -57,6 +57,12 @@ func Hosted(root, room string, slot model.ActorID) string {
 
 func Remote(hostPin, room string) string { return "lan:" + digest(hostPin+"\x00"+room) }
 
+// Enterprise has its own authority namespace. A public deployment ID is
+// scoped by the explicitly selected HTTPS origin, never by cwd or defaults.
+func Enterprise(origin, deployment, room string) string {
+	return "enterprise:" + digest(origin+"\x00"+deployment+"\x00"+room)
+}
+
 func Open() (*Store, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -75,7 +81,7 @@ func OpenAt(root string) (*Store, error) {
 func validClaim(c Claim) bool {
 	prefix, suffix, ok := strings.Cut(c.Association, ":")
 	_, err := hex.DecodeString(suffix)
-	return c.Runtime.Valid() && c.SessionID != "" && len(c.SessionID) <= 512 && strings.TrimSpace(c.SessionID) == c.SessionID && !strings.ContainsAny(c.SessionID, "/\\") && !strings.ContainsFunc(c.SessionID, unicode.IsControl) && ok && (prefix == "host" || prefix == "lan") && len(suffix) == 64 && err == nil && c.BindID != "" && len(c.BindID) <= 128 && !strings.ContainsFunc(c.BindID, unicode.IsControl)
+	return c.Runtime.Valid() && c.SessionID != "" && len(c.SessionID) <= 512 && strings.TrimSpace(c.SessionID) == c.SessionID && !strings.ContainsAny(c.SessionID, "/\\") && !strings.ContainsFunc(c.SessionID, unicode.IsControl) && ok && (prefix == "host" || prefix == "lan" || prefix == "enterprise") && len(suffix) == 64 && err == nil && c.BindID != "" && len(c.BindID) <= 128 && !strings.ContainsFunc(c.BindID, unicode.IsControl)
 }
 
 func identityKey(c Claim) string { return digest(string(c.Runtime) + "\x00" + c.SessionID) }

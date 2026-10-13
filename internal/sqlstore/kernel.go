@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -49,12 +50,14 @@ type Config struct {
 // connection serializes Commit and Resolve because pgx.Conn is not safe for
 // concurrent use. This slice deliberately provides no pool.
 type Store struct {
-	cfg      Config
-	lease    *leaseState
-	work     *pgx.Conn
-	sem      chan struct{}
-	poisoned error
-	closed   bool
+	cfg                                                Config
+	lease                                              *leaseState
+	work                                               *pgx.Conn
+	sem                                                chan struct{}
+	poisoned                                           error
+	closed                                             bool
+	recoverySealed, recoveryStarted                    bool
+	recoveryRunning, recoveryFailed, recoveryCompleted atomic.Bool
 }
 
 // Open connects the lease and work connections, verifies the schema version
@@ -146,19 +149,37 @@ type dependencyState struct {
 	revision       uint64
 	ownerUserID    string
 	orgID          string
+	hostMode       string
+	archived       bool
 	target         membershipTargetState
 	credential     sessionDependency
 	control        *controlDependencies
+	governance     *governanceDependencies
+	binding        *bindingDependencies
+	recovery       *recoveryDependencies
+	catalog        *catalogDependencies
 }
 
 func (d dependencyState) equal(other dependencyState) bool {
+	if d.catalog != nil || other.catalog != nil {
+		return d.catalog != nil && other.catalog != nil && *d.catalog == *other.catalog
+	}
+	if d.recovery != nil || other.recovery != nil {
+		return d.recovery != nil && other.recovery != nil && *d.recovery == *other.recovery
+	}
+	if d.binding != nil || other.binding != nil {
+		return d.binding != nil && other.binding != nil && *d.binding == *other.binding
+	}
+	if d.governance != nil || other.governance != nil {
+		return d.governance != nil && other.governance != nil && *d.governance == *other.governance
+	}
 	if d.control != nil || other.control != nil {
 		return equalControlDependencies(d.control, other.control)
 	}
 	return d.userMissing == other.userMissing && d.userDisabled == other.userDisabled &&
 		d.memberMissing == other.memberMissing && d.memberDisabled == other.memberDisabled &&
 		d.memberRole == other.memberRole && d.roomMissing == other.roomMissing &&
-		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.target == other.target && d.credential == other.credential
+		d.ownerUserID == other.ownerUserID && d.orgID == other.orgID && d.hostMode == other.hostMode && d.archived == other.archived && d.target == other.target && d.credential == other.credential
 }
 
 // readAllowed reports live read authorization: the user and the membership
@@ -206,7 +227,7 @@ func (s *Store) readDependencies(ctx context.Context, q rowQuerier, roomID strin
 // with the requested lock clause, in the documented position after the
 // authorization rows.
 func (s *Store) readRoom(ctx context.Context, q rowQuerier, roomID string, d *dependencyState, lock string) error {
-	err := q.QueryRow(ctx, `SELECT current_seq, revision, owner_user_id, org_id FROM `+s.table("rooms")+` WHERE room_id = $1`+lock, roomID).Scan(&d.currentSeq, &d.revision, &d.ownerUserID, &d.orgID)
+	err := q.QueryRow(ctx, `SELECT current_seq, revision, owner_user_id, org_id, host_mode, archived_at IS NOT NULL FROM `+s.table("rooms")+` WHERE room_id = $1`+lock, roomID).Scan(&d.currentSeq, &d.revision, &d.ownerUserID, &d.orgID, &d.hostMode, &d.archived)
 	if errors.Is(err, pgx.ErrNoRows) {
 		d.roomMissing = true
 	} else if err != nil {
@@ -232,6 +253,11 @@ type opPlan struct {
 	roomMembership   *model.EnterpriseMembershipIntent
 	auth             AuthContext
 	control          *controlMutation
+	relay            *relayMutation
+	governance       *governanceMutation
+	binding          *bindingMutation
+	recovery         *recoveryMutation
+	catalog          *catalogMutation
 }
 
 // ownershipLock is fixed before any row is locked. Room creation and its
@@ -239,8 +265,32 @@ type opPlan struct {
 // exist. Membership controls use the same exclusive guard while their target
 // row can be absent; ordinary appends retain their shared ownership guard.
 func (p opPlan) ownershipLock() string {
+	if p.catalog != nil {
+		if catalogReadOnly(p.catalog.kind) {
+			return lockShare
+		}
+		return lockExclusive
+	}
+	if p.recovery != nil {
+		if p.recovery.kind == recoveryPage {
+			return lockShare
+		}
+		return lockExclusive
+	}
+	if p.binding != nil {
+		if bindingReadOnly(p.binding.kind) {
+			return lockShare
+		}
+		return lockExclusive
+	}
+	if p.governance != nil {
+		if p.governance.kind == governanceRead || p.governance.kind == governanceList {
+			return lockShare
+		}
+		return lockExclusive
+	}
 	if p.control != nil {
-		if p.control.kind == controlAuthenticate || p.control.kind == controlReadiness {
+		if controlReadOnly(p.control.kind) {
 			return lockShare
 		}
 		return lockExclusive
@@ -280,6 +330,12 @@ func (s *Store) commitWithRestarts(ctx context.Context, plan opPlan, fact model.
 		return s.acquireFailure(ctx, err)
 	}
 	defer release()
+	if plan.recovery == nil {
+		if s.recoveryRunning.Load() || s.recoveryFailed.Load() {
+			return refused(ClassStartupRecovery, nil)
+		}
+		s.recoverySealed = true
+	}
 	if s.closed {
 		return refused(ClassClosed, nil)
 	}
@@ -364,8 +420,18 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 	}
 
 	var result Result
-	if plan.control != nil {
+	if plan.recovery != nil {
+		result, err = s.applyRecoveryPlan(ctx, tx, plan, locked.recovery)
+	} else if plan.catalog != nil {
+		result, err = s.applyCatalogPlan(ctx, tx, plan, locked.catalog)
+	} else if plan.control != nil {
 		result, err = s.applyControlPlan(ctx, tx, plan, locked.control)
+	} else if plan.governance != nil {
+		result, err = s.applyGovernancePlan(ctx, tx, plan, locked.governance)
+	} else if plan.binding != nil {
+		result, err = s.applyBindingPlan(ctx, tx, plan, locked.binding)
+	} else if plan.relay != nil {
+		result, err = s.applyRelayPlan(ctx, tx, plan, locked)
 	} else {
 		var unusedRestart bool
 		result, err, unusedRestart = s.applyRoomPlan(ctx, tx, plan, fact, locked)
@@ -386,7 +452,7 @@ func (s *Store) commitPlanned(ctx context.Context, plan opPlan, fact model.Event
 }
 
 func (s *Store) readPlannedRoom(ctx context.Context, q rowQuerier, plan opPlan, d *dependencyState, lock string) error {
-	if plan.control != nil {
+	if plan.control != nil || plan.governance != nil || plan.binding != nil || plan.recovery != nil || plan.catalog != nil {
 		return nil
 	}
 	return s.readRoom(ctx, q, plan.key.RoomID, d, lock)
@@ -505,6 +571,28 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 		if err != nil {
 			return s.postBeginFailure(ctx, err)
 		}
+		if membershipRevokes(*plan.roomMembership) {
+			scope := authorityRevocationScope{UserID: plan.roomMembership.TargetUserID, RoomID: plan.key.RoomID}
+			if err := s.retireAuthorityBindings(ctx, tx, scope, plan.userID); err != nil {
+				if isStoredFactCorruption(err) {
+					return refused3(ClassStoredFactUnreadable, err)
+				}
+				return s.postBeginFailure(ctx, err)
+			}
+			if err := s.revokeNativeCredentials(ctx, tx, scope); err != nil {
+				return s.postBeginFailure(ctx, err)
+			}
+			// Retirement facts and the membership fact share this Room's one
+			// revision change. The exclusive guard and prelocked scope remain
+			// held; only the sequence advanced within this same transaction.
+			if err := tx.QueryRow(ctx, `SELECT current_seq FROM `+s.table("rooms")+` WHERE room_id=$1`, plan.key.RoomID).Scan(&locked.currentSeq); err != nil {
+				return s.postBeginFailure(ctx, err)
+			}
+			if locked.currentSeq >= math.MaxInt64 {
+				return refused3(ClassRangeExceeded, nil)
+			}
+			fact.CreatedAt = time.Now().UTC()
+		}
 	}
 	stored := fact
 	stored.Seq = locked.currentSeq + 1
@@ -523,10 +611,10 @@ func (s *Store) applyRoomPlan(ctx context.Context, tx pgx.Tx, plan opPlan, fact 
 		}
 	}
 	now := time.Now().UTC()
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("room_events")+` (room_id, seq, event_id, fact_version, event_encoding, kind, actor, created_at, origin_user) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		plan.key.RoomID, int64(stored.Seq), stored.ID, factCodecVersion, encoding, stored.Kind, string(stored.Actor), stored.CreatedAt, plan.userID); err != nil {
+	if err := s.writeStoredRoomEvent(ctx, tx, stored, userFactOrigin(plan.userID)); err != nil {
 		return s.postBeginFailure(ctx, err)
 	}
+
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("operations")+` (op_namespace, deployment_id, room_id, binding_id, generation, op_kind, identifier, principal, intent_hash, expected_revision, result_seq, result_revision, committed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		plan.key.Namespace, plan.key.Deployment, plan.key.RoomID, plan.key.BindingID, int64(plan.key.Generation), plan.key.OpKind, plan.key.Identifier, plan.key.Principal, plan.hash[:], int64(plan.expectedRevision), int64(stored.Seq), int64(locked.revision+1), now); err != nil {
 		return s.postBeginFailure(ctx, err)
@@ -607,18 +695,19 @@ func (s *Store) commitFailure(err error) (Result, error, bool) {
 // cross-checks the index columns; the index columns are a derived projection
 // and are never the replay source.
 func (s *Store) loadFact(ctx context.Context, q rowQuerier, roomID string, seq uint64) (model.Event, error) {
-	var eventID, kind, actor string
+	var eventID, kind, actor, originKind string
+	var originUser *string
 	var factVersion int
 	var encoding []byte
-	err := q.QueryRow(ctx, `SELECT event_id, fact_version, kind, actor, event_encoding FROM `+s.table("room_events")+` WHERE room_id = $1 AND seq = $2`, roomID, int64(seq)).
-		Scan(&eventID, &factVersion, &kind, &actor, &encoding)
+	err := q.QueryRow(ctx, `SELECT event_id, fact_version, kind, actor, event_encoding, origin_kind, origin_user FROM `+s.table("room_events")+` WHERE room_id = $1 AND seq = $2`, roomID, int64(seq)).
+		Scan(&eventID, &factVersion, &kind, &actor, &encoding, &originKind, &originUser)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Event{}, &storedFactCorruption{err: err}
 		}
 		return model.Event{}, err
 	}
-	event, err := decodeStoredFact(roomID, seq, eventID, factVersion, kind, actor, encoding)
+	event, err := decodeStoredFact(roomID, seq, eventID, factVersion, kind, actor, encoding, originKind, originUser)
 	if err != nil {
 		return model.Event{}, &storedFactCorruption{err: err}
 	}
@@ -636,21 +725,4 @@ func (e *storedFactCorruption) Unwrap() error { return e.err }
 func isStoredFactCorruption(err error) bool {
 	var corrupt *storedFactCorruption
 	return errors.As(err, &corrupt)
-}
-
-// decodeStoredFact is the one stored-fact decoder: it validates the fact
-// codec version and the index-column/encoding agreement, so replay, resolution
-// and snapshots all read durable facts through the same checks.
-func decodeStoredFact(roomID string, seq uint64, eventID string, factVersion int, kind, actor string, encoding []byte) (model.Event, error) {
-	if factVersion != factCodecVersion {
-		return model.Event{}, fmt.Errorf("stored fact version %d is not supported by this build", factVersion)
-	}
-	var event model.Event
-	if err := json.Unmarshal(encoding, &event); err != nil {
-		return model.Event{}, err
-	}
-	if event.ID != eventID || event.Seq != seq || event.RoomID != roomID || event.Kind != kind || string(event.Actor) != actor {
-		return model.Event{}, fmt.Errorf("stored fact index columns disagree with the authoritative encoding")
-	}
-	return event, nil
 }

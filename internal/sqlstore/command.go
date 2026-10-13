@@ -10,6 +10,7 @@ import (
 	"regexp"
 
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
 )
 
 // The first slice's closed surface. Everything else is refused with a stable
@@ -39,7 +40,7 @@ const (
 	sqlstoreSchemaVersion = 2
 	// factCodecVersion versions the stored event encoding. It is independent of
 	// the Local Store version (which also covers provisioning and windows).
-	factCodecVersion = 1
+	factCodecVersion = 2
 
 	maxEncodingBytes = 262144
 )
@@ -62,6 +63,7 @@ const (
 	ClassStateInvalid            = "state_invalid"
 	ClassInvalidControlState     = "invalid_control_state"
 	ClassUnsupportedControlState = "unsupported_control_state"
+	ClassLastAdministrator       = "last_administrator"
 	ClassDiscoveryRestart        = "discovery_restart_exceeded"
 	ClassSerializationFailure    = "serialization_failure"
 	ClassDeadlockDetected        = "deadlock_detected"
@@ -83,12 +85,14 @@ var (
 
 // AuthContext is constructed by the authenticated layer; the kernel never
 // parses credentials and never takes identity from the command's own key.
-// This slice is human-only: binding/device authority records arrive with a
-// later mutation version, so no binding reference is accepted here.
+// Exactly one credential selector is populated by a fenced Authenticate call.
+// Device and Binding selectors never inherit browser or administrator rights.
 type AuthContext struct {
-	Deployment string
-	UserID     string
-	SessionID  string
+	Deployment     string
+	UserID         string
+	SessionID      string
+	DeviceGrantID  string
+	BindingGrantID string
 }
 
 // OpKey is the idempotency namespace of §13. The binding fields exist for the
@@ -152,14 +156,28 @@ const (
 // fact. Replayed returns the original stored fact (original event id and
 // creation time) — never a freshly constructed candidate event.
 type Result struct {
-	Outcome  Outcome
-	Class    string
-	Err      error
-	Seq      uint64
-	Revision uint64
-	Fact     model.Event
-	Control  *ControlReceipt
-	session  *BrowserSession
+	Outcome           Outcome
+	Class             string
+	Err               error
+	Seq               uint64
+	Revision          uint64
+	Fact              model.Event
+	Facts             []model.Event
+	Relay             *relay.EnterpriseOperationResult
+	Governance        *GovernanceReceipt
+	BindingAuthority  *BindingAuthorityReceipt
+	Control           *ControlReceipt
+	Catalog           *CatalogReceipt
+	catalogPage       *CatalogPage
+	Recovery          *RecoveryReport
+	recoveryRooms     []string
+	session           *BrowserSession
+	device            *DeviceCredential
+	binding           *BindingCredential
+	enrollment        *DeviceEnrollmentInfo
+	governanceActions []GovernanceAction
+	bindingRequests   []BindingRequestInfo
+	bindingContext    *BindingContext
 }
 
 // KernelError is the error form of a non-committed outcome.
@@ -197,6 +215,8 @@ func unknown(class string, cause error) (Result, error) {
 // An empty class means the command may proceed.
 func validateCommand(cmd Command) string {
 	switch {
+	case cmd.Auth.DeviceGrantID != "" || cmd.Auth.BindingGrantID != "":
+		return ClassAuthorization
 	case cmd.Key.Namespace != namespaceHuman:
 		return ClassUnsupportedNamespace
 	case cmd.Key.OpKind != opKindAppendFact:

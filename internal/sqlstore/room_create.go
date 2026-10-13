@@ -48,6 +48,9 @@ func (s *Store) ResolveRoomCreate(ctx context.Context, auth AuthContext, roomID,
 }
 
 func (s *Store) roomCreatePlan(cmd RoomCreateCommand) (opPlan, string) {
+	if cmd.Auth.DeviceGrantID != "" || cmd.Auth.BindingGrantID != "" {
+		return opPlan{}, ClassAuthorization
+	}
 	if cmd.Auth.Deployment != s.cfg.DeploymentID || !validRoomCreateIdentity(cmd.Auth.Deployment) || !validRoomCreateIdentity(cmd.Auth.UserID) || !validRoomCreateIdentity(cmd.RoomID) || !validRoomCreateIdentity(cmd.ClientID) {
 		return opPlan{}, ClassInvalidRequest
 	}
@@ -128,7 +131,7 @@ func (s *Store) validateRoomCreateReplay(ctx context.Context, tx pgx.Tx, plan op
 // sequence/revision in the same transaction. Slots are vacant: no Runtime or
 // Binding is selected by creating a Room.
 func (s *Store) insertCreatedRoom(ctx context.Context, tx pgx.Tx, plan opPlan, orgID string, createdAt time.Time) error {
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("rooms")+` (room_id, org_id, host_mode, owner_user_id, current_seq, revision, created_at) VALUES ($1, $2, 'native', $3, 0, 0, $4)`, plan.key.RoomID, orgID, plan.userID, createdAt); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("rooms")+` (room_id, org_id, host_mode, owner_user_id, current_seq, revision, created_at, display_name) VALUES ($1, $2, 'native', $3, 0, 0, $4,$5)`, plan.key.RoomID, orgID, plan.userID, createdAt, plan.roomCreate.Name); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO `+s.table("room_members")+` (room_id, org_id, user_id, role) VALUES ($1, $2, $3, 'owner')`, plan.key.RoomID, orgID, plan.userID); err != nil {

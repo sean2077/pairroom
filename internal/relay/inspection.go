@@ -108,7 +108,7 @@ func (e *Engine) summaryLocked() Summary {
 	}
 
 	for slot, b := range e.bindings {
-		s.Bindings[slot] = BindingSummary{Active: b.Active, Associated: b.SessionID != "" || b.RemoteKey != "", ParkEnabled: b.ParkEnabled, CollectorActive: e.waiters[slot] > 0, LastActivity: b.LastActivity}
+		s.Bindings[slot] = BindingSummary{Active: b.Active, Associated: b.SessionID != "" || b.RemoteKey != "" || e.enterprise && b.enterprise != nil, ParkEnabled: b.ParkEnabled, CollectorActive: e.waiters[slot] > 0, LastActivity: b.LastActivity}
 		if e.cfg.DynamicBindings {
 			v := s.Bindings[slot]
 			v.Runtime, v.Generation = b.Runtime, b.Generation

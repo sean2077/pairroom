@@ -25,7 +25,7 @@ var _ relay.EnterprisePort = (*RoomPort)(nil)
 // operation; the kernel recomputes the intent hash itself.
 func (p *RoomPort) CommitHumanSend(ctx context.Context, cmd relay.EnterpriseSendCommand) (relay.EnterpriseSendResult, error) {
 	result, err := p.store.CommitHumanSend(ctx, HumanSendCommand{
-		Auth:             AuthContext{Deployment: cmd.Auth.Deployment, UserID: cmd.Auth.UserID, SessionID: cmd.Auth.SessionID},
+		Auth:             sqlAuth(cmd.Auth),
 		RoomID:           cmd.RoomID,
 		ClientID:         cmd.ClientID,
 		Intent:           HumanSendIntent{To: cmd.Intent.To, Text: cmd.Intent.Text},
@@ -37,13 +37,13 @@ func (p *RoomPort) CommitHumanSend(ctx context.Context, cmd relay.EnterpriseSend
 
 // ResolveHumanSend maps the read-only verification.
 func (p *RoomPort) ResolveHumanSend(ctx context.Context, auth relay.EnterpriseAuth, roomID, clientID string, intent relay.EnterpriseSendIntent) (relay.EnterpriseSendResult, error) {
-	result, err := p.store.ResolveHumanSend(ctx, AuthContext{Deployment: auth.Deployment, UserID: auth.UserID, SessionID: auth.SessionID}, roomID, clientID, HumanSendIntent{To: intent.To, Text: intent.Text})
+	result, err := p.store.ResolveHumanSend(ctx, sqlAuth(auth), roomID, clientID, HumanSendIntent{To: intent.To, Text: intent.Text})
 	return adaptSendResult(result, err)
 }
 
 // ReadonlySnapshot maps the authenticated read-only snapshot.
 func (p *RoomPort) ReadonlySnapshot(ctx context.Context, auth relay.EnterpriseAuth, roomID string) (relay.EnterpriseRoomSnapshot, error) {
-	snapshot, err := p.store.ReadonlySnapshot(ctx, AuthContext{Deployment: auth.Deployment, UserID: auth.UserID, SessionID: auth.SessionID}, roomID)
+	snapshot, err := p.store.ReadonlySnapshot(ctx, sqlAuth(auth), roomID)
 	if err != nil {
 		return relay.EnterpriseRoomSnapshot{}, adaptPortError(err)
 	}
@@ -81,4 +81,8 @@ func adaptPortError(err error) error {
 		return &relay.EnterpriseCommandError{Outcome: string(kernelErr.Outcome), Class: kernelErr.Class, Err: err}
 	}
 	return err
+}
+
+func sqlAuth(auth relay.EnterpriseAuth) AuthContext {
+	return AuthContext{Deployment: auth.Deployment, UserID: auth.UserID, SessionID: auth.SessionID, DeviceGrantID: auth.DeviceGrantID, BindingGrantID: auth.BindingGrantID}
 }

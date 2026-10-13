@@ -131,13 +131,18 @@ func verifySchemaVersion(ctx context.Context, q rowQuerier, schema string) error
 	if existing == nil {
 		return fmt.Errorf("sqlstore: schema is not applied; run ApplySchema")
 	}
-	var version int
-	if err := q.QueryRow(ctx, `SELECT version FROM `+qualified(schema, "schema_meta")).Scan(&version); err != nil {
+	var version, codec int
+	if err := q.QueryRow(ctx, `SELECT version,fact_codec_version FROM `+qualified(schema, "schema_meta")).Scan(&version, &codec); err != nil {
 		return fmt.Errorf("sqlstore: schema metadata unreadable: %w", err)
 	}
-	if version != sqlstoreSchemaVersion {
+	if version != sqlstoreSchemaVersion || codec != factCodecVersion {
 		return fmt.Errorf("sqlstore: schema version %d is not supported by this build (implements %d)", version, sqlstoreSchemaVersion)
 	}
+	var shape bool
+	if err := q.QueryRow(ctx, `SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='room_events' AND ((column_name='origin_kind' AND is_nullable='NO' AND data_type='text') OR (column_name='origin_user' AND is_nullable='YES' AND data_type='text')))=2 AND pg_catalog.to_regclass($2) IS NOT NULL AND pg_catalog.to_regclass($3) IS NOT NULL`, schema, qualified(schema, "startup_room_recoveries"), qualified(schema, "startup_recovery_runs")).Scan(&shape); err != nil || !shape {
+		return fmt.Errorf("sqlstore: unsupported provenance/recovery schema shape")
+	}
+
 	return nil
 }
 
