@@ -61,7 +61,9 @@ func (s *Store) replaceClosedWork(ctx context.Context, plan opPlan) error {
 		return err
 	}
 	// Typed offline restore/recovery commands retain their original barrier
-	// semantics. An ordinary command may not install transport while pending.
+	// semantics. Ordinary plans dispatch to readDependencies or their equivalent
+	// barrier checks; these paths must stay aligned with that dispatch contract.
+	// An ordinary command may not install transport while pending.
 	if plan.restore == nil && plan.recovery == nil {
 		var pending bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+s.table("restore_runs")+` WHERE completed_at IS NULL)`).Scan(&pending); err != nil {

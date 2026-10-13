@@ -48,6 +48,9 @@ func TestGovernanceFinishReplayRejectsRehashedChangedOriginalReceipt(t *testing.
 				t.Fatal(err)
 			}
 			digest := sha256.Sum256(encoding)
+			// Production triggers are the first integrity layer. This test bypasses
+			// that layer to prove immutable-action comparison still detects a corrupt
+			// receipt, including restore INSERTs which do not run UPDATE triggers.
 			if _, err = g.f.admin.Exec(ctx, `ALTER TABLE governance_operations DISABLE TRIGGER governance_operations_immutable`); err != nil {
 				t.Fatal(err)
 			}
