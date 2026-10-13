@@ -18,7 +18,7 @@
   }
   const listIDs = ["room-list", "project-list", "device-list", "agent-list", "session-list", "room-members", "project-members", "slots", "messages", "binding-requests", "governance-actions", "pending-list", "administration-users", "administration-administrators", "administration-admissions", "administration-connections"];
   const inputIDs = ["room-id", "create-room-name", "collaboration-instructions", "create-project-name", "project-name", "project-member-id", "room-name", "room-project-id", "member-id", "ownership-target", "message-text", "governance-room", "governance-owner", "governance-target", "governance-revision", "governance-reason"];
-  const textIDs = ["room-identity", "room-state", "room-sequence", "project-title", "project-state", "pending-description", "journal-status"];
+  const textIDs = ["room-identity", "room-state", "room-access-role", "room-sequence", "project-title", "project-state", "pending-description", "journal-status"];
   const scope = (value = account) => value ? [value.deployment_id, value.user_id, value.session_id].join("/") : "";
   const status = (text) => { $("status").textContent = text; };
   function element(tag, text, className) {
@@ -38,7 +38,7 @@
     lanes.set("room-members", (lanes.get("room-members") || 0) + 1);
     for (const id of ["messages", "slots", "room-members", "binding-requests"]) $(id).replaceChildren();
     for (const id of ["room-name", "room-project-id", "member-id", "ownership-target", "message-text"]) $(id).value = "";
-    for (const id of ["room-identity", "room-state", "room-sequence"]) $(id).textContent = "";
+    for (const id of ["room-identity", "room-state", "room-access-role", "room-sequence"]) $(id).textContent = "";
     $("attachment-file").value = ""; $("attachment-drafts").replaceChildren();
   }
   function invalidate() {
@@ -174,6 +174,7 @@
       room = metadata.data.rooms[0]; room.revision = history.data.revision;
       $("room-title").textContent = room.name || id; $("room-identity").textContent = id; $("room-name").value = room.name; $("room-project-id").value = room.project_id || "";
       $("room-state").textContent = room.ownership_pending_recovery ? "Ownership pending recovery." : room.archived ? "Archived. Agent reservations remain; native work is not stopped." : "Active · " + room.role;
+      $("room-access-role").textContent = { owner: "Owner: history reading and Owner controls follow current Room state and live authorization.", member: "Member: read history; new messages and Agent requests require an active Room and current authorization. Owner controls are unavailable.", viewer: "Viewer: read-only. New messages, Agent Binding requests and Owner controls are unavailable." }[room.role] || "";
       const messages = history.data.messages || [];
       if (!Array.isArray(messages) || messages.length > 300 || !Number.isSafeInteger(history.data.total_messages) || history.data.total_messages < messages.length || !messages.length && history.data.total_messages > 0 || !Number.isSafeInteger(history.data.sequence) || history.data.sequence < 0) throw new Error("invalid history tail");
       displayedMessages = messages; historyTotal = history.data.total_messages; historySequence = history.data.sequence; targetGenerations = history.data.target_generations || {};

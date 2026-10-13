@@ -211,7 +211,7 @@ func bindEnterprise(ctx context.Context, root string, o options, out io.Writer) 
 		if err != nil {
 			return err
 		}
-		return writeJSON(out, map[string]any{"status": meta.Status, "room": serverRoom, "slot": meta.Slot, "request_id": meta.RequestID, "approval_url": approval, "notice": "The Room Owner must explicitly approve this exact request. Then repeat the same bind command in this native session; this endpoint alone can complete it."})
+		return writeJSON(out, map[string]any{"status": meta.Status, "room": serverRoom, "slot": meta.Slot, "request_id": meta.RequestID, "approval_url": approval, "notice": "The Room Owner must explicitly approve this exact request. Then repeat the same bind command in this native session; this endpoint alone can complete it. Once completed, this Binding can read the Room's full retained history, including messages from before admission, referenced attachments/images and same-Room quoted evidence."})
 	}
 	if meta.BindID != attempt.Credentials.BindID || meta.UserID != attempt.Route.UserID || meta.DeviceID != attempt.Route.DeviceID || meta.Slot != attempt.Slot || meta.Runtime != kind || meta.Generation == 0 {
 		return errors.New("enterprise completion changed the original endpoint identity")
@@ -368,7 +368,7 @@ func resumeEnterpriseState(ctx context.Context, root string, state State, renew 
 	return writeEnterpriseReady(out, client.State, view)
 }
 func writeEnterpriseReady(out io.Writer, state State, view enterpriseclient.RelayContext) error {
-	result := map[string]any{"status": "accepted", "room": state.Enterprise.RoomID, "service": state.Enterprise.Origin, "deployment": state.Enterprise.DeploymentID, "binding": view.Binding, "bootstrap": view.Bootstrap, "collaboration": view.Collaboration, "peer_generation": view.PeerGeneration, "notice": "Enterprise Native relay is bound to this original native session. Use wait or the approved hooks to receive; credential renewal is explicit foreground work."}
+	result := map[string]any{"status": "accepted", "room": state.Enterprise.RoomID, "service": state.Enterprise.Origin, "deployment": state.Enterprise.DeploymentID, "binding": view.Binding, "bootstrap": view.Bootstrap, "collaboration": view.Collaboration, "peer_generation": view.PeerGeneration, "notice": "Enterprise Native relay is bound to this original native session. Use wait or the approved hooks to receive; credential renewal is explicit foreground work. This Binding can read the Room's full retained history, including messages from before admission, referenced attachments/images and same-Room quoted evidence."}
 	if state.AutomaticPaused {
 		result["automatic_publication_notice"] = automaticPauseNotice(view.PeerGeneration)
 	}
