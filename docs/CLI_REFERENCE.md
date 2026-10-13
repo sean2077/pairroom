@@ -163,6 +163,7 @@ The following names are extracted from `cmd/pairroom/*.go` and `internal/relaycl
 - `--force`
 - `--gemini-command`
 - `--grok-command`
+- `--headless`
 - `--host-mode`
 - `--id`
 - `--idle-timeout`
