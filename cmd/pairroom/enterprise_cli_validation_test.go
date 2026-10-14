@@ -133,30 +133,40 @@ func TestEnterpriseMaintenanceAndDispatchRejectBeforeResources(t *testing.T) {
 	config := writeEnterpriseConfig(t, withAttachments)
 	withoutAttachments := writeEnterpriseConfig(t, testEnterpriseConfig())
 	absentConfig := filepath.Join(root, "absent.json")
-	// A negative case must not depend on the ambient environment: clearing the referenced
-	// variable keeps the database-secret refusal deterministic even when a developer or CI
-	// happens to export the test reference name.
+	// A negative case must not depend on the ambient environment: clearing the referenced variables
+	// keeps every database or client secret refusal deterministic even when a developer or CI
+	// happens to export the test reference names.
 	t.Setenv(withAttachments.DatabaseDSNEnv, "")
-	cases := map[string][]string{
-		"unsupported action":            {"unknown-action", "--config", config, "--id", "operation-1"},
-		"missing configuration":         {"backup", "--id", "operation-1"},
-		"absent configuration":          {"backup", "--config", absentConfig, "--id", "operation-1"},
-		"missing identifier":            {"backup", "--config", config},
-		"invalid identifier":            {"backup", "--config", config, "--id", "bad id"},
-		"positional arguments":          {"backup", "--config", config, "--id", "operation-1", "extra"},
-		"attachments unconfigured":      {"backup", "--config", withoutAttachments, "--id", "operation-1", "--output", filepath.Join(root, "bundle")},
-		"output inside the object root": {"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(objects, "bundle")},
-		"existing output directory":     {"backup", "--config", config, "--id", "operation-1", "--output", existing},
-		"output parent is a file":       {"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(notADirectory, "bundle")},
-		"source inside the object root": {"restore", "--config", config, "--id", "operation-1", "--source", filepath.Join(objects, "bundle")},
-		"non-canonical manifest digest": {"resolve-restore", "--config", config, "--id", "operation-1", "--manifest-hash", "not-a-digest"},
-		"unavailable database secret":   {"complete-restore", "--config", config, "--id", "operation-1", "--manifest-hash", strings.Repeat("0", 64)},
-		"backup-end without a database": {"backup-end", "--config", config, "--id", "operation-1"},
+	t.Setenv(withAttachments.OIDC.ClientSecretEnv, "")
+	// Each case names the refusal it must produce, so a deleted validation cannot pass as the
+	// unavailable database secret that unconfigured environments report instead.
+	cases := map[string]struct {
+		args []string
+		want string
+	}{
+		"unsupported action":            {[]string{"unknown-action", "--config", config, "--id", "operation-1"}, "unsupported enterprise command"},
+		"missing configuration":         {[]string{"backup", "--id", "operation-1"}, "enterprise --config is required"},
+		"absent configuration":          {[]string{"backup", "--config", absentConfig, "--id", "operation-1"}, "cannot open enterprise configuration file"},
+		"missing identifier":            {[]string{"backup", "--config", config}, "stable valid --id"},
+		"invalid identifier":            {[]string{"backup", "--config", config, "--id", "bad id"}, "stable valid --id"},
+		"positional arguments":          {[]string{"backup", "--config", config, "--id", "operation-1", "extra"}, "stable valid --id"},
+		"attachments unconfigured":      {[]string{"backup", "--config", withoutAttachments, "--id", "operation-1", "--output", filepath.Join(root, "bundle")}, "private attachment directory"},
+		"output inside the object root": {[]string{"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(objects, "bundle")}, "outside the managed object root"},
+		"existing output directory":     {[]string{"backup", "--config", config, "--id", "operation-1", "--output", existing}, "requires a new output directory"},
+		"output parent is a file":       {[]string{"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(notADirectory, "bundle")}, "existing direct directory"},
+		"source inside the object root": {[]string{"restore", "--config", config, "--id", "operation-1", "--source", filepath.Join(objects, "bundle")}, "outside the new managed object root"},
+		"non-canonical manifest digest": {[]string{"resolve-restore", "--config", config, "--id", "operation-1", "--manifest-hash", "not-a-digest"}, "canonical SHA256"},
+		"unavailable database secret":   {[]string{"complete-restore", "--config", config, "--id", "operation-1", "--manifest-hash", strings.Repeat("0", 64)}, withAttachments.DatabaseDSNEnv + " is unavailable"},
+		"backup-end without a database": {[]string{"backup-end", "--config", config, "--id", "operation-1"}, withAttachments.DatabaseDSNEnv + " is unavailable"},
 	}
-	for name, args := range cases {
+	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
-			if err := runEnterprise(args); err == nil {
+			err := runEnterprise(testCase.args)
+			if err == nil {
 				t.Fatal("invalid operator invocation was accepted")
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("refusal did not name its own validation: %q", err.Error())
 			}
 		})
 	}
@@ -174,15 +184,22 @@ func TestEnterpriseMaintenanceAndDispatchRejectBeforeResources(t *testing.T) {
 			t.Fatal("enterprise help did not print usage")
 		}
 	}
-	for _, args := range [][]string{
-		{"unknown"},
-		{"init", "extra"},
-		{"init", "--bootstrap-subject", "bad\x01subject"},
-		{"init", "--bootstrap-subject", "alice"},
-		{"serve", "--config", ""},
+	for _, dispatch := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"unknown"}, "unsupported enterprise command"},
+		{[]string{"init", "extra"}, "unexpected enterprise command arguments"},
+		{[]string{"init", "--bootstrap-subject", "bad\x01subject"}, "exact valid --bootstrap-subject"},
+		{[]string{"init", "--bootstrap-subject", "alice"}, "enterprise --config is required"},
+		{[]string{"serve", "--config", ""}, "enterprise --config is required"},
 	} {
-		if err := runEnterprise(args); err == nil {
-			t.Fatalf("invalid enterprise dispatch was accepted: %v", args)
+		err := runEnterprise(dispatch.args)
+		if err == nil {
+			t.Fatalf("invalid enterprise dispatch was accepted: %v", dispatch.args)
+		}
+		if !strings.Contains(err.Error(), dispatch.want) {
+			t.Fatalf("dispatch refusal did not name its own validation: %q", err.Error())
 		}
 	}
 	capture = startStdoutCapture(t)
