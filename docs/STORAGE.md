@@ -108,8 +108,9 @@ Native Room backups do not stop user-owned processes and do not include workspac
 LAN join and membership facts replay completely before either the Engine or the
 Service's cold authorization index prunes its derived request projection.
 Invitation expiry never invalidates an earlier approved membership during
-replay. These projections retain the newest unadmitted attempt per key for one
-invitation window after expiry, plus admitted requests for retirement answers;
+replay. These projections retain the newest unadmitted attempt per key, by
+durable append order rather than timestamp or request ID, for one invitation
+window after expiry, plus admitted requests for retirement answers;
 pruning never rewrites the Event Log. A never-admitted request ID may recur after
 its earlier attempt was forgotten, but an admitted request ID cannot be reassigned.
 

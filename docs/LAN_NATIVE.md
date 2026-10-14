@@ -354,7 +354,8 @@ Room LAN panel. The guest can use `pairroom relay unbind` directly or **Leave**
 in its optional joined Room view. Those actions do not stop either vendor process.
 A revoked member frees the shared slot: a successor admitted from a fresh
 invitation selects its own Runtime, and an expired invitation window keeps
-answering its newest attempt before that request is forgotten. Revoked
+answering its newest attempt, by durable append order, before that request is
+forgotten. Revoked
 admissions stay durable for audit; revoking never rewrites the Room Event Log.
 Management settings, arbitrary workspace browsing, process control, approval
 resolution, provider configuration and listener configuration are never LAN
