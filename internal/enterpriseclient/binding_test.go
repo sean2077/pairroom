@@ -57,6 +57,8 @@ type nativeWireFixture struct {
 	posts, reads                              int
 	contextFailures                           int
 	contextCapacityRejections                 int
+	capacityRefusedAt                         time.Time
+	capacityRetryGap                          time.Duration
 	contextFailureClass                       string
 	contextEntered                            chan struct{}
 	blockContext                              bool
@@ -402,6 +404,9 @@ func (f *nativeWireFixture) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == base+"relay/context" {
 		f.reads++
+		if !f.capacityRefusedAt.IsZero() && f.capacityRetryGap == 0 {
+			f.capacityRetryGap = time.Since(f.capacityRefusedAt)
+		}
 		if f.blockContext {
 			entered := f.contextEntered
 			f.mu.Unlock()
@@ -420,6 +425,7 @@ func (f *nativeWireFixture) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
 			write(map[string]string{"error": "replay_capacity"})
+			f.capacityRefusedAt = time.Now()
 			return
 		}
 		if f.contextFailures > 0 {
@@ -801,8 +807,13 @@ func TestEnterpriseContextReplayCapacityRefusalBacksOffWithoutEffects(t *testing
 	if f.contextCapacityRejections != 0 || f.reads < 2 || f.posts != 0 {
 		t.Fatalf("refused read was not observed again without effects: reads=%d effects=%d", f.reads, f.posts)
 	}
-	if elapsed < time.Second || elapsed > 8*time.Second {
-		t.Fatalf("replay admission backoff ignored Retry-After or the wait bound: %v", elapsed)
+	// The retry interval is measured from the refusal response to the next
+	// context request, independent of the empty Room's later idle polling.
+	if f.capacityRetryGap < time.Second {
+		t.Fatalf("context read retried %v after a Retry-After: 1 refusal", f.capacityRetryGap)
+	}
+	if elapsed > 8*time.Second {
+		t.Fatalf("replay admission backoff exceeded the wait bound: %v", elapsed)
 	}
 }
 
