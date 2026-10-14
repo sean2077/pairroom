@@ -183,9 +183,19 @@ func (c *Client) Login(parent context.Context, label string, recover bool) (Stat
 	}
 	return c.activate(&s, r)
 }
+
+// receiptClockTolerance widens the credential expiry sanity ceilings so a
+// Service clock modestly ahead of this endpoint does not strand a committed
+// receipt. It is an operational allowance, not skew detection: a receipt that
+// still exceeds a ceiling stays unverifiable and remains unknown.
+const receiptClockTolerance = 5 * time.Minute
+
+// receiptNow is the endpoint wall clock used for receipt sanity ceilings.
+var receiptNow = time.Now
+
 func validExpiry(r operationResponse) bool {
-	now := time.Now()
-	return r.ExpiresAt.After(now) && !r.RefreshExpiresAt.Before(r.ExpiresAt) && !r.ExpiresAt.After(now.Add(16*time.Minute)) && !r.RefreshExpiresAt.After(now.Add(31*24*time.Hour))
+	now := receiptNow()
+	return r.ExpiresAt.After(now) && !r.RefreshExpiresAt.Before(r.ExpiresAt) && !r.ExpiresAt.After(now.Add(16*time.Minute+receiptClockTolerance)) && !r.RefreshExpiresAt.After(now.Add(31*24*time.Hour+receiptClockTolerance))
 }
 func (c *Client) activate(s *state, r operationResponse) (Status, error) {
 	p := s.Pending
