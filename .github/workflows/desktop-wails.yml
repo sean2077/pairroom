@@ -144,7 +144,7 @@ jobs:
           ./scripts/test_windows_installer.ps1 -Installer ./bin/PairRoom-amd64-installer.exe
       - name: Upload Windows installer smoke logs
         if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installer-smoke-logs
           path: ${{ runner.temp }}/pairroom-installer-smoke-*/**/*.log
@@ -241,7 +241,7 @@ jobs:
         working-directory: desktop
         run: python scripts/collect-artifacts.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --label ${{ matrix.label }}
       - name: Upload desktop packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairroom-desktop-${{ matrix.label }}
           path: desktop/dist/${{ matrix.label }}/
