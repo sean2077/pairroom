@@ -208,11 +208,9 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.t.Error(err)
 		return
 	}
-	// Native identity must not cross the enterprise wire. The body is scanned as decoded
-	// JSON strings so the check behaves the same on every platform (a raw scan silently
-	// missed Windows paths because JSON escapes their separators). A review anchor is
-	// deliberate published evidence and its documented workspace field names the sender's
-	// checkout, so exactly that validated field is exempt; every other string is scanned.
+	// Native identity must not cross the enterprise wire; the shared scanner keeps that
+	// check identical on every platform and exempts only a validated review anchor's own
+	// documented workspace field (see scanNativeMetadata).
 	var scope struct {
 		Intent relay.EnterpriseOperationIntent `json:"intent"`
 	}
@@ -220,41 +218,19 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(data, &scope) == nil && scope.Intent.Review.Validate() == nil {
 		exempt = scope.Intent.Review.Workspace
 	}
-	var values []string
-	var collect func(value any)
-	collect = func(value any) {
-		switch typed := value.(type) {
-		case string:
-			values = append(values, typed)
-		case []any:
-			for _, element := range typed {
-				collect(element)
-			}
-		case map[string]any:
-			for key, element := range typed {
-				values = append(values, key)
-				collect(element)
-			}
-		}
-	}
-	var decoded any
-	if json.Unmarshal(data, &decoded) != nil {
+	scan := scanNativeMetadata(data, exempt, map[string]string{
+		"session":          f.state.SessionID,
+		"workspace":        f.root,
+		"credential":       "private-local-relay-capability",
+		"transcript_path":  "transcript_path",
+		"session_metadata": "session_id",
+	})
+	if scan.Malformed {
 		f.t.Error("enterprise wire body is not JSON")
 		return
 	}
-	collect(decoded)
-	for index, value := range values {
-		if exempt != "" && value == exempt {
-			values = append(values[:index], values[index+1:]...)
-			break
-		}
-	}
-	for _, private := range []string{f.state.SessionID, f.root, "private-local-relay-capability", "transcript_path", "session_id"} {
-		for _, value := range values {
-			if strings.Contains(value, private) {
-				f.t.Error("native metadata crossed enterprise wire")
-			}
-		}
+	if scan.Leaked != "" {
+		f.t.Error("native metadata crossed enterprise wire: " + scan.Leaked)
 	}
 	var command struct {
 		ClientID   string                          `json:"client_id"`
