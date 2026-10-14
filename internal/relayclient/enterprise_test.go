@@ -211,14 +211,7 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 	// Native identity must not cross the enterprise wire; the shared scanner keeps that
 	// check identical on every platform and exempts only a validated review anchor's own
 	// documented workspace field (see scanNativeMetadata).
-	var scope struct {
-		Intent relay.EnterpriseOperationIntent `json:"intent"`
-	}
-	exempt := ""
-	if json.Unmarshal(data, &scope) == nil && scope.Intent.Review.Validate() == nil {
-		exempt = scope.Intent.Review.Workspace
-	}
-	scan := scanNativeMetadata(data, exempt, []nativeMarker{
+	scan := scanNativeMetadata(data, validatedReviewWorkspace(data), []nativeMarker{
 		{Label: "session", Value: f.state.SessionID},
 		{Label: "workspace", Value: f.root, WorkspaceClass: true},
 		{Label: "credential", Value: "private-local-relay-capability"},
