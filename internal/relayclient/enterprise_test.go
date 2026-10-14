@@ -218,12 +218,12 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(data, &scope) == nil && scope.Intent.Review.Validate() == nil {
 		exempt = scope.Intent.Review.Workspace
 	}
-	scan := scanNativeMetadata(data, exempt, map[string]string{
-		"session":          f.state.SessionID,
-		"workspace":        f.root,
-		"credential":       "private-local-relay-capability",
-		"transcript_path":  "transcript_path",
-		"session_metadata": "session_id",
+	scan := scanNativeMetadata(data, exempt, []nativeMarker{
+		{Label: "session", Value: f.state.SessionID},
+		{Label: "workspace", Value: f.root, WorkspaceClass: true},
+		{Label: "credential", Value: "private-local-relay-capability"},
+		{Label: "transcript_path", Value: "transcript_path"},
+		{Label: "session_metadata", Value: "session_id"},
 	})
 	if scan.Malformed {
 		f.t.Error("enterprise wire body is not JSON")
