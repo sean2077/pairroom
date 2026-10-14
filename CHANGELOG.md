@@ -8,6 +8,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 - Check the bound Codex session's native queue before submitting a wake, so a prompt still queued during a long Desktop turn prevents another identical prompt after relay suppression expires or infers progress. Recheck an unchanged pending head with exponential backoff from 30 seconds to five minutes without spending wake reservations or rate budget; unavailable queue inspection fails closed and leaves foreground collection available. Back off repeated inspection failures, expose the actual queue suppression in read-only diagnostics, and retain bounded support for large queue responses and explicit probe deadlines.
 
+### Changed
+
+- Approve `golang.org/x/text` v0.29.0 → v0.41.0 in the pinned dependency closure, so the reachable `x/text/secure/precis` (GO-2026-6629) and `x/text/unicode/norm` (GO-2026-5970) advisories no longer resolve through the PostgreSQL driver's dependency graph. The reviewed license files are unchanged, and no module is added, removed or replaced.
+
 ## [v5.16.0] — 2026-10-12
 
 ### Added
