@@ -208,9 +208,52 @@ func (f *enterpriseCLIFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.t.Error(err)
 		return
 	}
+	// Native identity must not cross the enterprise wire. The body is scanned as decoded
+	// JSON strings so the check behaves the same on every platform (a raw scan silently
+	// missed Windows paths because JSON escapes their separators). A review anchor is
+	// deliberate published evidence and its documented workspace field names the sender's
+	// checkout, so exactly that validated field is exempt; every other string is scanned.
+	var scope struct {
+		Intent relay.EnterpriseOperationIntent `json:"intent"`
+	}
+	exempt := ""
+	if json.Unmarshal(data, &scope) == nil && scope.Intent.Review.Validate() == nil {
+		exempt = scope.Intent.Review.Workspace
+	}
+	var values []string
+	var collect func(value any)
+	collect = func(value any) {
+		switch typed := value.(type) {
+		case string:
+			values = append(values, typed)
+		case []any:
+			for _, element := range typed {
+				collect(element)
+			}
+		case map[string]any:
+			for key, element := range typed {
+				values = append(values, key)
+				collect(element)
+			}
+		}
+	}
+	var decoded any
+	if json.Unmarshal(data, &decoded) != nil {
+		f.t.Error("enterprise wire body is not JSON")
+		return
+	}
+	collect(decoded)
+	for index, value := range values {
+		if exempt != "" && value == exempt {
+			values = append(values[:index], values[index+1:]...)
+			break
+		}
+	}
 	for _, private := range []string{f.state.SessionID, f.root, "private-local-relay-capability", "transcript_path", "session_id"} {
-		if strings.Contains(string(data), private) {
-			f.t.Error("native metadata crossed enterprise wire")
+		for _, value := range values {
+			if strings.Contains(value, private) {
+				f.t.Error("native metadata crossed enterprise wire")
+			}
 		}
 	}
 	var command struct {
