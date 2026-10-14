@@ -133,6 +133,10 @@ func TestEnterpriseMaintenanceAndDispatchRejectBeforeResources(t *testing.T) {
 	config := writeEnterpriseConfig(t, withAttachments)
 	withoutAttachments := writeEnterpriseConfig(t, testEnterpriseConfig())
 	absentConfig := filepath.Join(root, "absent.json")
+	// A negative case must not depend on the ambient environment: clearing the referenced
+	// variable keeps the database-secret refusal deterministic even when a developer or CI
+	// happens to export the test reference name.
+	t.Setenv(withAttachments.DatabaseDSNEnv, "")
 	cases := map[string][]string{
 		"unsupported action":            {"unknown-action", "--config", config, "--id", "operation-1"},
 		"missing configuration":         {"backup", "--id", "operation-1"},
@@ -190,11 +194,20 @@ func TestEnterpriseMaintenanceAndDispatchRejectBeforeResources(t *testing.T) {
 		t.Fatal("operator identifier pattern changed")
 	}
 	canonical := strings.Repeat("ab", 32)
-	if _, err := maintenanceDigest(canonical); err != nil {
+	if digest, err := maintenanceDigest(canonical); err != nil {
 		t.Fatal("canonical manifest digest was rejected")
+	} else {
+		for _, value := range digest {
+			if value != 0xab {
+				t.Fatalf("canonical manifest digest decoded to unexpected bytes: %x", digest)
+			}
+		}
 	}
 	if _, err := maintenanceDigest(strings.ToUpper(canonical)); err == nil {
 		t.Fatal("non-canonical manifest digest was accepted")
+	}
+	if _, err := maintenanceDigest(strings.Repeat("ab", 31)); err == nil {
+		t.Fatal("short manifest digest was accepted")
 	}
 }
 
