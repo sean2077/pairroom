@@ -56,6 +56,7 @@ type nativeWireFixture struct {
 	dropKind                                  relay.EnterpriseOperationKind
 	posts, reads                              int
 	contextFailures                           int
+	contextCapacityRejections                 int
 	contextFailureClass                       string
 	contextEntered                            chan struct{}
 	blockContext                              bool
@@ -412,6 +413,15 @@ func (f *nativeWireFixture) serve(w http.ResponseWriter, r *http.Request) {
 			f.mu.Lock()
 			return
 		}
+		if f.contextCapacityRejections > 0 {
+			// The exact Service replay-admission refusal: rejected at handler
+			// entry, before authentication or any SQL read.
+			f.contextCapacityRejections--
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			write(map[string]string{"error": "replay_capacity"})
+			return
+		}
 		if f.contextFailures > 0 {
 			f.contextFailures--
 			class := f.contextFailureClass
@@ -765,6 +775,34 @@ func TestEnterpriseContextOutageWaitIsBoundedAndNeverRetriesEffects(t *testing.T
 	defer f.mu.Unlock()
 	if f.reads < 1 || f.reads > 2 || f.posts != 0 {
 		t.Fatalf("outage amplified reads/effects: reads=%d effects=%d", f.reads, f.posts)
+	}
+}
+
+// Replay admission refuses a side-effect-free context read before any work, so
+// overlapping waits back off and observe again instead of ending as unknown.
+func TestEnterpriseContextReplayCapacityRefusalBacksOffWithoutEffects(t *testing.T) {
+	f := newNativeWireFixture(t)
+	e := f.endpoint(t, "capacity", model.ActorSlot1, model.RuntimeClaude)
+	f.approve(t, e)
+	f.mu.Lock()
+	f.contextCapacityRejections = 1
+	f.mu.Unlock()
+	started := time.Now()
+	var reply map[string]any
+	if err := e.binding.Relay(context.Background(), e.auth, "wait", map[string]any{"timeout_seconds": 5}, &reply); err != nil {
+		t.Fatalf("replay admission refusal ended the wait: %v", err)
+	}
+	if claim, ok := reply["claim"]; !ok || claim != nil {
+		t.Fatalf("empty Room wait did not return an empty claim: %v", reply)
+	}
+	elapsed := time.Since(started)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.contextCapacityRejections != 0 || f.reads < 2 || f.posts != 0 {
+		t.Fatalf("refused read was not observed again without effects: reads=%d effects=%d", f.reads, f.posts)
+	}
+	if elapsed < time.Second || elapsed > 8*time.Second {
+		t.Fatalf("replay admission backoff ignored Retry-After or the wait bound: %v", elapsed)
 	}
 }
 

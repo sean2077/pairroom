@@ -433,7 +433,12 @@ func (b *BindingClient) collect(ctx context.Context, a relay.Auth, req nativeRel
 			if !transientContextFailure(err) {
 				return err
 			}
-			if err := pauseContextPoll(pollCtx, contextPollDelay(reconnect, false, rand.Uint64())); err != nil {
+			delay := contextPollDelay(reconnect, false, rand.Uint64())
+			var failure *Error
+			if errors.As(err, &failure) && failure.Class == "replay_capacity" {
+				delay = max(delay, replayCapacityRetryAfter)
+			}
+			if err := pauseContextPoll(pollCtx, delay); err != nil {
 				continue
 			}
 			reconnect++
@@ -586,13 +591,25 @@ func pauseContextPoll(ctx context.Context, delay time.Duration) error {
 		return nil
 	}
 }
+
+// replayCapacityRetryAfter matches the Service's Retry-After for replay
+// admission refusals; a context poll never comes back sooner.
+const replayCapacityRetryAfter = time.Second
+
+func replayCapacityRefusal(data []byte) bool {
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	return decodeWire(data, &refusal) == nil && refusal.Error == "replay_capacity"
+}
+
 func transientContextFailure(err error) bool {
 	var failure *Error
 	if !errors.As(err, &failure) {
 		return false
 	}
 	switch failure.Class {
-	case "deployment_unavailable", "response_lost", "connection_failed", "connection_exception", "operation_budget_exceeded", "lease_lost":
+	case "deployment_unavailable", "response_lost", "connection_failed", "connection_exception", "operation_budget_exceeded", "lease_lost", "replay_capacity":
 		return true
 	}
 	return false
@@ -769,6 +786,11 @@ func (b *BindingClient) context(ctx context.Context, r bindingRecord) (RelayCont
 	status, data, err := b.parent.request(ctx, http.MethodGet, devicePath+"/rooms/"+r.RoomID+"/relay/context", nil, r.Grant.Token, 64<<10)
 	if err != nil {
 		return RelayContext{}, err
+	}
+	if status == http.StatusTooManyRequests && replayCapacityRefusal(data) {
+		// Replay admission refuses before authentication or any read, so this
+		// side-effect-free observation definitely did not run.
+		return RelayContext{}, &Error{Outcome: "not_committed", Class: "replay_capacity"}
 	}
 	if status != http.StatusOK {
 		return RelayContext{}, wireFailure(status, data)
