@@ -7,10 +7,12 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Fixed
 
 - Check the bound Codex session's native queue before submitting a wake, so a prompt still queued during a long Desktop turn prevents another identical prompt after relay suppression expires or infers progress. Recheck an unchanged pending head with exponential backoff from 30 seconds to five minutes without spending wake reservations or rate budget; unavailable queue inspection fails closed and leaves foreground collection available. Back off repeated inspection failures, expose the actual queue suppression in read-only diagnostics, and retain bounded support for large queue responses and explicit probe deadlines.
+- Scan enterprise request bodies as decoded JSON before checking for endpoint-native metadata, so the same check applies on every platform; the previous raw scan never matched a Windows path because JSON escapes its separators. Only a validated review anchor's own documented workspace field is exempt, because publishing that evidence is the feature; the same path, session identity, credential or transcript metadata in any other position still fails the check, with fixed marker classes and no private values in the error.
 
 ### Changed
 
 - Approve `golang.org/x/text` v0.29.0 → v0.41.0 in the pinned dependency closure, so the reachable `x/text/secure/precis` (GO-2026-6629) and `x/text/unicode/norm` (GO-2026-5970) advisories no longer resolve through the PostgreSQL driver's dependency graph. The reviewed license files are unchanged, and no module is added, removed or replaced.
+- Set the measured `cmd/pairroom` coverage floor to 83%. The package now carries the PostgreSQL-gated operator maintenance, restore and endpoint CLI whose tests are explicitly opt-in, so the DSN-less CI measurement sits below the previous 87% floor; the floor keeps gating that environment, and new DSN-free tests for the operator and endpoint validation paths raise the measured value from 78.1% to 83.6%.
 
 ## [v5.16.0] — 2026-10-12
 
