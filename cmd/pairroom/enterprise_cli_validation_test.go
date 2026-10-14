@@ -140,24 +140,32 @@ func TestEnterpriseMaintenanceAndDispatchRejectBeforeResources(t *testing.T) {
 	t.Setenv(withAttachments.OIDC.ClientSecretEnv, "")
 	// Each case names the refusal it must produce, so a deleted validation cannot pass as the
 	// unavailable database secret that unconfigured environments report instead.
+	//
+	// refusal lists the stable fragments a case may report. More than one appears only where the
+	// platform decides between two adjacent validations of the same fixture: a path below a regular
+	// file reports not-exist on Windows, so the operator command reaches its parent check, while on
+	// Linux the same path reports ENOTDIR, which the command classifies as a pre-existing output
+	// rather than an absent one. Both are this fixture's own refusals; neither is the unavailable
+	// secret fallback these assertions exist to exclude.
+	refusal := func(fragments ...string) []string { return fragments }
 	cases := map[string]struct {
 		args []string
-		want string
+		want []string
 	}{
-		"unsupported action":            {[]string{"unknown-action", "--config", config, "--id", "operation-1"}, "unsupported enterprise command"},
-		"missing configuration":         {[]string{"backup", "--id", "operation-1"}, "enterprise --config is required"},
-		"absent configuration":          {[]string{"backup", "--config", absentConfig, "--id", "operation-1"}, "cannot open enterprise configuration file"},
-		"missing identifier":            {[]string{"backup", "--config", config}, "stable valid --id"},
-		"invalid identifier":            {[]string{"backup", "--config", config, "--id", "bad id"}, "stable valid --id"},
-		"positional arguments":          {[]string{"backup", "--config", config, "--id", "operation-1", "extra"}, "stable valid --id"},
-		"attachments unconfigured":      {[]string{"backup", "--config", withoutAttachments, "--id", "operation-1", "--output", filepath.Join(root, "bundle")}, "private attachment directory"},
-		"output inside the object root": {[]string{"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(objects, "bundle")}, "outside the managed object root"},
-		"existing output directory":     {[]string{"backup", "--config", config, "--id", "operation-1", "--output", existing}, "requires a new output directory"},
-		"output parent is a file":       {[]string{"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(notADirectory, "bundle")}, "existing direct directory"},
-		"source inside the object root": {[]string{"restore", "--config", config, "--id", "operation-1", "--source", filepath.Join(objects, "bundle")}, "outside the new managed object root"},
-		"non-canonical manifest digest": {[]string{"resolve-restore", "--config", config, "--id", "operation-1", "--manifest-hash", "not-a-digest"}, "canonical SHA256"},
-		"unavailable database secret":   {[]string{"complete-restore", "--config", config, "--id", "operation-1", "--manifest-hash", strings.Repeat("0", 64)}, withAttachments.DatabaseDSNEnv + " is unavailable"},
-		"backup-end without a database": {[]string{"backup-end", "--config", config, "--id", "operation-1"}, withAttachments.DatabaseDSNEnv + " is unavailable"},
+		"unsupported action":            {[]string{"unknown-action", "--config", config, "--id", "operation-1"}, refusal("unsupported enterprise command")},
+		"missing configuration":         {[]string{"backup", "--id", "operation-1"}, refusal("enterprise --config is required")},
+		"absent configuration":          {[]string{"backup", "--config", absentConfig, "--id", "operation-1"}, refusal("cannot open enterprise configuration file")},
+		"missing identifier":            {[]string{"backup", "--config", config}, refusal("stable valid --id")},
+		"invalid identifier":            {[]string{"backup", "--config", config, "--id", "bad id"}, refusal("stable valid --id")},
+		"positional arguments":          {[]string{"backup", "--config", config, "--id", "operation-1", "extra"}, refusal("stable valid --id")},
+		"attachments unconfigured":      {[]string{"backup", "--config", withoutAttachments, "--id", "operation-1", "--output", filepath.Join(root, "bundle")}, refusal("private attachment directory")},
+		"output inside the object root": {[]string{"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(objects, "bundle")}, refusal("outside the managed object root")},
+		"existing output directory":     {[]string{"backup", "--config", config, "--id", "operation-1", "--output", existing}, refusal("requires a new output directory")},
+		"output parent is a file":       {[]string{"backup", "--config", config, "--id", "operation-1", "--output", filepath.Join(notADirectory, "bundle")}, refusal("existing direct directory", "requires a new output directory")},
+		"source inside the object root": {[]string{"restore", "--config", config, "--id", "operation-1", "--source", filepath.Join(objects, "bundle")}, refusal("outside the new managed object root")},
+		"non-canonical manifest digest": {[]string{"resolve-restore", "--config", config, "--id", "operation-1", "--manifest-hash", "not-a-digest"}, refusal("canonical SHA256")},
+		"unavailable database secret":   {[]string{"complete-restore", "--config", config, "--id", "operation-1", "--manifest-hash", strings.Repeat("0", 64)}, refusal(withAttachments.DatabaseDSNEnv + " is unavailable")},
+		"backup-end without a database": {[]string{"backup-end", "--config", config, "--id", "operation-1"}, refusal(withAttachments.DatabaseDSNEnv + " is unavailable")},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -165,9 +173,12 @@ func TestEnterpriseMaintenanceAndDispatchRejectBeforeResources(t *testing.T) {
 			if err == nil {
 				t.Fatal("invalid operator invocation was accepted")
 			}
-			if !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("refusal did not name its own validation: %q", err.Error())
+			for _, fragment := range testCase.want {
+				if strings.Contains(err.Error(), fragment) {
+					return
+				}
 			}
+			t.Fatalf("refusal did not name its own validation: %q", err.Error())
 		})
 	}
 	capture := startStdoutCapture(t)
