@@ -194,6 +194,15 @@ func indexedSessionsWith(caller nativeCaller, recovery bool) ([]State, error) {
 		if entry.Name() != locatorFilename(s) {
 			return nil, fmt.Errorf("native session locator %s does not match its confirmed binding; inspect or remove it before retrying", path)
 		}
+		if s.Enterprise != nil && !recovery {
+			current, err := currentEnterpriseBinding(s)
+			if err != nil {
+				return nil, err
+			}
+			if !current {
+				continue
+			}
+		}
 		current, err := currentDirectBinding(s)
 		if err != nil {
 			return nil, err
@@ -265,6 +274,18 @@ func scanMatchingSessionsWith(root string, caller nativeCaller, passive, recover
 		}
 		if !safePart(s.Room) || !s.Slot.ValidParticipant() || !safePart(s.BindID) || !sameWorkspace(s.Workspace, root) || filepath.Clean(path) != filepath.Join(root, ".pairroom", "rooms", s.Room, "slots", string(s.Slot), "state.json") {
 			return nil, errors.New("invalid local relay binding identity")
+		}
+		if s.Enterprise != nil && !recovery {
+			current, err := currentEnterpriseBinding(s)
+			if err != nil {
+				if passive {
+					continue
+				}
+				return nil, err
+			}
+			if !current {
+				continue
+			}
 		}
 		current, err := currentDirectBinding(s)
 		if err != nil {
@@ -362,7 +383,7 @@ func selectSessionWorkspace(ctx context.Context, states []State, action string, 
 	}
 	var matches []State
 	for _, s := range states {
-		if o.room != "" && o.room != s.Room || o.slot != "" && normalizeSlot(o.slot) != string(s.Slot) || explicitRoot != "" && !sameWorkspace(explicitRoot, s.Workspace) || endpoint != "" && !sameWorkspace(endpoint, s.EndpointPath) {
+		if !matchesEnterpriseSelection(s, *o) || o.room != "" && o.room != s.Room && (s.Enterprise == nil || o.room != s.Enterprise.RoomID) || o.slot != "" && normalizeSlot(o.slot) != string(s.Slot) || explicitRoot != "" && !sameWorkspace(explicitRoot, s.Workspace) || endpoint != "" && !sameWorkspace(endpoint, s.EndpointPath) {
 			continue
 		}
 		matches = append(matches, s)
@@ -375,6 +396,7 @@ func selectSessionWorkspace(ctx context.Context, states []State, action string, 
 	}
 	s := matches[0]
 	o.room, o.slot = s.Room, string(s.Slot)
+	inheritEnterpriseSelection(s, o)
 	if action == "bind" && o.endpoint == "" {
 		o.endpoint = s.EndpointPath
 	}
@@ -444,6 +466,9 @@ func resolveSessionWorkspace(ctx context.Context, action string, o *options, cal
 	}
 	if len(states) == 0 && !o.repoExplicit && action != "hook" && strings.HasPrefix(o.room, "lan_") {
 		return directRoomWorkspace(ctx, o.room, caller)
+	}
+	if len(states) == 0 && action == "bind" && o.enterpriseOrigin != "" {
+		return workspace(ctx, o.repo)
 	}
 	if len(states) == 0 && !o.repoExplicit && action != "hook" && !(action == "unbind" && o.localOnly) {
 		states, err = discoverSessions(ctx, caller, o.endpoint)

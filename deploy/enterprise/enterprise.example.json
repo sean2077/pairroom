@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "deployment_id": "pairroom-example",
+  "organization_id": "example",
+  "database_schema": "pairroom_enterprise",
+  "database_dsn_env": "PAIRROOM_ENTERPRISE_DATABASE_DSN",
+  "listen": "0.0.0.0:8443",
+  "public_origin": "https://pairroom.example.test:8443",
+  "tls_certificate_file": "/run/pairroom/tls/server.crt",
+  "tls_key_file": "/run/pairroom/tls/server.key",
+  "attachments": {
+    "directory": "/var/lib/pairroom/objects",
+    "deployment_bytes": 10737418240,
+    "room_bytes": 104857600,
+    "deployment_pending": 512,
+    "room_pending": 32
+  },
+  "resources": {
+    "connections": 256,
+    "concurrent_requests": 32,
+    "replay_events": 65536,
+    "replay_bytes": 67108864,
+    "new_work_events": 32768,
+    "new_work_bytes": 33554432,
+    "pending_messages": 256,
+    "actionable_identities": 5000,
+    "persistent_rooms": 5000,
+    "object_records": 16384,
+    "persistent_projects": 1000,
+    "persistent_users": 5000,
+    "membership_records": 50000,
+    "members_per_resource": 1000
+  },
+  "oidc": {
+    "connection_id": "example-idp",
+    "issuer": "https://idp.example.test/realm",
+    "client_id": "pairroom",
+    "client_secret_env": "PAIRROOM_ENTERPRISE_OIDC_SECRET",
+    "client_auth_method": "basic",
+    "allowed_origins": ["https://idp.example.test"],
+    "use_userinfo": true,
+    "admitted_subjects": []
+  }
+}

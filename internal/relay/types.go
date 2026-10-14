@@ -126,6 +126,7 @@ type Binding struct {
 type bindingFact struct {
 	Binding
 	CredentialHash string `json:"credential_hash"`
+	enterprise     *enterpriseBindingIdentity
 }
 
 // BindRequest associates at bind time: the native harness exposes its official

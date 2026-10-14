@@ -28,6 +28,12 @@ A fresh Embedded Room may explicitly resume a supported existing native session,
 
 Startup preserves known Room identities: an absent active Room directory, or a present published directory with missing, empty, or partial-only Event Log identity, rejects startup rather than rewriting the checkpoint without that Room. A wholly missing archived directory retains its existing checkpoint-only cleanup path.
 
+## Enterprise candidate compatibility
+
+Enterprise PostgreSQL state, private object roots and endpoint State 4 are separate from Local/LAN formats. This unreleased candidate validates the supported SQL shape, fact codec and deployment identity before claiming ownership; it does not silently migrate an earlier same-version experimental schema. Added nullable audit columns and the fixed backup column registry are part of that shape. A version number alone does not make a historical candidate schema or bundle compatible. Preserve its matching binary and evidence rather than reopening it with a newer candidate and guessing missing fields.
+
+Use the explicit offline [backup and pristine-target restore procedure](../deploy/enterprise/README.md) with compatible source and target builds. Restore changes the authorization epoch and permanently retires old sessions, grants and unconsumed approvals; ordinary restart preserves otherwise valid credentials. The durable restore barrier must complete before public serving resumes. Local logout, endpoint association detachment and server revocation are separate operations. Neither recovery nor an upgrade rewrites historical Room authors or infers authority from past events.
+
 ## Before upgrading
 
 Record PairRoom and selected native CLI versions, read release notes, and stop/drain the PairRoom owner. For Native, separately pause work in the original harnesses and stop active CLI/hooks before copying their recovery state. Quit cannot stop user-owned harnesses, and archiving a LAN Room revokes its guest membership. Use Service shutdown when preserving that membership. Verify workspace side effects before replacing binaries.

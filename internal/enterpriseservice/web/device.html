@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Approve device · PairRoom</title><link rel="stylesheet" href="/enterprise/assets/style.css"><script src="/enterprise/assets/device.js" defer></script></head>
+<body><main>
+<header><p class="eyebrow">PAIRROOM</p><h1>Connect your device.</h1><p class="intro">Approve only a request you started in your own CLI. This grants Device credentials for Agent registration. Room membership, content access and Binding approval are separate. Revoke Device credentials in My Devices.</p></header>
+<section class="account"><div><h2>Account</h2><p id="device-account">Checking your session…</p></div><div class="actions"><a id="device-sign-in" href="/enterprise/auth/login" target="_blank" rel="noopener noreferrer" hidden>Sign in in a new tab</a><button id="device-refresh" type="button">Refresh status</button><a href="/enterprise/" target="_blank" rel="noopener noreferrer">Manage account</a></div></section>
+<section id="device-details" hidden><h2 id="device-label"></h2><dl><dt>Service</dt><dd id="device-origin"></dd><dt>Device</dt><dd id="device-id"></dd><dt>Candidate fingerprint</dt><dd id="device-fingerprint"></dd><dt>Request expires</dt><dd id="device-expiry"></dd></dl><p id="device-request-state"></p><div id="device-confirmation" hidden><label for="device-code">Code shown by your own CLI</label><input id="device-code" type="text" maxlength="9" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX"><p>Enter only the code from the CLI you just started. Do not enter a code sent by someone else. Compare the Service, Device and candidate fingerprint with your terminal before approving.</p></div><div class="actions"><button id="device-approve" type="button" disabled>Approve device</button><button id="device-deny" type="button" disabled>Deny request</button></div></section>
+<p id="device-status" role="status" aria-live="polite"></p>
+<noscript><p>Enable JavaScript to review and explicitly approve this request.</p></noscript>
+</main></body></html>

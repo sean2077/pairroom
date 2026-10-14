@@ -155,9 +155,6 @@ func (e *Engine) validateDynamicBinding(b, old bindingFact) error {
 	if !b.Runtime.Valid() || b.Runtime != b.Runtime.Canonical() || b.Active && b.RemoteKey == "" && !validID(b.SessionID) {
 		return errors.New("dynamic Native binding lacks its actual runtime/session identity")
 	}
-	if b.Generation > old.Generation && (b.Generation != old.Generation+1 || !b.Active || e.seenBinds[b.BindID]) {
-		return errors.New("dynamic Native binding requires a fresh active generation")
-	}
 	if b.Generation == old.Generation {
 		// Local unbind erases credentials and native session references. That
 		// terminal erasure is the only identity change allowed within a

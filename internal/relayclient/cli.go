@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sean2077/pairroom/internal/attachment"
 	"github.com/sean2077/pairroom/internal/claudewake"
 	"github.com/sean2077/pairroom/internal/lanclient"
 	"github.com/sean2077/pairroom/internal/model"
@@ -29,24 +30,28 @@ import (
 )
 
 type options struct {
-	review                                         bool
-	reviewRepo, reviewBase                         string
-	repo, room, slot, kind, endpoint, text, id, to string
-	name, peer, share, invitation, receipt         string
-	textFile, outputFile                           string
-	cursor, since                                  string
-	limit                                          int
-	pending                                        bool
-	references                                     stringsFlag
-	replace, purge, enabled, discard, resend       bool
-	localOnly                                      bool
-	joinCheck                                      bool
-	create, brief                                  bool
-	repoExplicit                                   bool
-	timeout                                        int
-	inlineMax                                      int
-	peerGeneration                                 uint64
-	attachments, files                             stringsFlag
+	review                                                                    bool
+	reviewRepo, reviewBase                                                    string
+	repo, room, slot, kind, endpoint, text, id, to                            string
+	name, peer, share, invitation, receipt                                    string
+	quoteID                                                                   string
+	textFile, outputFile                                                      string
+	cursor, since                                                             string
+	limit                                                                     int
+	pending                                                                   bool
+	references                                                                stringsFlag
+	replace, purge, enabled, discard, resend                                  bool
+	localOnly, abandonPending                                                 bool
+	retryUpload                                                               bool
+	joinCheck                                                                 bool
+	create, brief                                                             bool
+	repoExplicit                                                              bool
+	timeout                                                                   int
+	inlineMax                                                                 int
+	peerGeneration                                                            uint64
+	enterpriseOrigin, enterpriseDeployment, enterpriseCA, enterpriseDirectory string
+	renewCredential, ackDelivery                                              bool
+	attachments, files                                                        stringsFlag
 }
 type stringsFlag []string
 
@@ -103,6 +108,13 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.StringVar(&o.slot, "slot", "", "Agent slot: 1 or 2 (bind --create defaults to 1); claude/codex are CLI input aliases only. Never a runtime name")
 	flags.StringVar(&o.kind, "runtime", "", "native harness: claude (cc), codex, grok or gemini; install accepts a comma-separated list")
 	flags.StringVar(&o.endpoint, "service-file", "", "owner-only relay-endpoint.json path for a custom Service data root")
+	flags.StringVar(&o.enterpriseOrigin, "enterprise-service", "", "bind: exact HTTPS enterprise origin from Device login")
+	flags.StringVar(&o.enterpriseDeployment, "deployment", "", "bind: expected enterprise deployment ID")
+	flags.StringVar(&o.enterpriseCA, "enterprise-ca", "", "bind: original optional enterprise CA file")
+	flags.StringVar(&o.enterpriseDirectory, "enterprise-state-dir", "", "bind: original owner-private enterprise Device state directory")
+	flags.BoolVar(&o.renewCredential, "renew-credential", false, "bind: explicitly renew the existing enterprise Binding credential")
+	flags.BoolVar(&o.ackDelivery, "ack-delivery", false, "reconcile: explicitly resend only the saved ACK after prior stdout and a proven absent ACK operation")
+	flags.BoolVar(&o.retryUpload, "retry-upload", false, "send/exchange: explicitly retry original enterprise upload bytes only after verification proves them missing")
 	flags.BoolVar(&o.joinCheck, "join", false, "preflight: check readiness to join a LAN Room without a local Service")
 	flags.StringVar(&o.text, "text", "", "message body; otherwise read stdin unless --text-file or --ref is used")
 	flags.StringVar(&o.textFile, "text-file", "", "send/exchange: read UTF-8 body from a file, or - for stdin")
@@ -123,6 +135,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.BoolVar(&o.discard, "discard", false, "explicitly discard uncertain pending publication, retaining its consumed sequence")
 	flags.BoolVar(&o.resend, "resend", false, "explicitly supplement uncertain pending with its ORIGINAL sequence")
 	flags.BoolVar(&o.localOnly, "local-only", false, "unbind: detach local binding without contacting the Room host; remote membership remains active until revoked")
+	flags.BoolVar(&o.abandonPending, "abandon-pending", false, "unbind --local-only: retire the exact original enterprise admission attempt without contacting the server")
 	defaultTimeout := 30
 	if action == "wait" || action == "exchange" {
 		defaultTimeout = 3600
@@ -131,6 +144,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	flags.Var(&o.attachments, "attach", "image attachment path (repeatable)")
 	flags.Var(&o.files, "file", "send/exchange: explicitly upload a UTF-8 text evidence file, at most 5 MiB (repeatable)")
 	flags.BoolVar(&o.review, "review", false, "send/exchange: attach a bounded Git review observation")
+	flags.StringVar(&o.quoteID, "quote", "", "send/exchange: explicitly quote one message ID from this same Room, without recursively expanding history")
 	flags.StringVar(&o.reviewRepo, "review-repo", "", "review evidence checkout; defaults to the bound Room workspace (does not rebind)")
 	flags.StringVar(&o.reviewBase, "review-base", "", "send/exchange --review: base commit/ref, default HEAD")
 	flags.StringVar(&o.cursor, "cursor", "", "history: opaque next_cursor from a previous page")
@@ -161,6 +175,27 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	provided := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if (o.enterpriseOrigin == "") != (o.enterpriseDeployment == "") {
+		return errors.New("enterprise selection requires both --enterprise-service and --deployment")
+	}
+	if o.enterpriseOrigin != "" && (o.endpoint != "" || o.create || o.share != "" || action == "join") {
+		return errors.New("enterprise binding requires an existing Room and its explicit HTTPS deployment")
+	}
+	if (o.enterpriseCA != "" || o.enterpriseDirectory != "") && o.enterpriseOrigin == "" {
+		return errors.New("enterprise trust/state selectors require --enterprise-service and --deployment")
+	}
+	if o.renewCredential && (action != "bind" || o.replace) {
+		return errors.New("--renew-credential applies only to bind without --replace")
+	}
+	if o.ackDelivery && action != "reconcile" {
+		return errors.New("--ack-delivery applies only to explicit reconcile")
+	}
+	if o.quoteID != "" && (action != "send" && action != "exchange" || !safePart(o.quoteID)) {
+		return errors.New("--quote requires send/exchange and a same-Room message ID")
+	}
+	if o.retryUpload && action != "send" && action != "exchange" {
+		return errors.New("--retry-upload applies only to explicit send or exchange")
+	}
 	if provided["join"] && action != "preflight" {
 		return errors.New("--join applies only to preflight")
 	}
@@ -253,6 +288,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if o.localOnly && action != "unbind" {
 		return errors.New("--local-only applies only to unbind")
 	}
+	if o.abandonPending && (action != "unbind" || !o.localOnly || o.enterpriseOrigin == "" || o.room == "") {
+		return errors.New("--abandon-pending requires unbind --local-only with explicit enterprise origin, deployment and original Room")
+	}
 	// Reject collection options before workspace I/O or any publication.
 	if action == "wait" || action == "exchange" {
 		if err := validateForegroundTimeout(o.timeout); err != nil {
@@ -291,6 +329,15 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if action == "preflight" {
 		return runPreflight(ctx, o, out)
 	}
+	if o.abandonPending {
+		// An unconfirmed attempt has no active session locator. Only its exact
+		// original workspace/session/route selectors may choose the local file.
+		root, err := workspace(ctx, o.repo)
+		if err != nil {
+			return err
+		}
+		return abandonEnterprisePending(ctx, root, o, out)
+	}
 	root, err := resolveCommandWorkspace(ctx, action, &o)
 	if err != nil {
 		return err
@@ -326,6 +373,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	if action == "unbind" && o.localOnly {
 		// Offline path: never reads the endpoint file, so a stopped or
 		// unreachable Service cannot block local cleanup.
+		if strings.HasPrefix(o.room, "ent_") {
+			return unbindEnterpriseLocalOnly(ctx, root, dir, out)
+		}
 		return unbindLocalOnly(ctx, root, dir, o, out)
 	}
 	release, err := lockSlot(ctx, dir)
@@ -339,7 +389,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 	}
 	defer c.close()
 	noteServiceEndpoint(ctx, c.State.EndpointPath)
-	if c.State.LAN != nil {
+	if c.State.LAN != nil || c.State.Enterprise != nil {
 		noteLANTransport(ctx)
 	}
 	if err := validateCommandCaller(c); err != nil {
@@ -366,6 +416,16 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 	}
 	release()
+	var enterpriseRecovery any
+	if action == "reconcile" && c.State.Enterprise != nil {
+		var recoverErr error
+		enterpriseRecovery, recoverErr = reconcileEnterpriseTransport(ctx, c, o.ackDelivery)
+		if recoverErr != nil {
+			return recoverErr
+		}
+	} else if o.ackDelivery {
+		return errors.New("--ack-delivery requires an enterprise Binding")
+	}
 	if action == "wait" || action == "exchange" {
 		releaseCollector, err := acquireCollector(ctx, dir)
 		if err != nil {
@@ -385,6 +445,12 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 		}
 		return writeJSON(out, result)
 	case "send", "exchange":
+		if o.retryUpload && c.Enterprise == nil {
+			return errors.New("--retry-upload requires an enterprise Binding")
+		}
+		if c.Enterprise != nil && len(o.attachments)+len(o.files) > 0 && !provided["id"] {
+			return errors.New("enterprise attachment publication requires a stable --id; reuse it with the original files after an uncertain result")
+		}
 		text, err := readPublicationInput(publicationInput{
 			text:       o.text,
 			textSet:    provided["text"],
@@ -408,6 +474,29 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			to = model.ActorUser
 		}
 		expectedPeerGeneration, err := c.publicationPeerGeneration(o.peerGeneration)
+		var originalAttachments []string
+		var originalReview *review.Anchor
+		if c.Enterprise != nil {
+			if err := validateEnterpriseUploadFiles(append(append([]string{}, o.attachments...), o.files...)); err != nil {
+				return err
+			}
+			original, found, lookupErr := c.Enterprise.PendingSend(ctx, c.localAuth(), o.id)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if found {
+				if original.Text != text || original.To != to || original.QuoteID != o.quoteID || o.review != (original.Review != (review.Anchor{})) || o.peerGeneration != 0 && original.ExpectedPeerGeneration != o.peerGeneration {
+					return errors.New("saved enterprise send differs from this command; keep its original ID, body, target and peer generation")
+				}
+				expectedPeerGeneration, err = original.ExpectedPeerGeneration, nil
+				o.peerGeneration = original.ExpectedPeerGeneration
+				originalAttachments = original.AttachmentIDs.Slice()
+				if o.review {
+					value := original.Review
+					originalReview = &value
+				}
+			}
+		}
 		if to == model.ActorUser {
 			if o.peerGeneration != 0 {
 				return errors.New("--peer-generation cannot target @user")
@@ -418,22 +507,25 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			return err
 		}
 		attachments := []string{}
-		for _, path := range o.attachments {
-			id, err := c.upload(ctx, path)
+		for i, path := range o.attachments {
+			id, err := c.uploadFileForOperation(ctx, path, "image", "upload-"+relay.Digest(o.id + "\x00" + strconv.Itoa(i))[:40], o.retryUpload)
 			if err != nil {
 				return err
 			}
 			attachments = append(attachments, id)
 		}
-		for _, path := range o.files {
-			id, err := c.uploadFile(ctx, path, "file")
+		for i, path := range o.files {
+			id, err := c.uploadFileForOperation(ctx, path, "file", "upload-"+relay.Digest(o.id + "\x00" + strconv.Itoa(len(o.attachments)+i))[:40], o.retryUpload)
 			if err != nil {
 				return err
 			}
 			attachments = append(attachments, id)
 		}
-		var anchor *review.Anchor
-		if o.review {
+		if len(attachments) == 0 && len(originalAttachments) > 0 {
+			attachments = originalAttachments
+		}
+		anchor := originalReview
+		if o.review && anchor == nil {
 			workspace := o.reviewRepo
 			if workspace == "" {
 				workspace = root
@@ -445,7 +537,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			anchor = &value
 		}
 		var msg relay.Message
-		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor, "expected_peer_generation": expectedPeerGeneration}, &msg)
+		err = c.call(ctx, "send", map[string]any{"id": o.id, "text": text, "to": to, "attachment_ids": attachments, "review": anchor, "quote_id": o.quoteID, "expected_peer_generation": expectedPeerGeneration}, &msg)
 		if relayErrorCode(err) == relay.SendPayloadConflictCode {
 			// Settled, not uncertain: this ID already names an accepted message.
 			return fmt.Errorf("--id %s was already used for a different message (body, target, peer generation, attachments, quote or review); nothing new was published. Check relay history for the original; send new content with a new --id", o.id)
@@ -592,6 +684,9 @@ func run(ctx context.Context, args []string, in io.Reader, out, diagnostic io.Wr
 			local["held_publications"] = len(c.State.Held)
 		}
 		result := map[string]any{"local": local, "relay": status}
+		if enterpriseRecovery != nil {
+			result["transport_recovery"] = enterpriseRecovery
+		}
 		if o.brief {
 			if summary, ok := status.(*relay.Summary); ok {
 				result["presence"] = presenceLine(summary, c.State.Slot, time.Now())
@@ -1115,15 +1210,32 @@ func peerSlot(slot model.ActorID) model.ActorID {
 	return model.ActorSlot1
 }
 
-func (c *Client) upload(ctx context.Context, path string) (string, error) {
-	return c.uploadFile(ctx, path, "image")
+func validateEnterpriseUploadFiles(paths []string) error {
+	if len(paths) > attachment.MaxImagesPerMessage {
+		return errors.New("enterprise message accepts at most 8 attachments")
+	}
+	var total int64
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > attachment.MaxImageBytes {
+			return errors.New("enterprise attachment must be a regular file containing 1 byte to 5 MiB")
+		}
+		total += info.Size()
+	}
+	if total > attachment.MaxTotalImageBytes {
+		return errors.New("enterprise attachments exceed 20 MiB total")
+	}
+	return nil
 }
 
-func (c *Client) uploadFile(ctx context.Context, path, kind string) (string, error) {
+func (c *Client) uploadFileForOperation(ctx context.Context, path, kind, key string, retry bool) (string, error) {
 	info, err := os.Lstat(path)
 	limit := int64(10 << 20)
 	if kind == "file" {
 		limit = 5 << 20
+	}
+	if c.Enterprise != nil {
+		limit = attachment.MaxImageBytes
 	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
 		return "", errors.New("attachment must be a regular file within the selected kind's size limit")
@@ -1136,6 +1248,13 @@ func (c *Client) uploadFile(ctx context.Context, path, kind string) (string, err
 	opened, err := f.Stat()
 	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Size() > limit {
 		return "", errors.New("attachment changed while opening")
+	}
+	if c.Enterprise != nil {
+		value, err := c.Enterprise.Upload(ctx, c.localAuth(), key, kind, filepath.Base(path), io.LimitReader(f, limit+1), retry)
+		if err != nil {
+			return "", normalizeEnterpriseError(err)
+		}
+		return value.ID, nil
 	}
 	if c.State.LAN != nil {
 		if c.endpointErr != nil {

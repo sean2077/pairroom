@@ -33,6 +33,9 @@ type LANTransfer struct {
 // promptly interrupt both request reads and response writes (for HTTP, set
 // connection deadlines before closing the body). The caller must defer Close.
 func (e *Engine) BeginLANTransfer(ctx context.Context, a Auth, interrupt func()) (*LANTransfer, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {

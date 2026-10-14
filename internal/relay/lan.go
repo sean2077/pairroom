@@ -65,6 +65,9 @@ func (e *Engine) initLAN() {
 	if e.lanRequests == nil {
 		e.lanRequests = make(map[string]LANJoinRequest)
 	}
+	if e.lanLatest == nil {
+		e.lanLatest = make(map[string]string)
+	}
 	if e.lanAdmitted == nil {
 		e.lanAdmitted = make(map[string]bool)
 	}
@@ -80,22 +83,18 @@ func (e *Engine) initLAN() {
 // and the Service's cold authorization index. Callers must finish replay before
 // pruning: a later membership fact can protect an earlier admitted request.
 // Only requests are removed; the Event Log and admitted history stay intact.
-func PruneLANRequests(requests map[string]LANJoinRequest, invites map[string]LANInvite, admitted map[string]bool, member *LANMember, now time.Time) {
+// latest is derived while applying join facts in durable append order. Wall
+// clocks can repeat or regress and request IDs carry no chronological meaning.
+func PruneLANRequests(requests map[string]LANJoinRequest, latest map[string]string, invites map[string]LANInvite, admitted map[string]bool, member *LANMember, now time.Time) {
 	if len(requests) == 0 {
+		clear(latest)
 		return
-	}
-	newest := make(map[string]string, len(requests))
-	newestAt := make(map[string]time.Time, len(requests))
-	for id, j := range requests {
-		if at, ok := newestAt[j.Key]; !ok || j.CreatedAt.After(at) || j.CreatedAt.Equal(at) && id > newest[j.Key] {
-			newest[j.Key], newestAt[j.Key] = id, j.CreatedAt
-		}
 	}
 	for id, j := range requests {
 		if admitted[id] || member != nil && member.RequestID == id {
 			continue
 		}
-		if newest[j.Key] != id {
+		if latest[j.Key] != id {
 			delete(requests, id)
 			continue
 		}
@@ -104,11 +103,20 @@ func PruneLANRequests(requests map[string]LANJoinRequest, invites map[string]LAN
 			delete(requests, id)
 		}
 	}
+	// An expired newest attempt need not keep a key entry alive. Earlier admitted
+	// requests are protected independently above, including future replay facts.
+	// A pruned pending ID may later be reused by a different key, so existence
+	// alone does not mean this key still owns the indexed request after replay.
+	for key, id := range latest {
+		if request, ok := requests[id]; !ok || request.Key != key {
+			delete(latest, key)
+		}
+	}
 }
 
 func (e *Engine) pruneLANRequestsLocked() {
 	if !e.replaying {
-		PruneLANRequests(e.lanRequests, e.lanInvites, e.lanAdmitted, e.lanMember, e.cfg.Now())
+		PruneLANRequests(e.lanRequests, e.lanLatest, e.lanInvites, e.lanAdmitted, e.lanMember, e.cfg.Now())
 	}
 }
 func (e *Engine) applyLAN(ev model.Event) error {
@@ -142,6 +150,7 @@ func (e *Engine) applyLAN(ev model.Event) error {
 		// Replay retains those earlier facts until all admissions are known;
 		// the later unadmitted attempt replaces them, never an admitted one.
 		e.lanRequests[j.RequestID] = j
+		e.lanLatest[j.Key] = j.RequestID
 		// Every join fact costs one attempt of its invitation and of the presenting
 		// certificate. Both budgets are derived from all facts and never pruned, so
 		// one holder of an invitation cannot append unbounded durable requests,
@@ -212,6 +221,9 @@ func (e *Engine) appendLANBinding(b bindingFact) error {
 	return e.append(EventLANMember, model.ActorSystem, m)
 }
 func (e *Engine) CreateLANInvite(owner ...Auth) (LANInvite, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return LANInvite{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.authorizeLANOwnerLocked(owner); err != nil {
@@ -240,6 +252,9 @@ func (e *Engine) CreateLANInvite(owner ...Auth) (LANInvite, error) {
 	return v, e.append(EventLANInvite, model.ActorSystem, v)
 }
 func (e *Engine) RequestLANJoin(j LANJoinRequest) (LANJoinRequest, string, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return LANJoinRequest{}, "", err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.initLAN()
@@ -326,6 +341,9 @@ func (e *Engine) LANJoinStatus(requestID, key string) (LANJoinRequest, string, e
 	return j, e.joinStatusLocked(j), nil
 }
 func (e *Engine) AcceptLANJoin(requestID, key string, owner ...Auth) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.authorizeLANOwnerLocked(owner); err != nil {
@@ -371,6 +389,9 @@ func (e *Engine) AcceptLANJoin(requestID, key string, owner ...Auth) (Binding, e
 	return b, err
 }
 func (e *Engine) RevokeLANMember(owner ...Auth) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.authorizeLANOwnerLocked(owner); err != nil {
@@ -433,6 +454,9 @@ func (e *Engine) Runtimes() map[model.ActorID]model.RuntimeKind {
 // ClaimPrepared starts the delivery lease. It rechecks the same membership on
 // every wake and never returns a host-local attachment path or native session.
 func (e *Engine) PrepareHead(ctx context.Context, a Auth, park bool) (*Prepared, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	observed := false
 	for {
 		e.mu.Lock()
@@ -497,6 +521,9 @@ func (e *Engine) PrepareHead(ctx context.Context, a Auth, park bool) (*Prepared,
 	}
 }
 func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, park bool) (*StructuredClaim, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)
@@ -525,11 +552,9 @@ func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, p
 	if err != nil {
 		return nil, err
 	}
-	m.State = "delivering"
-	m.ClaimedAt = e.cfg.Now()
-	m.UpdatedAt = m.ClaimedAt
-	m.Receipt = receipt
-	if err = e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt}); err != nil {
+	fact := planClaimFact(m, receipt, e.cfg.Now())
+	m = fact.Message
+	if err = e.append(EventMessage, a.Slot, fact); err != nil {
 		return nil, err
 	}
 	e.noteLANActivityLocked(a)
@@ -539,6 +564,9 @@ func (e *Engine) ClaimPrepared(ctx context.Context, a Auth, id, digest string, p
 // SendLANUser scopes idempotency and provenance to the admitted remote owner.
 // Its authority is a human message in this Room, never host process control.
 func (e *Engine) SendLANUser(a Auth, req SendRequest) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {

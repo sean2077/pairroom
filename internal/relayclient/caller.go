@@ -138,6 +138,15 @@ func applyCallerDefaults(root, action string, o *options) error {
 		if !safePart(s.Room) || !s.Slot.ValidParticipant() || filepath.Base(filepath.Dir(path)) != string(s.Slot) || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) != s.Room {
 			return errors.New("invalid local relay binding identity")
 		}
+		if s.Enterprise != nil && !recovery {
+			current, err := currentEnterpriseBinding(s)
+			if err != nil {
+				return err
+			}
+			if !current {
+				continue
+			}
+		}
 		current, err := currentDirectBinding(s)
 		if err != nil {
 			return err
@@ -148,7 +157,7 @@ func applyCallerDefaults(root, action string, o *options) error {
 		if action == "bind" && o.create {
 			return errors.New("this native session is already associated; use pairroom relay bind to resume it, not bind --create")
 		}
-		if (o.room != "" && o.room != s.Room) || (o.slot != "" && o.slot != string(s.Slot)) {
+		if !matchesEnterpriseSelection(s, *o) || (o.room != "" && o.room != s.Room && (s.Enterprise == nil || o.room != s.Enterprise.RoomID)) || (o.slot != "" && o.slot != string(s.Slot)) {
 			continue
 		}
 		matches = append(matches, s)
@@ -162,6 +171,7 @@ func applyCallerDefaults(root, action string, o *options) error {
 		}
 		s := matches[0]
 		o.room, o.slot = s.Room, string(s.Slot)
+		inheritEnterpriseSelection(s, o)
 		if action == "bind" && o.endpoint == "" {
 			o.endpoint = s.EndpointPath
 		}

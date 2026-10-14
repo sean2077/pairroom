@@ -23,7 +23,7 @@ func sameMessagePayload(a, b Message) bool {
 		return false
 	}
 	for i := range a.Attachments {
-		if !reflect.DeepEqual(a.Attachments[i], b.Attachments[i]) {
+		if !a.Attachments[i].EqualMetadata(b.Attachments[i]) {
 			return false
 		}
 	}

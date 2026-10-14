@@ -1,0 +1,25 @@
+[Unit]
+Description=PairRoom enterprise Native coordination service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pairroom
+Group=pairroom
+WorkingDirectory=/var/lib/pairroom
+EnvironmentFile=/etc/pairroom/enterprise.env
+ExecStart=/usr/local/bin/pairroom enterprise serve --config /etc/pairroom/enterprise.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=75s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pairroom
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

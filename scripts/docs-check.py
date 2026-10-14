@@ -267,7 +267,7 @@ def main() -> None:
 
     main_source = (ROOT / "cmd" / "pairroom" / "main.go").read_text(encoding="utf-8")
     cli_doc = (ROOT / "docs" / "CLI_REFERENCE.md").read_text(encoding="utf-8")
-    for command in ("daemon", "service", "serve", "doctor", "providers", "verify", "backup", "restore", "diagnostics", "protocol", "relay", "version"):
+    for command in ("daemon", "service", "enterprise", "serve", "doctor", "providers", "verify", "backup", "restore", "diagnostics", "protocol", "relay", "version"):
         if f'"{command}"' not in main_source:
             error(f"expected top-level command missing from source: {command}")
         if f'`pairroom {command}`' not in cli_doc:

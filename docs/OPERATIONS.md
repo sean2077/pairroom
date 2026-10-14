@@ -18,6 +18,56 @@ Service lock acquisition, stale recovery, and release are serialized across curr
 
 Management, standalone and ordinary Room listeners require numeric loopback addresses. A token does not allow LAN, wildcard, or hostname binds on those surfaces. Deliberate remote access to the full local interface uses protected SSH local forwarding; treat access to that endpoint/bootstrap token as access to repositories, Agent credentials, and attachments.
 
+## Enterprise entrypoint under implementation
+
+The separate `pairroom enterprise` entrypoint serves the PostgreSQL-backed enterprise candidate with persistent browser/Device identity, remote Native Bindings, logical Projects, Room control, private attachments and offline backup/restore. Operational rehearsal, measured capacity and final first-phase acceptance remain in progress; [Enterprise Native service](design/enterprise-service.md) owns that scope and its remaining implementation boundaries. It does not reuse the Local Management listener, data root or setup credentials.
+
+An operator supplies one versioned JSON configuration. This example uses synthetic identity names and direct TLS; actual secret values are read only from the named process environment variables. Relative certificate paths resolve beside the configuration file. A private IdP may additionally use `oidc.ca_certificate_file`, which extends system roots and retains certificate/hostname verification.
+
+```json
+{
+  "version": 1,
+  "deployment_id": "pairroom-example",
+  "organization_id": "example",
+  "database_schema": "pairroom_enterprise",
+  "database_dsn_env": "PAIRROOM_ENTERPRISE_DATABASE_DSN",
+  "listen": "127.0.0.1:8443",
+  "public_origin": "https://pairroom.example.test:8443",
+  "tls_certificate_file": "server.pem",
+  "tls_key_file": "server-key.pem",
+  "oidc": {
+    "connection_id": "example-idp",
+    "issuer": "https://idp.example.test/realm",
+    "client_id": "pairroom",
+    "client_secret_env": "PAIRROOM_ENTERPRISE_OIDC_SECRET",
+    "client_auth_method": "basic",
+    "allowed_origins": ["https://idp.example.test"],
+    "admitted_subjects": ["synthetic-member"]
+  }
+}
+```
+
+Configure the IdP's exact callback as `<public_origin>/enterprise/auth/callback`. `client_auth_method` explicitly selects `basic` or `post`; automatic code-exchange probing is disabled. Omit `client_secret_env` only for a deliberately configured public client. The public origin is canonical HTTPS without a path or explicit default `:443`. Serving directly requires a matching, currently valid TLS certificate/key. TLS termination instead requires explicit canonical `trusted_proxy_prefixes`, an unchanged Host and exactly `X-Forwarded-Proto: https` from the immediate trusted peer; forwarded user/host fields confer no authority.
+
+Initialize a fresh supported schema explicitly, then start the foreground service:
+
+```sh
+pairroom enterprise init --config enterprise.json --bootstrap-subject synthetic-administrator
+pairroom enterprise serve --config enterprise.json
+```
+
+Initialization names the exact initial administrator identity; it does not create an application session. A normal first login cannot claim administrator status. Existing configuration must match, and initialization does not restore later-revoked authority. Serving requires initialized identity policy and exclusive database ownership; it never silently initializes or migrates an incompatible schema. The database must support the PostgreSQL 17 transaction budgets used by the kernel. Environment references, private keys and database credentials belong to the operator, and must not enter Room messages or diagnostics.
+
+Open `<public_origin>/enterprise/` for login, My Rooms, logical Projects, Room members/slots and My Devices/Agents/sessions. Administrative governance is a separate, action-scoped surface and does not grant Room content access. Session lifetime defaults to 12 hours, configurable with `session_ttl` between `5m` and `24h`; pending OIDC flows default to 1,024, with an explicit bounded `pending_login_limit`. Provider outage blocks new authentication while existing application sessions retain their own expiry and revocation policy. Before opening the listener, each new ownership epoch durably classifies interrupted deliveries as unknown. Failed or corrupt recovery refuses startup; repairing storage requires a fresh Store incarnation, not a hot retry that might revive its writer. An ordinary restart preserves otherwise valid sessions and grants. Shutdown drains HTTP work before releasing the deployment lease and does not control endpoint harnesses. This foreground command does not install a daemon or configure launch at login.
+
+Enterprise archive retains completed Bindings and Agent reservations, permits authorized history and settlement of original delivery receipts, and stops new send/claim/retry. It also invalidates approved but unconsumed Binding requests; restoring the Room does not restore those approvals. Browser operation recovery retains the original intent in an account-isolated bounded journal. Reload and account changes never submit it automatically; inspect the result with Resolve before an explicit retry. CLI login, binding and local-versus-server logout boundaries are in the [CLI reference](CLI_REFERENCE.md#enterprise-endpoint-commands).
+
+For attachment-enabled deployments, configure `attachments.directory` as a persistent owner-private object root and explicit deployment/Room byte and pending-reservation budgets. Omitting this section disables object operations. An existing object root may be opened with all budgets zero for reads without admitting new reservations. The [enterprise deployment example](../deploy/enterprise/enterprise.example.json) includes the complete strict configuration; [deployment and offline recovery](../deploy/enterprise/README.md) describes container/systemd mounts, shutdown, backup and pristine-target restore.
+
+HTTP admission defaults to 32 active requests and 256 accepted connections before TLS/header parsing. `resources.concurrent_requests` selects 1–256 active requests; `resources.connections` may tighten the 256-connection limit. Room replay has two concurrent slots and checks event/byte budgets before decoding. New work is refused before the hard replay limit, reserving space for accepted work to settle and authority to be revoked. Accepted original receipt recovery precedes new-work quota checks. These engineering bounds do not establish measured throughput or cap total append-only audit/receipt storage. Monitor disk capacity and preserve uncertain evidence rather than deleting it to regain quota.
+
+Public `/enterprise/health/live` exposes process availability, while `/enterprise/health/ready` checks schema, ownership, startup recovery and restore completion. Readiness does not certify fresh IdP login. Current administrators may inspect bounded aggregate diagnostics and metrics; these omit Room contents, identities, credentials and local paths. Browser Room views load a bounded complete-message tail with exact totals; loading older history is explicit and rechecks current authorization before releasing each page.
+
 ## LAN hosting and joined Rooms
 
 Native is the default and recommended Room mode. For colleague collaboration, the Room's host enables the separate **LAN sharing** listener in Service Settings and creates a Native LAN Room. Select a numeric private address assigned to the intended interface, allow the selected port in the host firewall, and exchange the invitation and exact join receipt through the colleagues' trusted channel.

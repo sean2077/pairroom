@@ -31,6 +31,133 @@ func lanEngine(t *testing.T, now func() time.Time) (*Engine, Auth, string) {
 	}
 	return e, Auth{Slot: b.Slot, BindID: b.BindID, Generation: b.Generation, SessionID: "official-local-session", Secret: "local-secret"}, dir
 }
+
+func TestLANLatestJoinAppendWinsEqualAndRegressingClockAcrossReplay(t *testing.T) {
+	for _, offset := range []time.Duration{0, -time.Millisecond} {
+		t.Run(offset.String(), func(t *testing.T) {
+			now := time.Now().UTC()
+			engine, _, dir := lanEngine(t, func() time.Time { return now })
+			invite, err := engine.CreateLANInvite()
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := Digest("clock-order-peer")
+			request := LANJoinRequest{InviteID: invite.ID, RequestID: "z-forgotten", Key: key, Runtime: model.RuntimeCodex}
+			if _, _, err := engine.RequestLANJoin(request); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(offset)
+			request.RequestID = "a-current"
+			_, receipt, err := engine.RequestLANJoin(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCurrent := func(e *Engine) {
+				t.Helper()
+				if _, _, err := e.LANJoinStatus("z-forgotten", key); !errors.Is(err, ErrAuth) {
+					t.Fatalf("older appended request remained authorized: %v", err)
+				}
+				join, status, err := e.LANJoinStatus("a-current", key)
+				if err != nil || status != "pending" || join.RequestID != request.RequestID {
+					t.Fatal("newest appended request lost recovery", err)
+				}
+				_, recoveredReceipt, err := e.RequestLANJoin(request)
+				if err != nil || recoveredReceipt != receipt || len(e.lanLatest) != 1 || len(e.lanRequests) != 1 {
+					t.Fatal("latest request receipt or bounded index changed", err)
+				}
+			}
+			assertCurrent(engine)
+			if err := engine.Close(); err != nil {
+				t.Fatal(err)
+			}
+			log, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := Open(Config{RoomID: "room", Store: log, SharedSlot: model.ActorSlot2, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeAwaitingPeer}, Now: func() time.Time { return now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restarted.Close()
+			assertCurrent(restarted)
+			now = invite.ExpiresAt.Add(lanInviteLifetime + time.Second)
+			_, _, _ = restarted.LANJoinStatus(request.RequestID, key)
+			if len(restarted.lanRequests) != 0 || len(restarted.lanLatest) != 0 {
+				t.Fatal("expiry retained an unreferenced request or latest-key index")
+			}
+		})
+	}
+}
+
+func TestLANReusedRequestIDAcrossKeysKeepsLatestIndexBoundedAcrossReplay(t *testing.T) {
+	for _, admit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("admitted=%t", admit), func(t *testing.T) {
+			now := time.Now().UTC()
+			engine, owner, dir := lanEngine(t, func() time.Time { return now })
+			const requestID = "reused-request"
+			var keys []string
+			for i := 0; i < 16; i++ {
+				invite, err := engine.CreateLANInvite(owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key := Digest(fmt.Sprintf("reused-request-key-%d", i))
+				keys = append(keys, key)
+				if _, status, err := engine.RequestLANJoin(LANJoinRequest{InviteID: invite.ID, RequestID: requestID, Key: key, Runtime: model.RuntimeCodex}); err != nil || status != "pending" {
+					t.Fatal("public request ID reuse after expiry failed", err)
+				}
+				if len(engine.lanRequests) != 1 || len(engine.lanLatest) != 1 || engine.lanLatest[key] != requestID {
+					t.Fatal("live expiry/pruning retained old request-key index")
+				}
+				if i != 15 {
+					now = invite.ExpiresAt.Add(lanInviteLifetime + time.Second)
+				}
+			}
+			currentKey := keys[len(keys)-1]
+			if admit {
+				if _, err := engine.AcceptLANJoin(requestID, currentKey, owner); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := engine.Close(); err != nil {
+				t.Fatal(err)
+			}
+			log, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := Open(Config{RoomID: "room", Store: log, SharedSlot: model.ActorSlot2, Runtimes: map[model.ActorID]model.RuntimeKind{model.ActorSlot1: model.RuntimeClaude, model.ActorSlot2: model.RuntimeAwaitingPeer}, Now: func() time.Time { return now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restarted.Close()
+			if len(restarted.lanRequests) != 1 || len(restarted.lanLatest) != 1 || restarted.lanLatest[currentKey] != requestID {
+				t.Fatalf("cold replay retained cross-key reused-ID ghosts: requests=%d latest=%d", len(restarted.lanRequests), len(restarted.lanLatest))
+			}
+			for _, oldKey := range keys[:len(keys)-1] {
+				if _, _, err := restarted.LANJoinStatus(requestID, oldKey); !errors.Is(err, ErrAuth) {
+					t.Fatal("reused ID authorized an earlier key", err)
+				}
+			}
+			_, status, err := restarted.LANJoinStatus(requestID, currentKey)
+			want := "pending"
+			if admit {
+				want = "accepted"
+			}
+			if err != nil || status != want {
+				t.Fatalf("current request lost %s recovery: %s %v", want, status, err)
+			}
+		})
+	}
+}
+
+func TestLANPruneEmptyRequestProjectionClearsLatestIndex(t *testing.T) {
+	latest := map[string]string{Digest("expired-request-key"): "expired-request"}
+	PruneLANRequests(map[string]LANJoinRequest{}, latest, map[string]LANInvite{}, map[string]bool{}, nil, time.Now())
+	if len(latest) != 0 {
+		t.Fatal("empty request projection retained an unreferenced latest-key index")
+	}
+}
 func admitLAN(t *testing.T, e *Engine, key string) Auth {
 	t.Helper()
 	invite, err := e.CreateLANInvite()

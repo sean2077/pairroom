@@ -1,0 +1,296 @@
+package sqlstore
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"io"
+	"math"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/review"
+)
+
+const (
+	// humanSendKind pins the fact kind this operation persists; the contract
+	// test asserts it equals relay.EventMessage. An unknown kind is never
+	// persisted (the append_fact entry keeps its own, separate contract).
+	humanSendKind = "native.message.updated"
+	// humanSendSource pins the producer's Source field for this operation.
+	humanSendSource = "send"
+	// humanSendTextBytes mirrors relay.MaxBodyBytes; the contract test asserts
+	// equality with the relay constant. Texts are also validated as UTF-8 and
+	// non-blank, matching the core body rule.
+	humanSendTextBytes = 256 << 10
+	// humanSendClientKeyPrefix scopes the durable ClientKey by principal so
+	// two principals reusing one client ID cannot collide in projection
+	// indexes; Local's own key format is untouched.
+	humanSendClientKeyPrefix = "user/"
+	// humanSendMaxTokenBytes mirrors the core identifier limit (relay
+	// validID): a bounded token free of separators, control characters and
+	// surrounding whitespace.
+	humanSendMaxTokenBytes = 256
+	// humanSendEncodingBudget bounds the complete stored encoding of a
+	// human_send fact: 2 MiB covers the worst-case JSON escaping of a maximal
+	// 256 KiB text (six bytes per escaped byte) plus fixed metadata. The
+	// schema CHECK admits this bound; the append_fact entry keeps its original
+	// 262144-byte code gate untouched. A candidate exceeding the budget is
+	// refused with invalid_fact and zero writes (unreachable through the
+	// validated text limit; the check is the outer defense).
+	humanSendEncodingBudget = 2 << 20
+)
+
+// HumanSendIntent is the typed stable intent of one human send. The
+// deployment, Room, principal and client identifier live in the operation key,
+// not here.
+type HumanSendIntent struct {
+	To            string
+	Text          string
+	AttachmentIDs model.EnterpriseAttachmentIDs
+	QuoteID       string
+	Review        review.Anchor
+}
+
+// HumanSendCommand is one human_send operation: a text-only human message on
+// an existing Room. The candidate fact is validated against the pinned
+// producer contract below before any SQL is touched.
+type HumanSendCommand struct {
+	Auth             AuthContext
+	RoomID           string
+	ClientID         string
+	Intent           HumanSendIntent
+	ExpectedRevision uint64
+	Fact             model.Event
+}
+
+// humanSendPayload is the complete pinned fact codec for this operation. It
+// lists every field of the producer's message fact; the decoder rejects any
+// unknown field, so nothing can be smuggled past the typed binding.
+type humanSendPayload struct {
+	FromRuntime      string             `json:"from_runtime,omitempty"`
+	FromGeneration   uint64             `json:"from_generation,omitempty"`
+	Author           string             `json:"author,omitempty"`
+	Review           *review.Anchor     `json:"review,omitempty"`
+	ID               string             `json:"id"`
+	From             model.ActorID      `json:"from"`
+	To               model.ActorID      `json:"to"`
+	Text             string             `json:"text"`
+	Attachments      []model.Attachment `json:"attachments,omitempty"`
+	Quote            *model.AgentQuote  `json:"quote,omitempty"`
+	TargetGeneration uint64             `json:"target_generation,omitempty"`
+	State            string             `json:"state"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
+	ClaimedAt        time.Time          `json:"claimed_at,omitempty"`
+	RetryOf          string             `json:"retry_of,omitempty"`
+	Source           string             `json:"source"`
+	Receipt          string             `json:"receipt,omitempty"`
+	ClientKey        string             `json:"client_key,omitempty"`
+}
+
+// CommitHumanSend runs the shared transaction state machine for one human_send
+// operation. The kernel alone computes the versioned intent hash — no caller
+// hash is accepted anywhere in this package — and the candidate fact must pass
+// the complete pinned producer-contract validation before any SQL.
+func (s *Store) CommitHumanSend(ctx context.Context, cmd HumanSendCommand) (Result, error) {
+	// Raw fact callers cannot attest a quoted source. The closed producer
+	// resolves it under the existing transaction through CommitHumanMessage.
+	if cmd.Intent.QuoteID != "" {
+		return refused(ClassInvalidRequest, nil)
+	}
+	key, class := humanSendKey(cmd)
+	if class != "" {
+		return refused(class, nil)
+	}
+	if cmd.Auth.Deployment != s.cfg.DeploymentID {
+		return refused(ClassInvalidRequest, nil)
+	}
+	if class := validateHumanSendFact(cmd); class != "" {
+		return refused(class, nil)
+	}
+	plan := opPlan{
+		auth:   cmd.Auth,
+		key:    key,
+		userID: cmd.Auth.UserID,
+		// The audit fact is generated by the trusted operation, not narrated
+		// by the caller: this slice reuses the closed internal-append
+		// vocabulary; enterprise audit vocabularies arrive with their own
+		// reviewed mutation.
+		audit:            AuditRecord{Kind: auditKindAppendFact, Outcome: auditOutcomeAccepted},
+		hash:             humanSendHash(key, cmd.Intent),
+		expectedRevision: cmd.ExpectedRevision,
+		encodingBudget:   humanSendEncodingBudget,
+		human:            &cmd.Intent,
+	}
+	return s.commitWithRestarts(ctx, plan, cmd.Fact)
+}
+
+// ResolveHumanSend verifies the final state of one human_send operation under
+// the same fence and live authorization; it executes no effect.
+func (s *Store) ResolveHumanSend(ctx context.Context, auth AuthContext, roomID, clientID string, intent HumanSendIntent) (Result, error) {
+	cmd := HumanSendCommand{Auth: auth, RoomID: roomID, ClientID: clientID, Intent: intent}
+	key, class := humanSendKey(cmd)
+	if class != "" {
+		return refused(class, nil)
+	}
+	if auth.Deployment != s.cfg.DeploymentID {
+		return refused(ClassInvalidRequest, nil)
+	}
+	plan := opPlan{auth: auth, key: key, userID: auth.UserID, hash: humanSendHash(key, intent), human: &intent}
+	return s.resolveWithFallback(ctx, plan)
+}
+
+// humanSendKey validates the operation-level half (authenticated context,
+// room, client identifier, intent shape and text rules) and returns the §13
+// human-namespace key: (deployment, room, principal UserID, client ID).
+func humanSendKey(cmd HumanSendCommand) (OpKey, string) {
+	key := OpKey{
+		Namespace:  namespaceHuman,
+		Deployment: cmd.Auth.Deployment,
+		RoomID:     cmd.RoomID,
+		OpKind:     opKindHumanSend,
+		Identifier: cmd.ClientID,
+		Principal:  cmd.Auth.UserID,
+	}
+	switch {
+	case cmd.Auth.DeviceGrantID != "" || cmd.Auth.BindingGrantID != "":
+		return key, ClassAuthorization
+	case cmd.Auth.Deployment == "" || !validToken(cmd.Auth.UserID):
+		return key, ClassInvalidRequest
+	case !validToken(cmd.RoomID) || !validToken(cmd.ClientID):
+		return key, ClassInvalidRequest
+	case cmd.ExpectedRevision > math.MaxInt64:
+		return key, ClassInvalidRequest
+	case cmd.Intent.To != string(model.ActorSlot1) && cmd.Intent.To != string(model.ActorSlot2):
+		return key, ClassInvalidRequest
+	case !utf8.ValidString(cmd.Intent.Text) || len(cmd.Intent.Text) > humanSendTextBytes || strings.TrimSpace(cmd.Intent.Text) == "" && cmd.Intent.AttachmentIDs == (model.EnterpriseAttachmentIDs{}):
+		return key, ClassInvalidRequest
+	case cmd.Intent.AttachmentIDs.Validate() != nil:
+		return key, ClassInvalidRequest
+	case cmd.Intent.QuoteID != "" && !validToken(cmd.Intent.QuoteID), cmd.Intent.Review != (review.Anchor{}) && cmd.Intent.Review.Validate() != nil:
+		return key, ClassInvalidRequest
+	}
+	return key, ""
+}
+
+// validateHumanSendFact performs the complete typed admission of the
+// candidate fact: envelope fields are pinned, the payload is decoded with the
+// strict full codec (unknown fields rejected) and every stable field must
+// agree with the intent. Any mismatch is refused before SQL, so a forged fact
+// can never be persisted.
+func validateHumanSendFact(cmd HumanSendCommand) string {
+	if cmd.Fact.RoomID != cmd.RoomID || cmd.Fact.Kind != humanSendKind || cmd.Fact.Actor != model.ActorUser || !validToken(cmd.Fact.ID) {
+		return ClassInvalidFact
+	}
+	payload, err := decodeHumanSendPayload(cmd.Fact.Data)
+	if err != nil {
+		return ClassInvalidFact
+	}
+	switch {
+	case payload.FromRuntime != "" || payload.FromGeneration != 0:
+		return ClassInvalidFact
+	case payload.Author != "" && payload.Author != relay.EnterpriseHumanAuthor(cmd.Auth.UserID):
+		return ClassInvalidFact
+	case !validToken(payload.ID):
+		return ClassInvalidFact
+	case payload.From != model.ActorUser || string(payload.To) != cmd.Intent.To:
+		return ClassInvalidFact
+	case payload.Text != cmd.Intent.Text:
+		return ClassInvalidFact
+	case payload.State != "queued" || payload.Source != humanSendSource:
+		return ClassInvalidFact
+	case !payload.ClaimedAt.IsZero() || payload.RetryOf != "" || payload.Receipt != "":
+		return ClassInvalidFact
+	case payload.CreatedAt.IsZero() || payload.UpdatedAt.IsZero() || !payload.UpdatedAt.Equal(payload.CreatedAt):
+		return ClassInvalidFact
+	case payload.TargetGeneration == 0:
+		// The trusted core fixes this under the revision compare-and-swap; a
+		// zero generation means the candidate was not produced by the core
+		// projection and is refused. This is not an independent Binding
+		// attestation.
+		return ClassInvalidFact
+	case payload.ClientKey != humanSendClientKey(cmd.Auth.UserID, cmd.ClientID):
+		return ClassInvalidFact
+	}
+	if relay.MatchEnterpriseSendEvidence(relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, AttachmentIDs: cmd.Intent.AttachmentIDs, QuoteID: cmd.Intent.QuoteID, Review: cmd.Intent.Review}, relay.Message{Attachments: payload.Attachments, Quote: payload.Quote, Review: payload.Review}) != nil {
+		return ClassInvalidFact
+	}
+	return ""
+}
+
+// decodeHumanSendPayload decodes the complete pinned codec, refusing unknown
+// fields and trailing data.
+func decodeHumanSendPayload(data []byte) (humanSendPayload, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var payload humanSendPayload
+	if err := dec.Decode(&payload); err != nil {
+		return humanSendPayload{}, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return humanSendPayload{}, errors.New("trailing data after fact payload")
+	}
+	return payload, nil
+}
+
+// humanSendHash is the versioned canonical hash of the human_send v1 intent.
+// It covers the full operation key and the typed intent — never the fact
+// bytes — so generated artifacts (message id, timestamps, envelope, target
+// generation) cannot change it while any stable change conflicts.
+func humanSendHash(key OpKey, intent HumanSendIntent) [32]byte {
+	h := sha256.New()
+	version := "sqlstore.mutation.human_send.v1"
+	if intent.AttachmentIDs != (model.EnterpriseAttachmentIDs{}) {
+		version = "sqlstore.mutation.human_send.v2"
+	}
+	if intent.QuoteID != "" || intent.Review != (review.Anchor{}) {
+		version = "sqlstore.mutation.human_send.v3"
+	}
+	writePart(h, []byte(version))
+	writePart(h, []byte(key.Namespace))
+	writePart(h, []byte(key.Deployment))
+	writePart(h, []byte(key.RoomID))
+	writePart(h, []byte(key.BindingID))
+	var generation [8]byte
+	binary.BigEndian.PutUint64(generation[:], key.Generation)
+	h.Write(generation[:])
+	writePart(h, []byte(key.OpKind))
+	writePart(h, []byte(key.Identifier))
+	writePart(h, []byte(key.Principal))
+	writePart(h, []byte(intent.To))
+	writePart(h, []byte(intent.Text))
+	if intent.AttachmentIDs != (model.EnterpriseAttachmentIDs{}) {
+		for _, id := range intent.AttachmentIDs.Slice() {
+			writePart(h, []byte(id))
+		}
+	}
+	if version == "sqlstore.mutation.human_send.v3" {
+		writePart(h, []byte(intent.QuoteID))
+		encoded, _ := json.Marshal(intent.Review)
+		writePart(h, encoded)
+	}
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum
+}
+
+// humanSendClientKey is the principal-scoped, unambiguous durable client key:
+// both parts are separator-free tokens (validToken), so the two-slash form
+// cannot be forged by combining a different principal and client ID.
+func humanSendClientKey(userID, clientID string) string {
+	return humanSendClientKeyPrefix + userID + "/" + clientID
+}
+
+// validToken mirrors the core identifier rule (relay validID): non-empty, at
+// most 256 bytes, no separators, control characters or surrounding
+// whitespace.
+func validToken(s string) bool {
+	return s != "" && len(s) <= humanSendMaxTokenBytes && !strings.ContainsAny(s, "/\\\r\n\x00") && strings.TrimSpace(s) == s
+}

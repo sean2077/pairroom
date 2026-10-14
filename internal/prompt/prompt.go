@@ -42,6 +42,9 @@ func Envelope(input model.AgentInput) string {
 		fmt.Fprintf(&b, " (%s, generation %d)", input.FromRuntime.Canonical(), input.FromGeneration)
 	}
 	fmt.Fprintln(&b)
+	if input.Author != "" {
+		fmt.Fprintf(&b, "author: %q\n", input.Author)
+	}
 	if input.PeerGeneration > 0 && input.PeerHandle != "" {
 		fmt.Fprintf(&b, "peer: %s, generation %d\n", input.PeerHandle, input.PeerGeneration)
 	}
@@ -56,7 +59,11 @@ func Envelope(input model.AgentInput) string {
 		}
 	}
 	if input.Quote != nil {
-		fmt.Fprintf(&b, "quoted_message:\n  from: %q\n  text: %q\n", input.Quote.FromHandle, input.Quote.Text)
+		fmt.Fprintf(&b, "quoted_message:\n  from: %q\n", input.Quote.FromHandle)
+		if input.Quote.Author != "" {
+			fmt.Fprintf(&b, "  author: %q\n", input.Quote.Author)
+		}
+		fmt.Fprintf(&b, "  text: %q\n", input.Quote.Text)
 	}
 	fmt.Fprintf(&b, "\n%s", input.Text)
 	return b.String()

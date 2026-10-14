@@ -1,7 +1,7 @@
 //go:build ignore
 
 // check_dependencies is the private implementation behind make check's
-// dependency gate. It permits only the reviewed modernc SQLite closure and
+// dependency gate. It permits only the reviewed SQLite and enterprise closures and
 // pins every selected module version so an indirect drift fails visibly.
 //
 // With -write (make deps-sync, run by a maintainer, never by CI) it records
@@ -33,32 +33,48 @@ const (
 )
 
 var allowed = map[string]string{
-	"github.com/sean2077/pairroom":       "",
-	"github.com/dustin/go-humanize":      "v1.0.1",
-	"github.com/google/pprof":            "v0.0.0-20260802141513-ef3492d7dac3",
-	"github.com/google/uuid":             "v1.6.0",
-	"github.com/hashicorp/golang-lru/v2": "v2.0.7",
-	"github.com/mattn/go-isatty":         "v0.0.24",
-	"github.com/ncruces/go-strftime":     "v1.0.0",
-	"github.com/remyoudompheng/bigfft":   "v0.0.0-20230129092748-24d4a6f8daec",
-	"golang.org/x/mod":                   "v0.41.0",
-	"golang.org/x/sync":                  "v0.23.0",
-	"golang.org/x/sys":                   "v0.48.0",
-	"golang.org/x/tools":                 "v0.50.0",
-	"modernc.org/cc/v4":                  "v4.29.7",
-	"modernc.org/ccgo/v4":                "v4.36.1",
-	"modernc.org/fileutil":               "v1.4.0",
-	"modernc.org/gc/v2":                  "v2.6.5",
-	"modernc.org/gc/v3":                  "v3.1.5",
-	"modernc.org/goabi0":                 "v0.2.0",
-	"modernc.org/libc":                   "v1.77.1",
-	"modernc.org/mathutil":               "v1.7.1",
-	"modernc.org/memory":                 "v1.12.1",
-	"modernc.org/opt":                    "v0.2.0",
-	"modernc.org/sortutil":               "v1.2.1",
-	"modernc.org/sqlite":                 "v1.60.1",
-	"modernc.org/strutil":                "v1.2.1",
-	"modernc.org/token":                  "v1.1.0",
+	"cloud.google.com/go/compute/metadata": "v0.3.0",
+	"github.com/coreos/go-oidc/v3":         "v3.21.0",
+	"github.com/go-jose/go-jose/v4":        "v4.1.5",
+	"github.com/sean2077/pairroom":         "",
+	"github.com/davecgh/go-spew":           "v1.1.1",
+	"github.com/dustin/go-humanize":        "v1.0.1",
+	"github.com/google/pprof":              "v0.0.0-20260802141513-ef3492d7dac3",
+	"github.com/google/uuid":               "v1.6.0",
+	"github.com/hashicorp/golang-lru/v2":   "v2.0.7",
+	"github.com/jackc/pgpassfile":          "v1.0.0",
+	"github.com/jackc/pgservicefile":       "v0.0.0-20240606120523-5a60cdf6a761",
+	"github.com/jackc/pgx/v5":              "v5.11.0",
+	"github.com/jackc/puddle/v2":           "v2.2.2",
+	"github.com/kr/pretty":                 "v0.3.0",
+	"github.com/mattn/go-isatty":           "v0.0.24",
+	"github.com/ncruces/go-strftime":       "v1.0.0",
+	"github.com/pmezard/go-difflib":        "v1.0.0",
+	"github.com/remyoudompheng/bigfft":     "v0.0.0-20230129092748-24d4a6f8daec",
+	"github.com/stretchr/objx":             "v0.1.0",
+	"github.com/stretchr/testify":          "v1.11.1",
+	"golang.org/x/mod":                     "v0.41.0",
+	"golang.org/x/oauth2":                  "v0.37.0",
+	"golang.org/x/sync":                    "v0.23.0",
+	"golang.org/x/sys":                     "v0.48.0",
+	"golang.org/x/text":                    "v0.41.0",
+	"golang.org/x/tools":                   "v0.50.0",
+	"gopkg.in/check.v1":                    "v1.0.0-20201130134442-10cb98267c6c",
+	"gopkg.in/yaml.v3":                     "v3.0.1",
+	"modernc.org/cc/v4":                    "v4.29.7",
+	"modernc.org/ccgo/v4":                  "v4.36.1",
+	"modernc.org/fileutil":                 "v1.4.0",
+	"modernc.org/gc/v2":                    "v2.6.5",
+	"modernc.org/gc/v3":                    "v3.1.5",
+	"modernc.org/goabi0":                   "v0.2.0",
+	"modernc.org/libc":                     "v1.77.1",
+	"modernc.org/mathutil":                 "v1.7.1",
+	"modernc.org/memory":                   "v1.12.1",
+	"modernc.org/opt":                      "v0.2.0",
+	"modernc.org/sortutil":                 "v1.2.1",
+	"modernc.org/sqlite":                   "v1.60.1",
+	"modernc.org/strutil":                  "v1.2.1",
+	"modernc.org/token":                    "v1.1.0",
 }
 
 type resolvedModule struct {

@@ -349,13 +349,4 @@ You may start a local Service for this dashboard or to host your own Rooms.
 It remains optional for participating in other Rooms: joining and normal Agent
 communication never wait for it, start it automatically, or require a daemon.
 
-The host owner can revoke the remote member with `pairroom relay revoke` or the
-Room LAN panel. The guest can use `pairroom relay unbind` directly or **Leave**
-in its optional joined Room view. Those actions do not stop either vendor process.
-A revoked member frees the shared slot: a successor admitted from a fresh
-invitation selects its own Runtime, and an expired invitation window keeps
-answering its newest attempt before that request is forgotten. Revoked
-admissions stay durable for audit; revoking never rewrites the Room Event Log.
-Management settings, arbitrary workspace browsing, process control, approval
-resolution, provider configuration and listener configuration are never LAN
-member operations.
+The host owner can revoke the remote member with `pairroom relay revoke` or the Room LAN panel. The guest can use `pairroom relay unbind` directly or **Leave** in its optional joined Room view. Those actions do not stop either vendor process. A revoked member frees the shared slot: a successor admitted from a fresh invitation selects its own Runtime, and an expired invitation window keeps answering its newest attempt, by durable append order, before that request is forgotten. Revoked admissions stay durable for audit; revoking never rewrites the Room Event Log. Management settings, arbitrary workspace browsing, process control, approval resolution, provider configuration and listener configuration are never LAN member operations.

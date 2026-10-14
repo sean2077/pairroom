@@ -63,11 +63,7 @@ reduction requires an explanation and fresh Linux CI evidence in the same PR;
 do not lower a floor simply to pass. CI retains its profile as the
 `pairroom-linux-coverage` artifact for 14 days.
 
-The `cmd/pairroom` floor was later raised from 40 to 87 with its CLI behavior
-tests, from a local Windows measurement of 89.8% with a wider margin because
-no Linux run preceded the change. The package has no platform-tagged files or
-GOOS-dependent test branches; re-derive the floor from the next Linux CI
-artifact.
+The `cmd/pairroom` floor was later raised from 40 to 87 with its CLI behavior tests, from a local Windows measurement of 89.8% with a wider margin because no Linux run preceded the change. The package has no platform-tagged files or GOOS-dependent test branches. The PostgreSQL-gated enterprise operator, restore and endpoint CLI then set the floor to 83, because those tests are explicitly opt-in and the DSN-less Linux CI measurement is the environment the floor gates; a DSN-enabled run of the same package measured 87.278% of statements (1523/1745, Windows, one package at a time, parent processes only — subprocess coverage is not collected) at commit `dfedba3`, as a supplementary measurement that does not move the floor. Re-derive the floor from the next Linux CI artifact.
 
 PRs retain the focused Windows/macOS Native boundary suite, including all
 Agent adapter tests, fixture-backed CLI doctor tests, and no-auth probe safety

@@ -398,10 +398,12 @@ const (
 	RuntimeError             = "error"
 )
 
-// AgentQuote is transient, server-resolved context for an explicit user reply.
-// Its ID remains in AgentInput.ReplyTo; it is not a new Event Log field.
+// AgentQuote is server-resolved context for an explicit same-Room quote.
+// Enterprise human quotes retain their original immutable User attribution;
+// the optional Author leaves legacy quote serialization unchanged.
 type AgentQuote struct {
 	FromHandle string `json:"from_handle"`
+	Author     string `json:"author,omitempty"`
 	Text       string `json:"text"`
 }
 
@@ -416,6 +418,7 @@ type AgentInput struct {
 	From           ActorID           `json:"from"`
 	To             ActorID           `json:"to"`
 	FromHandle     string            `json:"from_handle"`
+	Author         string            `json:"author,omitempty"`
 	SelfHandle     string            `json:"self_handle"`
 	PeerHandle     string            `json:"peer_handle"`
 	Text           string            `json:"text"`

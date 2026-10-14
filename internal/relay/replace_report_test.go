@@ -97,7 +97,7 @@ func TestReplaceReportsPreviousGenerationWork(t *testing.T) {
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
 	}
-	log, err = store.Open(e.cfg.Store.Dir())
+	log, err = store.Open(log.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}

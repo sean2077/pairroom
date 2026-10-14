@@ -7,10 +7,19 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 ### Fixed
 
 - Check the bound Codex session's native queue before submitting a wake, so a prompt still queued during a long Desktop turn prevents another identical prompt after relay suppression expires or infers progress. Recheck an unchanged pending head with exponential backoff from 30 seconds to five minutes without spending wake reservations or rate budget; unavailable queue inspection fails closed and leaves foreground collection available. Back off repeated inspection failures, expose the actual queue suppression in read-only diagnostics, and retain bounded support for large queue responses and explicit probe deadlines.
+- Scan enterprise request bodies as decoded JSON before checking for endpoint-native metadata, so the same check applies on every platform; the previous raw scan never matched a Windows path because JSON escapes its separators. Only a validated review anchor's own documented workspace field is exempt, because publishing that evidence is the feature, and the exemption compares that field's exact path segments so a key merely shaped like it cannot widen the exemption; the same path, session identity, credential or transcript metadata in any other position still fails the check, with fixed marker classes and no private values in the error.
+
+### Changed
+
+- Approve `golang.org/x/text` v0.29.0 → v0.41.0 in the pinned dependency closure, so the reachable `x/text/secure/precis` (GO-2026-6629) and `x/text/unicode/norm` (GO-2026-5970) advisories no longer resolve through the PostgreSQL driver's dependency graph. The reviewed license files are unchanged, and no module is added, removed or replaced.
+- Set the measured `cmd/pairroom` coverage floor to 83%. The package now carries the PostgreSQL-gated operator maintenance, restore and endpoint CLI whose tests are explicitly opt-in, so the DSN-less CI measurement sits below the previous 87% floor; the floor keeps gating that environment, each DSN-free negative case asserts its own refusal reason so a removed validation cannot pass as an unconfigured environment, and those tests raise the measured value from 78.1% to 83.6%.
+- Give the multi-MiB attachment step of the enterprise endpoint process regression its own ten-second wait budget instead of the ordinary one-second message budget. The service reauthorizes a large attachment in bounded chunks, so the previous budget was a fixture margin rather than a documented delivery deadline; ordinary messages and the kill/recovery steps keep the one-second budget, and the per-chunk authorization and attachment integrity assertions are unchanged.
 
 ## [v5.16.0] — 2026-10-12
 
 ### Added
+
+- Add the enterprise service candidate: explicit operator initialization, configured OIDC, persistent browser and Device authorization, symmetric remote Native Bindings, shared Relay transactions and new-epoch delivery recovery. Add logical Projects, authorized administration and Room/Device/Agent/session management, account-isolated browser recovery, and restricted fresh-authentication ownership transfer. Add verified private attachments, full paginated history, stable human authors, bounded resource admission, metadata health/diagnostics and offline SQL/object backup with pristine-target restore. Authority changes invalidate affected approvals; restore and revocation retire their scoped credentials without rewriting history. Operational and capacity evidence remains scoped to its tested environment; this is not a release, simultaneous-500-Room throughput promise or authenticated vendor acceptance claim.
 
 - Create Native Rooms with two empty slots in Management or through `relay bind --create`, without Runtime, pair-profile, Provider or model selections. The joining harness supplies its actual Runtime; omitted local slots are assigned atomically. LAN still uses one local owner and one admitted remote guest, with no guest Service requirement.
 - Give new Native Rooms protocol v9 and stable `@agent1` / `@agent2` handles, including equal-Runtime pairs and explicit participant replacement. Bindings own actual Runtime per generation; message history retains immutable source Runtime and generation. Participant cards display empty or actual binding state and offer a separate, explicit replacement command.
@@ -18,10 +27,16 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ### Fixed
 
+- Verify the original SQL lease and restore gate before adopting a replacement work connection. Failed admission keeps the dead transport unchanged; offline maintenance retains its explicit recovery rules.
+- Replace a closed enterprise PostgreSQL work connection only when a new explicit command enters. Keep its original ownership fence and live authorization; a cancelled read cannot permanently disable later writes, and no failed or uncertain command is automatically replayed.
+- Preserve cancellation and deadline causes when an enterprise Native collector waits for its private identity lock. An expired collector poll before a new claim returns an empty result; a caller cancellation still propagates, genuine identity mismatch remains rejected, and an already journaled claim retains its uncertain outcome.
+
 - Keep Management checkbox and radio controls compact and aligned with their labels, including LAN invitations, listener settings, Agent pair defaults, Room selection and confirmations, instead of inheriting full-width text-field sizing.
 - Reject a Native `report` carrying more than one expected peer generation without appending any fact, name the peer generation in the duplicate-`--id` conflict message, and document the explicit `send` `peer_changed` error separately from the terminal Stop `peer_changed` publication.
 
 ### Changed
+
+- Pin the reviewed enterprise OIDC dependencies: `github.com/coreos/go-oidc/v3` v3.21.0, `golang.org/x/oauth2` v0.37.0 and `github.com/go-jose/go-jose/v4` v4.1.5, with their license notices and unchanged existing SQLite/PostgreSQL module versions. The enterprise service remains under implementation.
 
 - Preserve existing typed Native Rooms on v8 with their runtime-derived handles and Embedded on v7. `pairroom protocol` defaults to v9; `--legacy-native` prints the old Native contract. Native creation no longer reads saved Agent pairs or Provider catalogs, and `--peer-runtime` is removed. Embedded selection and configuration behavior remains unchanged.
 - Write new Rooms with Store 14/provisioning 7 and Registry checkpoint 5, while retaining Store 12/provisioning 5, Store 13/provisioning 6 and checkpoint 3/4 reads without rewriting historical Room facts. Explicit replacement advances the generation, invalidates old credentials and retains old journal/work evidence; it cannot stop a native process or retract accepted work.

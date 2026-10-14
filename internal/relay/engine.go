@@ -19,7 +19,6 @@ import (
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/prompt"
 	"github.com/sean2077/pairroom/internal/protocol"
-	"github.com/sean2077/pairroom/internal/store"
 )
 
 type Config struct {
@@ -29,11 +28,12 @@ type Config struct {
 	// SharedSlot is the remote participant of a Native LAN Room. It cannot be locally bound.
 	SharedSlot model.ActorID
 	RoomID     string
-	Store      *store.JSONLStore
-	Runtimes   map[model.ActorID]model.RuntimeKind
-	Media      *attachment.Store
-	Now        func() time.Time
-	Lease      time.Duration
+	// Store is the Room's durable boundary; every append error stays fail-closed.
+	Store    Persistence
+	Runtimes map[model.ActorID]model.RuntimeKind
+	Media    *attachment.Store
+	Now      func() time.Time
+	Lease    time.Duration
 	// CommitBinding serializes global native identity ownership with the active
 	// Room writer. It must call appendFact exactly once or return an error.
 	CommitBinding func(Binding, func() error) error
@@ -51,6 +51,7 @@ type Engine struct {
 	lanWakeResults  map[string]string
 	lanInvites      map[string]LANInvite
 	lanRequests     map[string]LANJoinRequest
+	lanLatest       map[string]string // newest request per key in durable append order
 	lanAdmitted     map[string]bool
 	lanAttempts     map[string]int
 	lanKeyAttempts  map[string]int
@@ -101,10 +102,21 @@ type Engine struct {
 	// derived holds attention transitions applied by the current append only.
 	derived  []Attention
 	delivery *deliveryProjection
+	// enterprise wiring; zero on Local engines. The gate serializes whole
+	// enterprise commands (plan -> SQL -> apply/rebuild) and every legacy
+	// mutator is rejected at its entry when enterprise is set. The deployment
+	// is fixed at construction; each command carries its own authenticated
+	// user, so several users share one engine and one gate.
+	enterprise         bool
+	enterprisePort     EnterprisePort
+	enterpriseState    enterpriseState
+	enterpriseSeq      uint64
+	enterpriseRevision uint64
+	gate               chan struct{}
 }
 
 func Open(cfg Config) (*Engine, error) {
-	if cfg.Store == nil || cfg.RoomID == "" {
+	if nilPersistence(cfg.Store) || cfg.RoomID == "" {
 		return nil, errors.New("native relay requires a published Room store")
 	}
 	if cfg.Now == nil {
@@ -198,6 +210,11 @@ func (e *Engine) Fatal() error {
 
 func (e *Engine) signal() { close(e.changed); e.changed = make(chan struct{}) }
 func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
+	if e.enterprise {
+		// Last line of defense only: every enterprise mutator is rejected at
+		// its entry; Local entries are rejected by requireLocalMutation.
+		return ErrEnterpriseReadOnly
+	}
 	if e.closed || e.fatal != nil {
 		return ErrClosed
 	}
@@ -208,6 +225,9 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 	ev.CreatedAt = e.cfg.Now()
 	e.derived = nil
 	if err := e.cfg.Store.Append(&ev); err != nil {
+		// Fail closed: a non-nil append error never establishes that no effect
+		// exists (the write may have landed), so the Room accepts no further
+		// writes until it is reopened and the durable facts are replayed.
 		e.fatal = err
 		e.signal()
 		return err
@@ -234,10 +254,36 @@ func (e *Engine) append(kind string, actor model.ActorID, payload any) error {
 	return nil
 }
 func (e *Engine) apply(ev model.Event) error {
+	if e.enterprise && (ev.Kind == EventBinding || ev.Kind == EventLANInvite || ev.Kind == EventLANJoin || ev.Kind == EventLANMember) {
+		return errors.New("enterprise Room cannot replay Local or LAN binding authority")
+	}
+	if !e.enterprise && (ev.Kind == model.EnterpriseBindingUpdatedKind || ev.Kind == model.EnterpriseMembershipKind || ev.Kind == model.EnterpriseOwnershipKind || ev.Kind == model.EnterpriseRoomMetadataKind) {
+		return errors.New("local or LAN Room cannot replay enterprise authority history")
+	}
 	e.sequence = ev.Seq
 	e.initIndexes()
 	detail := ""
 	switch ev.Kind {
+	case model.EnterpriseRoomMetadataKind:
+		// The catalog owns current metadata and access. Replaying a rename,
+		// archive or Project association cannot change a Binding or ACL.
+		if _, err := model.DecodeEnterpriseRoomMetadata(ev); err != nil {
+			return err
+		}
+	case model.EnterpriseMembershipKind:
+		if _, err := model.DecodeEnterpriseMembershipChange(ev); err != nil {
+			return err
+		}
+	case model.EnterpriseOwnershipKind:
+		// These facts describe history only. Live SQL rows, never replay,
+		// authorize membership and ownership.
+		if _, err := model.DecodeEnterpriseOwnershipChange(ev); err != nil {
+			return err
+		}
+	case model.EnterpriseBindingUpdatedKind:
+		if err := e.applyEnterpriseBinding(ev); err != nil {
+			return err
+		}
 	case EventBinding:
 		var b bindingFact
 		if err := json.Unmarshal(ev.Data, &b); err != nil {
@@ -395,16 +441,38 @@ func (e *Engine) apply(ev model.Event) error {
 	return nil
 }
 func (e *Engine) applyBinding(ev model.Event, b bindingFact) error {
+	if e.enterprise || b.enterprise != nil {
+		return errors.New("local or LAN binding codec cannot carry enterprise identity")
+	}
 	if !b.Slot.ValidParticipant() || b.Generation == 0 || !validID(b.BindID) || (b.Active && b.RemoteKey == "" && !validHash(b.CredentialHash)) {
 		return errors.New("invalid native binding fact")
 	}
 	old := e.bindings[b.Slot]
-	if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
-		return errors.New("native binding generation regressed")
+	if err := e.validateBindingGenerationLocked(b, old); err != nil {
+		return err
 	}
 	if err := e.validateDynamicBinding(b, old); err != nil {
 		return err
 	}
+	return e.applyBindingProjection(ev, b)
+}
+
+// validateBindingGenerationLocked is shared by the Local/LAN and enterprise
+// fact codecs. Identity validation stays at each codec's own boundary.
+func (e *Engine) validateBindingGenerationLocked(b, old bindingFact) error {
+	if b.Generation < old.Generation || (b.Generation == old.Generation && old.BindID != "" && b.BindID != old.BindID) {
+		return errors.New("native binding generation regressed")
+	}
+	if e.cfg.DynamicBindings && b.Generation > old.Generation && (b.Generation != old.Generation+1 || !b.Active || e.seenBinds[b.BindID]) {
+		return errors.New("dynamic Native binding requires a fresh active generation")
+	}
+	return nil
+}
+
+// applyBindingProjection is the one binding/inbox transition implementation.
+// Both codecs reach it only after their identities and generation validate.
+func (e *Engine) applyBindingProjection(ev model.Event, b bindingFact) error {
+	old := e.bindings[b.Slot]
 	if !b.Active || b.Generation != old.Generation || b.SessionID != old.SessionID {
 		// A replaced, unbound or re-associated session cannot consume a
 		// nudge queued for its predecessor, nor end its Turn.
@@ -471,6 +539,9 @@ func (e *Engine) commitBinding(b bindingFact) error {
 
 // Bind associates a slot. See BindReport for the replaced generation's work.
 func (e *Engine) Bind(slot model.ActorID, req BindRequest) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	b, _, err := e.BindReport(slot, req)
 	return b, err
 }
@@ -517,6 +588,9 @@ type Replaced struct {
 // BindReport is Bind plus, for an explicit replacement of an active binding,
 // what happened to that binding's inbox. Idempotent recovery reports nothing.
 func (e *Engine) BindReport(slot model.ActorID, req BindRequest) (Binding, *Replaced, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var err error
@@ -660,6 +734,9 @@ func (e *Engine) Inspect(a Auth) (Binding, error) {
 // A match opportunistically records the transcript path, which the environment
 // does not carry, keeping `relay peer` references available.
 func (e *Engine) ConfirmSession(a Auth, sessionID, transcript string) (Binding, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Binding{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)
@@ -682,6 +759,9 @@ func (e *Engine) ConfirmSession(a Auth, sessionID, transcript string) (Binding, 
 	return b.Binding, nil
 }
 func (e *Engine) Unbind(slot model.ActorID) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -691,14 +771,12 @@ func (e *Engine) Unbind(slot model.ActorID) error {
 	if !ok || !b.Active {
 		return nil
 	}
-	b.Active = false
-	b.CredentialHash = ""
-	b.SessionID = ""
-	b.TranscriptPath = ""
-	b.LastActivity = e.cfg.Now()
-	return e.commitBinding(b)
+	return e.commitBinding(planLocalRetirement(b, e.cfg.Now()))
 }
 func (e *Engine) Park(slot model.ActorID, enabled bool) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -714,10 +792,10 @@ func (e *Engine) Park(slot model.ActorID, enabled bool) error {
 	if !ok || !b.Active {
 		return ErrAuth
 	}
-	if b.ParkEnabled == enabled {
+	b, changed := planParkBinding(b, enabled)
+	if !changed {
 		return nil
 	}
-	b.ParkEnabled = enabled
 	// A park toggle changes no identity: append its binding fact directly so it
 	// cannot run the Registry CommitBinding checkpoint, whose write failure
 	// would poison the whole Registry fail-closed until restart.
@@ -751,20 +829,12 @@ func (e *Engine) generation(slot model.ActorID) uint64 {
 }
 func (e *Engine) makeMessage(from, to model.ActorID, text, source string) Message {
 	now := e.cfg.Now()
-	state := "queued"
-	var generation uint64
-	if to == model.ActorUser {
-		state = "human"
-	} else {
-		generation = e.generation(to)
-	}
-	m := Message{ID: model.NewID("relay"), From: from, To: to, Text: text, State: state, TargetGeneration: generation, CreatedAt: now, UpdatedAt: now, Source: source}
-	if e.cfg.DynamicBindings && from.ValidParticipant() {
-		m.FromRuntime, m.FromGeneration = e.bindings[from].Runtime, e.bindings[from].Generation
-	}
-	return m
+	return planMessage(e.messagePlanSource(from, to), model.NewID("relay"), now, text, source)
 }
 func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration ...uint64) (Publication, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Publication{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -781,54 +851,18 @@ func (e *Engine) Report(a Auth, seq uint64, text string, expectedPeerGeneration 
 		e.noteLANActivityLocked(a)
 		return clonePublication(existing), nil
 	}
-	// An already accepted report is recovered by its own receipt above, so this
-	// guard never blocks idempotent recovery. A new report must name at most one
-	// expected peer generation: any other arity would be silently treated as "no
-	// expectation" and terminate as peer_changed without reaching a peer.
-	if len(expectedPeerGeneration) > 1 {
-		return Publication{}, errors.New("report accepts at most one expected peer generation")
+	decision, err := decidePublication(e.publicationPlanState(a.Slot), seq, text, expectedPeerGeneration)
+	if err != nil {
+		return Publication{}, err
 	}
-	last := e.lastReport[bindingKey(a.BindID, a.Generation)]
-	if seq <= last {
-		return Publication{}, errors.New("report_seq regressed; reconcile the original publication")
-	}
-	p := Publication{BindID: a.BindID, Generation: a.Generation, ReportSeq: seq}
-	parsed := prompt.ParseMentions(text, a.Slot, e.cfg.Runtimes)
-	if e.cfg.DynamicBindings {
-		if len(expectedPeerGeneration) == 1 {
-			p.ExpectedPeerGeneration = expectedPeerGeneration[0]
-		}
-		parsed = prompt.ParseNativeMentions(text, a.Slot)
-	}
-	var to model.ActorID
-	if len(parsed.Targets) > 0 {
-		to = model.OtherParticipant(a.Slot)
-	} else if parsed.Human {
-		to = model.ActorUser
-	}
-	if to != "" {
-		if e.cfg.DynamicBindings && to.ValidParticipant() {
-			if p.ExpectedPeerGeneration == 0 || p.ExpectedPeerGeneration != e.generation(to) {
-				p.Outcome = PeerChangedCode
-			}
-		}
-		if p.Outcome == "" {
-			m := e.makeMessage(a.Slot, to, text, "stop")
-			if e.cfg.DynamicBindings && to.ValidParticipant() {
-				m.TargetGeneration = p.ExpectedPeerGeneration
-			}
-			p.Message = &m
-		}
-	}
-	kind := EventPublication
-	if seq > last+1 {
-		p.GapFrom = last + 1
-		p.GapTo = seq - 1
-		kind = EventPublicationGap
+	p := decision.publication
+	if decision.to != "" && p.Outcome == "" {
+		m := e.makeMessage(a.Slot, decision.to, text, "stop")
+		p.Message = &m
 	}
 	// Acceptance and optional enqueue share one durable append. A non-routed
 	// boundary records only its idempotency receipt, never the private reply.
-	if err := e.append(kind, a.Slot, p); err != nil {
+	if err := e.append(decision.kind, a.Slot, p); err != nil {
 		return Publication{}, err
 	}
 	e.noteLANActivityLocked(a)
@@ -844,6 +878,9 @@ func (e *Engine) Publication(a Auth, seq uint64) (Publication, bool, error) {
 	return clonePublication(p), ok, nil
 }
 func (e *Engine) Send(a Auth, req SendRequest) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -862,6 +899,9 @@ func (e *Engine) Send(a Auth, req SendRequest) (Message, error) {
 	return m, err
 }
 func (e *Engine) SendUser(req SendRequest) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -876,84 +916,24 @@ func (e *Engine) SendUser(req SendRequest) (Message, error) {
 	return e.sendLocked(model.ActorUser, req.To, req, "user/"+req.ID)
 }
 func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string) (Message, error) {
-	if !validID(req.ID) {
-		return Message{}, errors.New("client message ID is required")
-	}
-	if err := validateBody(req.Text); err != nil {
+	if err := validateSendRequest(req); err != nil {
 		return Message{}, err
-	}
-	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
-		return Message{}, errors.New("message text or attachments required")
-	}
-	if req.Review != nil {
-		if err := req.Review.Validate(); err != nil {
-			return Message{}, err
-		}
 	}
 	original, retry := e.messages[e.sends[key]]
 	guardPeer := e.cfg.DynamicBindings && from.ValidParticipant() && to.ValidParticipant()
 	if guardPeer && !retry && (req.ExpectedPeerGeneration == 0 || req.ExpectedPeerGeneration != e.generation(to)) {
 		return Message{}, ErrPeerChanged
 	}
-	m := e.makeMessage(from, to, req.Text, "send")
-	if guardPeer {
-		m.TargetGeneration = req.ExpectedPeerGeneration
-	}
-	m.Author = req.author
-	if req.Review != nil {
-		v := *req.Review
-		m.Review = &v
-	}
+	m := e.newSendCandidateLocked(from, to, req, guardPeer)
 	if len(req.AttachmentIDs) > 0 {
-		var values []model.Attachment
-		var err error
-		if retry {
-			var resolve func(string) (model.Attachment, error)
-			if e.cfg.Media != nil {
-				resolve = func(id string) (model.Attachment, error) {
-					a, _, err := e.cfg.Media.Resolve(id)
-					return a, err
-				}
-			}
-			values, err = acceptedAttachments(original, req.AttachmentIDs, resolve)
-		} else if e.cfg.Media == nil {
-			return Message{}, errors.New("attachment store unavailable")
-		} else {
-			values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
-		}
+		values, err := e.resolveSendAttachmentsLocked(req, original, retry)
 		if err != nil {
-			return Message{}, unavailableAttachment(err)
+			return Message{}, err
 		}
 		m.Attachments = values
 	}
-	if req.QuoteID != "" {
-		quote, ok := e.messages[req.QuoteID]
-		if !ok {
-			return Message{}, errors.New("quoted message is not in this Room")
-		}
-		m.Quote = &model.AgentQuote{FromHandle: e.handle(quote.From), Text: quote.Text}
-		// Like embedded quoted input, preserve image identity without recursively
-		// expanding peer correlation links or duplicating the same attachment.
-		seen := make(map[string]bool, len(m.Attachments))
-		for _, a := range m.Attachments {
-			seen[a.ID] = true
-		}
-		for _, a := range quote.Attachments {
-			if !seen[a.ID] {
-				m.Attachments = append(m.Attachments, a)
-				seen[a.ID] = true
-			}
-		}
-	}
-	if len(m.Attachments) > attachment.MaxImagesPerMessage {
-		return Message{}, errors.New("too many message and quoted attachments")
-	}
-	var total int64
-	for _, a := range m.Attachments {
-		total += a.Size
-	}
-	if total > attachment.MaxTotalImageBytes {
-		return Message{}, errors.New("message and quoted attachments exceed total image limit")
+	if err := e.mergeQuoteAndLimitsLocked(&m, req); err != nil {
+		return Message{}, err
 	}
 	if retry {
 		if !sameMessagePayload(original, m) || guardPeer && original.TargetGeneration != req.ExpectedPeerGeneration {
@@ -969,7 +949,112 @@ func (e *Engine) sendLocked(from, to model.ActorID, req SendRequest, key string)
 	}
 	return cloneMessage(m), nil
 }
+
+// validateSendRequest performs the send admission checks in the Local flow's
+// original order; it is shared by sendLocked and the enterprise executor.
+func validateSendRequest(req SendRequest) error {
+	if !validID(req.ID) {
+		return errors.New("client message ID is required")
+	}
+	if err := validateBody(req.Text); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.Text) == "" && len(req.AttachmentIDs) == 0 {
+		return errors.New("message text or attachments required")
+	}
+	if req.Review != nil {
+		if err := req.Review.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// newSendCandidateLocked builds the candidate message for one send: identity
+// and routing state from makeMessage, the peer-generation stamp when guarded,
+// and the author/review provenance. It is pure — no cache reads, no append,
+// no notification — and shared by the Local path and the enterprise executor.
+func (e *Engine) newSendCandidateLocked(from, to model.ActorID, req SendRequest, guardPeer bool) Message {
+	m := e.makeMessage(from, to, req.Text, "send")
+	if guardPeer {
+		m.TargetGeneration = req.ExpectedPeerGeneration
+	}
+	m.Author = req.author
+	if req.Review != nil {
+		v := *req.Review
+		m.Review = &v
+	}
+	return m
+}
+
+// resolveSendAttachmentsLocked resolves the requested attachments: accepted
+// identities for a retry, fresh media-store resolution otherwise; the Local
+// flow's error classes are preserved verbatim.
+func (e *Engine) resolveSendAttachmentsLocked(req SendRequest, original Message, retry bool) ([]model.Attachment, error) {
+	var values []model.Attachment
+	var err error
+	if retry {
+		var resolve func(string) (model.Attachment, error)
+		if e.cfg.Media != nil {
+			resolve = func(id string) (model.Attachment, error) {
+				a, _, err := e.cfg.Media.Resolve(id)
+				return a, err
+			}
+		}
+		values, err = acceptedAttachments(original, req.AttachmentIDs, resolve)
+	} else if e.cfg.Media == nil {
+		return nil, errors.New("attachment store unavailable")
+	} else {
+		values, err = e.cfg.Media.ResolveMany(req.AttachmentIDs)
+	}
+	if err != nil {
+		return nil, unavailableAttachment(err)
+	}
+	return values, nil
+}
+
+// mergeQuoteAndLimitsLocked merges a quoted message's attachment identities
+// into the candidate and enforces the attachment limits; shared by the Local
+// path and the enterprise executor.
+func (e *Engine) mergeQuoteAndLimitsLocked(m *Message, req SendRequest) error {
+	if req.QuoteID != "" {
+		quote, ok := e.messages[req.QuoteID]
+		if !ok {
+			return errors.New("quoted message is not in this Room")
+		}
+		m.Quote = &model.AgentQuote{FromHandle: e.handle(quote.From), Text: quote.Text}
+		if e.enterprise && quote.From == model.ActorUser && ValidEnterpriseHumanAuthor(quote.Author) {
+			m.Quote.Author = quote.Author
+		}
+		// Like embedded quoted input, preserve image identity without recursively
+		// expanding peer correlation links or duplicating the same attachment.
+		seen := make(map[string]bool, len(m.Attachments))
+		for _, a := range m.Attachments {
+			seen[a.ID] = true
+		}
+		for _, a := range quote.Attachments {
+			if !seen[a.ID] {
+				m.Attachments = append(m.Attachments, a)
+				seen[a.ID] = true
+			}
+		}
+	}
+	if len(m.Attachments) > attachment.MaxImagesPerMessage {
+		return errors.New("too many message and quoted attachments")
+	}
+	var total int64
+	for _, a := range m.Attachments {
+		total += a.Size
+	}
+	if total > attachment.MaxTotalImageBytes {
+		return errors.New("message and quoted attachments exceed total image limit")
+	}
+	return nil
+}
 func (e *Engine) Failure(a Auth, category string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, err := e.auth(a, false); err != nil {
@@ -995,7 +1080,7 @@ func (e *Engine) handle(actor model.ActorID) string {
 	}
 	return model.ParticipantIdentities(e.cfg.Runtimes)[actor].MentionHandle
 }
-func (e *Engine) envelope(m Message) (string, error) {
+func (e *Engine) envelopeInput(m Message) model.AgentInput {
 	input := model.AgentInput{From: m.From, To: m.To, FromHandle: e.handle(m.From), Text: m.Text, Quote: m.Quote}
 	if e.cfg.DynamicBindings {
 		input.FromRuntime, input.FromGeneration = m.FromRuntime, m.FromGeneration
@@ -1003,7 +1088,9 @@ func (e *Engine) envelope(m Message) (string, error) {
 		input.PeerGeneration = e.peerGenerationLocked(m.To)
 	}
 	if m.From == model.ActorUser && m.Author != "" {
-		if strings.HasPrefix(m.Author, "lan:") {
+		if e.enterprise && ValidEnterpriseHumanAuthor(m.Author) {
+			input.Author = m.Author
+		} else if strings.HasPrefix(m.Author, "lan:") {
 			input.FromHandle = protocol.RemoteRoomOwnerHandle
 			input.Text += "\n" + protocol.SharedRoomEnvelopeNotice
 		} else {
@@ -1013,6 +1100,11 @@ func (e *Engine) envelope(m Message) (string, error) {
 	if m.Review != nil {
 		input.Text += m.Review.Envelope()
 	}
+	return input
+}
+
+func (e *Engine) envelope(m Message) (string, error) {
+	input := e.envelopeInput(m)
 	for _, a := range m.Attachments {
 		if e.cfg.Media == nil {
 			return "", errors.New("attachment store unavailable")
@@ -1034,6 +1126,9 @@ func (e *Engine) envelope(m Message) (string, error) {
 // A Stop park that releases no envelope is the Service's Turn-end observation:
 // the harness stops without a continuation.
 func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return nil, err
+	}
 	observed := false
 	for {
 		e.mu.Lock()
@@ -1063,13 +1158,12 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 			return nil, err
 		}
 		busy := e.counts[a.Slot].Delivering > 0
-		var next *Message
+		var head *Message
 		if ids := e.queued[a.Slot]; len(ids) > 0 {
 			m := e.messages[ids[0]]
-			if m.TargetGeneration == a.Generation {
-				next = &m
-			}
+			head = &m
 		}
+		next := selectClaimMessage(head, busy, a.Generation)
 		if !busy && next != nil {
 			envelope, err := e.envelope(*next)
 			if err != nil {
@@ -1085,11 +1179,8 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 				e.mu.Unlock()
 				return nil, err
 			}
-			next.State = "delivering"
-			next.ClaimedAt = e.cfg.Now()
-			next.UpdatedAt = next.ClaimedAt
-			next.Receipt = receipt
-			if err := e.append(EventMessage, a.Slot, messageFact{Message: *next, Receipt: receipt}); err != nil {
+			fact := planClaimFact(*next, receipt, e.cfg.Now())
+			if err := e.append(EventMessage, a.Slot, fact); err != nil {
 				e.mu.Unlock()
 				return nil, err
 			}
@@ -1127,6 +1218,9 @@ func (e *Engine) Claim(ctx context.Context, a Auth, park bool) (*Claim, error) {
 	}
 }
 func (e *Engine) Ack(a Auth, id, receipt string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Draining blocks new work, not receipts for already released envelopes.
@@ -1137,57 +1231,41 @@ func (e *Engine) Ack(a Auth, id, receipt string) error {
 		return err
 	}
 	m, ok := e.messages[id]
-	if !ok || m.To != a.Slot || m.TargetGeneration != a.Generation || receipt == "" || !same(m.Receipt, receipt) {
-		return ErrAuth
-	}
-	if m.State == "handed_off" {
-		return nil
-	}
+	pendingRetry := false
 	if m.State == "unknown" {
-		// Owner-approved late acknowledgement: the per-claim receipt was issued
-		// only to this collector and the binding generation plus session were
-		// re-authenticated above, so a matching receipt proves the envelope
-		// reached stdout even after the lease expired. A live explicit Retry
-		// still wins: settling the original behind a pending retry would
-		// duplicate work the operator already re-queued.
 		for _, key := range e.unresolved {
-			other := e.messages[key]
-			if other.RetryOf == id && (other.State == "queued" || other.State == "delivering") {
-				return errors.New("an explicit Retry is pending; resolve it before acknowledging the original delivery")
+			if isPendingRetry(e.messages[key], id) {
+				pendingRetry = true
+				break
 			}
 		}
-		m.State = "handed_off"
-		m.UpdatedAt = e.cfg.Now()
-		return e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt})
 	}
-	if m.State != "delivering" {
-		return errors.New("delivery outcome is unknown; inspect before explicit Retry")
+	decision, err := decideAcknowledgement(m, ok, a.Slot, a.Generation, receipt, pendingRetry)
+	if err != nil || decision == acknowledgementNoChange {
+		return err
 	}
-	m.State = "handed_off"
-	m.UpdatedAt = e.cfg.Now()
-	return e.append(EventMessage, a.Slot, messageFact{Message: m, Receipt: receipt})
+	return e.append(EventMessage, a.Slot, planAcknowledgementFact(m, e.cfg.Now()))
 }
 func (e *Engine) Cancel(id string) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
 		return err
 	}
 	m, ok := e.messages[id]
-	if !ok {
-		return errors.New("message not found")
+	change, err := decideCancellation(m, ok)
+	if err != nil || !change {
+		return err
 	}
-	if m.State == "cancelled" {
-		return nil
-	}
-	if m.State != "queued" {
-		return errors.New("Cancel only removes queued native messages; it cannot stop native work")
-	}
-	m.State = "cancelled"
-	m.UpdatedAt = e.cfg.Now()
-	return e.append(EventMessage, model.ActorUser, messageFact{Message: m})
+	return e.append(EventMessage, model.ActorUser, planCancellationFact(m, e.cfg.Now()))
 }
 func (e *Engine) Retry(id string) (Message, error) {
+	if err := e.requireLocalMutation(); err != nil {
+		return Message{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.healthy(); err != nil {
@@ -1197,60 +1275,51 @@ func (e *Engine) Retry(id string) (Message, error) {
 		return Message{}, err
 	}
 	old, ok := e.messages[id]
-	if !ok || old.State != "unknown" {
-		return Message{}, errors.New("only unknown messages can be explicitly retried")
+	var targetGeneration uint64
+	if old.To != model.ActorUser {
+		targetGeneration = e.generation(old.To)
 	}
-	if e.cfg.DynamicBindings && old.To.ValidParticipant() && old.TargetGeneration != e.generation(old.To) {
-		return Message{}, ErrPeerChanged
-	}
+	pendingRetry := false
 	for _, key := range e.unresolved {
-		m := e.messages[key]
-		if m.RetryOf == id && (m.State == "queued" || m.State == "delivering") {
-			return Message{}, errors.New("a retry is already pending")
+		if isPendingRetry(e.messages[key], id) {
+			pendingRetry = true
+			break
 		}
 	}
-	m := e.makeMessage(old.From, old.To, old.Text, "retry")
-	if e.cfg.DynamicBindings {
-		m.FromRuntime, m.FromGeneration, m.TargetGeneration = old.FromRuntime, old.FromGeneration, old.TargetGeneration
-	}
-	// Retry publishes for the original author: dropping the authenticated
-	// human-author provenance would downgrade the envelope's @user handle and
-	// its shared-Room permissions notice.
-	m.Author = old.Author
-	m.Attachments = append([]model.Attachment(nil), old.Attachments...)
-	m.Quote = old.Quote
-	m.Review = old.Review
-	m.RetryOf = id
-	if _, err := e.envelope(m); err != nil {
+	if err := decideRetry(old, ok, e.cfg.DynamicBindings, targetGeneration, pendingRetry); err != nil {
 		return Message{}, err
 	}
-	if err := e.append(EventMessage, model.ActorUser, messageFact{Message: m}); err != nil {
+	// Preserve the Local producer's clock-before-ID ordering. No candidate is
+	// materialized for a rejected retry.
+	now := e.cfg.Now()
+	fact := planRetryFact(old, e.cfg.DynamicBindings, targetGeneration, model.NewID("relay"), now)
+	if _, err := e.envelope(fact.Message); err != nil {
 		return Message{}, err
 	}
-	return cloneMessage(m), nil
+	if err := e.append(EventMessage, model.ActorUser, fact); err != nil {
+		return Message{}, err
+	}
+	return cloneMessage(fact.Message), nil
 }
 func (e *Engine) reapLocked(all bool) error {
 	now := e.cfg.Now()
-	// There are normally at most two in-flight deliveries. Stable ordering
-	// keeps simultaneous expirations deterministic without scanning history.
-	ids := make([]string, 0, len(e.inFlight))
+	// Planning never appends or applies. Local still persists each expiry in
+	// order, stopping on the first append failure and retaining earlier facts.
+	inFlight := make([]Message, 0, len(e.inFlight))
 	for id := range e.inFlight {
-		ids = append(ids, id)
+		inFlight = append(inFlight, e.messages[id])
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		m := e.messages[id]
-		if m.State == "delivering" && (all || !now.Before(m.ClaimedAt.Add(e.cfg.Lease))) {
-			m.State = "unknown"
-			m.UpdatedAt = now
-			if err := e.append(EventMessage, model.ActorSystem, messageFact{Message: m, Receipt: m.Receipt}); err != nil {
-				return err
-			}
+	for _, fact := range planExpiryFacts(inFlight, now, e.cfg.Lease, all) {
+		if err := e.append(EventMessage, model.ActorSystem, fact); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 func (e *Engine) Reap() error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -1259,6 +1328,9 @@ func (e *Engine) Reap() error {
 	return e.reapLocked(false)
 }
 func (e *Engine) SetDraining(value bool) {
+	// Explicit enterprise semantics: draining is safe flow control — it gates
+	// new enterprise commands at enterpriseAdmitted and takes no gate, no
+	// durable work and no external effect.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.draining = value
@@ -1268,6 +1340,12 @@ func (e *Engine) SetDraining(value bool) {
 // TryBeginIdleClose checks delivery admission and closes it under the same
 // lock as Claim. Service wake/HTTP leases are serialized by the caller.
 func (e *Engine) TryBeginIdleClose() bool {
+	if e.enterprise {
+		// Enterprise Rooms never idle-close themselves: Room lifetime and the
+		// ownership lease belong to the deployment owner, and the Local close
+		// path reaps. CloseContext is the explicit enterprise shutdown.
+		return false
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.healthy() != nil || len(e.inFlight) > 0 {
@@ -1288,6 +1366,12 @@ func (e *Engine) Busy() bool {
 	return len(e.inFlight) != 0
 }
 func (e *Engine) Close() error {
+	if e.enterprise {
+		// Enterprise shutdown is the cancellable, self-bounded CloseContext; a
+		// timed-out wait reports the error and does not claim the engine
+		// closed. The shared SQL store is never closed here.
+		return e.CloseContext(context.Background())
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -1390,30 +1474,31 @@ func AuthenticateBindingEvent(ev model.Event, a Auth) error {
 	return nil
 }
 func (e *Engine) UnbindAs(a Auth) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, true)
 	if err != nil {
 		return err
 	}
-	b.Active = false
-	b.CredentialHash = ""
-	b.SessionID = ""
-	b.TranscriptPath = ""
-	b.LastActivity = e.cfg.Now()
-	return e.commitBinding(b)
+	return e.commitBinding(planLocalRetirement(b, e.cfg.Now()))
 }
 func (e *Engine) ParkAs(a Auth, enabled bool) error {
+	if err := e.requireLocalMutation(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	b, err := e.auth(a, false)
 	if err != nil {
 		return err
 	}
-	if b.ParkEnabled == enabled {
+	b, changed := planParkBinding(b, enabled)
+	if !changed {
 		return nil
 	}
-	b.ParkEnabled = enabled
 	// See Park: a park toggle must not run the Registry CommitBinding hook.
 	return e.appendBindingFact(b)
 }
