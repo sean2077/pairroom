@@ -2,6 +2,7 @@ package relayclient
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,8 +24,10 @@ type nativeMetadataScan struct {
 	Leaked    string
 }
 
-// reviewWorkspacePath is the one documented field a validated review anchor may publish.
-const reviewWorkspacePath = "intent.review.workspace"
+// reviewWorkspacePath is the one documented field a validated review anchor may publish. The
+// exemption compares these segments exactly, so a key that merely contains the same characters,
+// such as a root key literally named "intent.review.workspace", cannot take that field's place.
+var reviewWorkspacePath = []string{"intent", "review", "workspace"}
 
 // validatedReviewWorkspace returns the workspace of a review anchor carried by the body when that
 // anchor passed Anchor.Validate(). The fixture and its regression test both go through this path,
@@ -48,16 +51,25 @@ func validatedReviewWorkspace(body []byte) string {
 // reviewWorkspace is the workspace of a review anchor that already passed Anchor.Validate().
 // Exactly that field is spared the workspace-class markers only, because publishing the review
 // checkout is the documented feature; every other marker class is still matched inside that field,
-// and every other field keeps every marker. The exemption is by field and class, never by value, so
-// a workspace that equals a session identity or credential cannot hide that secret anywhere.
+// and every other field keeps every marker. The exemption is by exact path segments and class,
+// never by value, so a workspace that equals a session identity or credential cannot hide that
+// secret anywhere, and a key only shaped like the path cannot widen the exemption.
 func scanNativeMetadata(body []byte, reviewWorkspace string, markers []nativeMarker) nativeMetadataScan {
 	var decoded any
 	if json.Unmarshal(body, &decoded) != nil {
 		return nativeMetadataScan{Malformed: true}
 	}
 	leaked := ""
-	var walk func(value any, path string)
-	walk = func(value any, path string) {
+	// The path holds object keys only. An array element appends its index as one more segment, so a
+	// value reached through an array can never satisfy the exact three-segment review path.
+	child := func(path []string, segment string) []string {
+		extended := make([]string, len(path)+1)
+		copy(extended, path)
+		extended[len(path)] = segment
+		return extended
+	}
+	var walk func(value any, path []string)
+	walk = func(value any, path []string) {
 		if leaked != "" {
 			return
 		}
@@ -67,7 +79,7 @@ func scanNativeMetadata(body []byte, reviewWorkspace string, markers []nativeMar
 				if marker.Value == "" {
 					continue
 				}
-				if marker.WorkspaceClass && path == reviewWorkspacePath && reviewWorkspace != "" && typed == reviewWorkspace {
+				if marker.WorkspaceClass && reviewWorkspace != "" && typed == reviewWorkspace && slices.Equal(path, reviewWorkspacePath) {
 					continue
 				}
 				if strings.Contains(typed, marker.Value) {
@@ -77,7 +89,7 @@ func scanNativeMetadata(body []byte, reviewWorkspace string, markers []nativeMar
 			}
 		case []any:
 			for index, element := range typed {
-				walk(element, path+"["+strconv.Itoa(index)+"]")
+				walk(element, child(path, strconv.Itoa(index)))
 			}
 		case map[string]any:
 			for key, element := range typed {
@@ -87,15 +99,11 @@ func scanNativeMetadata(body []byte, reviewWorkspace string, markers []nativeMar
 						return
 					}
 				}
-				child := key
-				if path != "" {
-					child = path + "." + key
-				}
-				walk(element, child)
+				walk(element, child(path, key))
 			}
 		}
 	}
-	walk(decoded, "")
+	walk(decoded, nil)
 	return nativeMetadataScan{Leaked: leaked}
 }
 
@@ -116,6 +124,11 @@ func TestEnterpriseWireMetadataScan(t *testing.T) {
 		return `{"client_id":"reviewed","intent":{"text":"reviewed response","review":{"schema":1,"workspace":"` + workspace + `","base":"` + validBase + `","head":"` + validHead + `","dirty_sha256":"` + dirty + `"}}}`
 	}
 	invalidAnchor := `{"client_id":"reviewed","intent":{"text":"reviewed response","review":{"schema":2,"workspace":"C:\\private\\checkout","base":"` + validBase + `","head":"` + validHead + `","dirty_sha256":"` + validDigest + `"}}}`
+	// insert adds one sibling key to a real body, so a case can place the same review workspace at
+	// a key that only looks like the documented path.
+	insert := func(body, after, addition string) string {
+		return strings.Replace(body, after, after+addition, 1)
+	}
 	cases := []struct {
 		name string
 		body string
@@ -124,6 +137,8 @@ func TestEnterpriseWireMetadataScan(t *testing.T) {
 		{"validated review root is published", anchor(`C:\\private\\checkout`, ""), ""},
 		{"invalid anchor does not exempt its root", invalidAnchor, "workspace"},
 		{"review root repeated in another field", `{"client_id":"reviewed","intent":{"text":"C:\\private\\checkout","review":{"schema":1,"workspace":"C:\\private\\checkout","base":"` + validBase + `","head":"` + validHead + `","dirty_sha256":"` + validDigest + `"}}}`, "workspace"},
+		{"dotted root key does not take the review path", insert(anchor(`C:\\private\\checkout`, ""), "{", `"intent.review.workspace":"C:\\private\\checkout",`), "workspace"},
+		{"dotted nested key does not take the review path", insert(anchor(`C:\\private\\checkout`, ""), `"intent":{`, `"review.workspace":"C:\\private\\checkout",`), "workspace"},
 		{"validated review workspace equal to the session identity", anchor("enterprise-native-session", ""), "session"},
 		{"validated review workspace equal to the capability", anchor("private-local-relay-capability", ""), "credential"},
 		{"escaped workspace outside a review anchor", `{"client_id":"status","intent":{"text":"C:\\private\\checkout"}}`, "workspace"},
