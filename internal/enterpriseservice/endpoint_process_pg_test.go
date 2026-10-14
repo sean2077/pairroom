@@ -435,7 +435,7 @@ func TestEnterpriseEndpointProcessesSurviveServiceKillWithoutReprintingClaims(t 
 		t.Fatal(err)
 	}
 	endpointRun(t, endpoints[0], "send", "--repo", endpoints[0].Workspace, "--id", "process-media-send", "--text", "inspect large process evidence", "--file", evidencePath, "--peer-generation", "1")
-	mediaOutput := wait()
+	mediaOutput := endpointRun(t, endpoints[1], "wait", "--repo", endpoints[1].Workspace, "--timeout", "10")
 	if !strings.Contains(mediaOutput, "inspect large process evidence") || !strings.Contains(mediaOutput, "large-evidence.txt") || strings.Contains(mediaOutput, endpoints[0].Workspace) {
 		t.Fatal("structured media delivery lost evidence or exposed sender's path")
 	}
