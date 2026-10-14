@@ -465,9 +465,9 @@ func TestEnterpriseArchiveActualServiceKillKeepsNativeSessionHostAndBindings(t *
 	grant := journal["grant"].(map[string]any)
 	native := grantsPGNative(t, x.f)
 	request := grantsPGRelayRequest{ClientID: "narrow-after-archive", BindingID: journal["bind_id"].(string), Generation: uint64(journal["generation"].(float64)), Intent: relay.EnterpriseOperationIntent{Kind: relay.EnterpriseOperationSend, To: "slot2", Text: "must not persist", ExpectedPeerGeneration: 1}}
-	status, _ = grantsPGCall(t, x.f, native, http.MethodPost, "/enterprise/device/v1/rooms/"+x.room+"/relay", grant["token"].(string), request)
-	if status != 403 {
-		t.Fatalf("archived narrow grant new send status=%d", status)
+	status, refusal := grantsPGCall(t, x.f, native, http.MethodPost, "/enterprise/device/v1/rooms/"+x.room+"/relay", grant["token"].(string), request)
+	if status != 403 || !bytes.Contains(refusal, []byte(`"class":"invalid_control_state"`)) {
+		t.Fatalf("archived narrow grant new send status=%d was not the archive refusal", status)
 	}
 	if x.counts(t) != before {
 		t.Fatal("archive refusal produced business fact, receipt or audit")

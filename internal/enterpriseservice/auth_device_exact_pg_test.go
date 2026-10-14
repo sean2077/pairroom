@@ -181,6 +181,13 @@ func TestHTTPPGTokenEndpointFailuresCreateNoApplicationIdentityOrSession(t *test
 			default:
 				t.Fatal("token failure injection did not reach actual exchange")
 			}
+			// Each entry is recorded before the IdP answers, so a retried
+			// authorization-code exchange would already be visible here.
+			select {
+			case <-entered:
+				t.Fatal("failed authorization-code exchange was retried")
+			default:
+			}
 			if f.cookie(browser) != nil {
 				t.Fatal("failed exchange issued application session cookie")
 			}

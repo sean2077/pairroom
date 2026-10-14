@@ -173,7 +173,7 @@ func TestHTTPPGLeaseLostAfterActualClaimCommitReleasesNoPrivateEnvelope(t *testi
 			released = true
 			select {
 			case response := <-done:
-				if response.status != 503 || bytes.Contains(response.body, []byte(marker)) || bytes.Contains(response.body, []byte(committed.Relay.Claim.Receipt)) || bytes.Contains(response.body, []byte(committed.Relay.Claim.ID)) {
+				if response.status != 503 || !bytes.Contains(response.body, []byte(`"class":"lease_lost"`)) || bytes.Contains(response.body, []byte(marker)) || bytes.Contains(response.body, []byte(committed.Relay.Claim.Receipt)) || bytes.Contains(response.body, []byte(committed.Relay.Claim.ID)) {
 					t.Fatal("lease-lost collector released private claim identity or envelope")
 				}
 			case <-time.After(5 * time.Second):
