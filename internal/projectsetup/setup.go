@@ -134,7 +134,7 @@ func makePlan(dir *os.Root, root, kind, component string) plan {
 		// install a hidden second copy when the alias is already present or unsafe.
 		if kind == "gemini" {
 			alias := ".agents/skills/pairroom-relay/SKILL.md"
-			if protectedTarget(root, alias) {
+			if protectedReason(root, alias) != "" {
 				path = alias
 			} else if state, err := readFile(dir, alias); err != nil || state.exists || state.parentExists {
 				path = alias
@@ -142,8 +142,8 @@ func makePlan(dir *os.Root, root, kind, component string) plan {
 		}
 	}
 	p := plan{item: Item{Component: component, Path: path, State: "blocked"}}
-	if protectedTarget(root, path) {
-		p.item.Reason = "global_path"
+	if reason := protectedReason(root, path); reason != "" {
+		p.item.Reason = reason
 		return p
 	}
 	before, err := readFile(dir, path)
@@ -182,25 +182,36 @@ func makePlan(dir *os.Root, root, kind, component string) plan {
 			other = "grok"
 		}
 		otherPath := hookPath(other)
-		if protectedTarget(root, otherPath) {
-			p.item.State, p.item.Reason, p.item.CanInstall = "blocked", "global_path", false
+		blocked := func(reason string) plan {
+			// A blocked item cannot be installed, so it never asks for confirmation.
+			p.item.State, p.item.Reason, p.item.CanInstall, p.item.NeedsConfirmation = "blocked", reason, false, false
 			return p
+		}
+		if reason := protectedReason(root, otherPath); reason != "" {
+			return blocked(reason)
 		}
 		otherState, readErr := readFile(dir, otherPath)
 		p.item.Revision += ":" + revision(otherPath, otherState)
 		if readErr != nil {
-			p.item.State, p.item.Reason, p.item.CanInstall = "blocked", "shared_hook_unreadable", false
-			return p
+			return blocked("shared_hook_unreadable")
 		}
 		_, otherStatus, _, otherErr := planHooks(otherState, other)
 		ownPresent, otherPresent := hasRelayCommand(before.data), hasRelayCommand(otherState.data)
 		if otherErr != nil {
-			p.item.State, p.item.Reason, p.item.CanInstall = "blocked", "shared_hook_unreadable", false
-		} else if kind == "grok" && otherStatus == "current" && !ownPresent && p.item.State == "missing" {
+			return blocked("shared_hook_unreadable")
+		}
+		if kind == "grok" && otherStatus == "current" && !ownPresent && p.item.State == "missing" {
 			p.item.State, p.item.Reason, p.item.CanInstall, p.item.NeedsConfirmation = "shared", "claude_hook", false, false
 			p.item.Path = otherPath
-		} else if otherPresent && (kind == "claude" || ownPresent || otherStatus != "current") {
-			p.item.State, p.item.Reason, p.item.CanInstall = "blocked", "shared_hook_conflict", false
+			return p
+		}
+		if otherPresent && (kind == "claude" || ownPresent || otherStatus != "current") {
+			if kind == "grok" && !ownPresent {
+				// Grok has no hook of its own to resolve here; it would reuse the
+				// Claude hook, so the actionable item is the Claude update above.
+				return blocked("claude_hook_update")
+			}
+			return blocked("shared_hook_conflict")
 		}
 	}
 	return p
@@ -254,7 +265,11 @@ func openProject(root string) (*os.Root, error) {
 	return os.OpenRoot(root)
 }
 
-func protectedTarget(root, relative string) bool {
+// protectedReason reports why the selected target must not be written: it
+// overlaps a user-level configuration directory ("global_path"), or a protection
+// boundary could not be resolved at all ("global_unresolved"). An empty result
+// means the target is outside every boundary the caller can prove.
+func protectedReason(root, relative string) string {
 	if canonical, err := filepath.EvalSymlinks(root); err == nil {
 		root = canonical
 	}
@@ -279,15 +294,17 @@ func protectedTarget(root, relative string) bool {
 	for _, path := range protected {
 		absolute, err := canonicalDestination(path)
 		if err != nil {
-			// An unresolved global boundary is not permission to write through it.
-			return true
+			// An unresolved global boundary is not permission to write through it,
+			// and it is reported as its own boundary rather than as an overlap the
+			// user could not find.
+			return "global_unresolved"
 		}
 		rel, err := filepath.Rel(absolute, target)
 		if err == nil && filepath.IsLocal(rel) {
-			return true
+			return "global_path"
 		}
 	}
-	return false
+	return ""
 }
 
 // canonicalDestination resolves existing ancestors even when the final global

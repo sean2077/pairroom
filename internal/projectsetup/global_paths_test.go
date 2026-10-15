@@ -50,10 +50,36 @@ func TestProjectSetupDanglingGlobalAliasFailsClosed(t *testing.T) {
 	}
 	t.Setenv("CODEX_HOME", alias)
 	item := setupItem(t, root, "codex", "hook")
-	if item.State != "blocked" || item.CanInstall {
+	if item.State != "blocked" || item.CanInstall || item.Reason != "global_unresolved" {
 		t.Fatalf("dangling global alias accepted: %+v", item)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".codex")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("inspection created global target")
+	}
+}
+
+// A boundary that cannot be resolved anywhere blocks every target, because no
+// path can be proven outside it. The reason has to name that unresolvable
+// boundary instead of claiming an overlap the user could never find.
+func TestUnresolvedGlobalBoundaryBlocksEveryItemWithItsOwnReason(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "dangling")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("GROK_HOME", alias)
+	status, err := Inspect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range status.Runtimes {
+		for _, item := range []Item{runtime.Skill, runtime.Hook} {
+			if item.State != "blocked" || item.Reason != "global_unresolved" || item.CanInstall {
+				t.Fatalf("%s %s: %+v", runtime.Runtime, item.Component, item)
+			}
+		}
+	}
+	if files, err := os.ReadDir(root); err != nil || len(files) != 0 {
+		t.Fatalf("inspection wrote into the project: %v %v", files, err)
 	}
 }

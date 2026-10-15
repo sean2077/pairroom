@@ -312,6 +312,39 @@ func TestGeminiBeforeToolMatcherMustBeTheBindIdentityCommand(t *testing.T) {
 	}
 }
 
+// Grok has no hook of its own when its file is absent, so an incomplete Claude
+// hook is an action on the Claude item, not a Grok conflict to resolve. The
+// bind preflight already reuses that hook, and the panel must not invent an
+// overlap that does not exist while also asking for a confirmation it refuses.
+func TestGrokSharedHookPointsAtAnIncompleteClaudeHook(t *testing.T) {
+	t.Setenv("GROK_CLAUDE_HOOKS_ENABLED", "true")
+	root := t.TempDir()
+	put(t, root, ".claude/settings.json", `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pairroom relay hook --runtime claude","timeout":45}]}]}}`)
+	item := setupItem(t, root, "grok", "hook")
+	if item.State != "blocked" || item.Reason != "claude_hook_update" || item.CanInstall || item.NeedsConfirmation {
+		t.Fatalf("%+v", item)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".grok")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("Grok hook file written for a blocked item")
+	}
+	claude := setupItem(t, root, "claude", "hook")
+	if claude.State != "update_required" || !claude.CanInstall {
+		t.Fatalf("Claude item is not the actionable one: %+v", claude)
+	}
+	if err := setupInstall(t, root, "claude", "hook", true); err != nil {
+		t.Fatal(err)
+	}
+	if now := setupItem(t, root, "grok", "hook"); now.State != "shared" || now.Reason != "claude_hook" {
+		t.Fatalf("overlap not resolved into the shared Claude hook: %+v", now)
+	}
+	// A real overlap keeps its own reason and never asks for confirmation.
+	put(t, root, ".grok/hooks/pairroom.json", `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"pairroom relay hook --runtime grok","timeout":10}]}]}}`)
+	conflict := setupItem(t, root, "grok", "hook")
+	if conflict.State != "blocked" || conflict.Reason != "shared_hook_conflict" || conflict.CanInstall || conflict.NeedsConfirmation {
+		t.Fatalf("existing Grok hook: %+v", conflict)
+	}
+}
+
 func TestGrokSharedHookDoesNotInstallDuplicateOrRemoveExisting(t *testing.T) {
 	t.Setenv("GROK_CLAUDE_HOOKS_ENABLED", "true")
 	root := t.TempDir()
