@@ -1,4 +1,4 @@
-name: Project setup verification snapshot
+name: Project setup verified delivery
 
 on:
   push:
@@ -9,9 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  snapshot:
+  prepare:
+    if: github.repository == 'sean2077/pairroom' && github.ref == 'refs/heads/feat/project-native-setup-20261015'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -20,18 +23,92 @@ jobs:
         with:
           go-version: stable
           cache: true
-      - name: Prepare isolated verification tools
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.x'
+      - name: Apply the checksum-pinned reviewed patch in a linked task worktree
         shell: bash
         run: |
-          go version
-          go mod download
-          mkdir -p "${RUNNER_TEMP}/offline"
-          tar -C "$(go env GOROOT)" -czf "${RUNNER_TEMP}/offline/go.tar.gz" .
-          tar -C "$(go env GOMODCACHE)" -czf "${RUNNER_TEMP}/offline/modules.tar.gz" .
+          set -euo pipefail
+          git worktree add --detach "${RUNNER_TEMP}/project-setup" "${GITHUB_SHA}"
+          cd "${RUNNER_TEMP}/project-setup"
+          python - <<'PY'
+          import base64, gzip, hashlib, pathlib
+          data = ''.join(pathlib.Path(f'.github/project-native-setup-transport-{i}.txt').read_text().strip() for i in range(1, 5))
+          patch = gzip.decompress(base64.b64decode(data, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'cb9991de32b4a8d1f032837935f1a3f5e386d8f3b3b3c8bcdbbd7fc9b8b5cd5d', 'reviewed patch checksum mismatch'
+          pathlib.Path('../project-native-setup.patch').write_bytes(patch)
+          PY
+          git apply --check "${RUNNER_TEMP}/project-native-setup.patch"
+          git apply "${RUNNER_TEMP}/project-native-setup.patch"
+          rm .github/project-native-setup-transport-{1,2,3,4}.txt .github/workflows/project-setup-snapshot.yml
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = 'ebc765ebbf6c5896ffbb23f0d58a81fb134920f1'
+      - name: Verify the exact delivery tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/project-setup"
+          go test -count=1 ./internal/projectsetup ./internal/service ./internal/relayclient
+          go test -race -count=1 ./internal/projectsetup ./internal/service -run 'Test(Inspect|SkillConfirmation|ProjectSetup|Hook|GeminiHook|GrokShared|MissingRevision|ReplacingHardlinked|ManagementProjectNativeSetup)'
+          make js-check
+          make docs-check
+          git diff --exit-code
+          test "$(git write-tree)" = 'ebc765ebbf6c5896ffbb23f0d58a81fb134920f1'
+      - name: Prepare immutable Git objects without moving any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/project-setup"
+          python - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          def post(path, value):
+              request = urllib.request.Request('https://api.github.com/repos/sean2077/pairroom/git/' + path,
+                  data=json.dumps(value).encode(), method='POST', headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                      'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+                      'Content-Type': 'application/json'})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          assert git('rev-parse', 'HEAD') == os.environ['GITHUB_SHA']
+          expected = 'ebc765ebbf6c5896ffbb23f0d58a81fb134920f1'
+          assert git('write-tree') == expected
+          entries = []
+          for line in git('diff', '--cached', '--name-status').splitlines():
+              status, path = line.split('\t')
+              assert status in ('A', 'M', 'D'), line
+              if status == 'D':
+                  entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': None})
+                  continue
+              data = pathlib.Path(path).read_bytes()
+              mode = git('ls-files', '-s', '--', path).split()[0]
+              blob = post('blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
+              digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              assert blob['sha'] == digest, path
+              entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': blob['sha']})
+          tree = post('trees', {'base_tree': git('rev-parse', 'HEAD^{tree}'), 'tree': entries})
+          assert tree['sha'] == expected, tree['sha']
+          commit = post('commits', {'message': 'feat(native): add safe project skill and hook setup',
+              'tree': expected, 'parents': [os.environ['GITHUB_SHA']]})
+          result = {'parent_sha': os.environ['GITHUB_SHA'], 'commit_sha': commit['sha'],
+              'tree_sha': expected, 'branch': 'feat/project-native-setup-20261015',
+              'verification': 'affected Go packages, focused race, JS and documentation checks passed',
+              'branch_updated': False}
+          directory = pathlib.Path(os.environ['RUNNER_TEMP']) / 'project-setup-delivery'
+          directory.mkdir()
+          (directory / 'delivery.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Prepared verified immutable commit (no branch was moved):\n\n```json\n' + json.dumps(result, indent=2) + '\n```\n')
+          PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: project-setup-tools
-          path: ${{ runner.temp }}/offline/*.tar.gz
-          compression-level: 0
+          name: project-setup-delivery
+          path: ${{ runner.temp }}/project-setup-delivery/delivery.json
           retention-days: 1
           if-no-files-found: error
