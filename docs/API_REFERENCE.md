@@ -213,6 +213,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `GET /api/v1/lan/joined/{room}/attachments/{attachment}`
 - `GET /api/v1/messages`
 - `GET /api/v1/notifications`
+- `GET /api/v1/projects/{project}/native-setup`
 - `GET /api/v1/rooms/{room}/lan`
 - `GET /api/v1/rooms/{room}/wake-config`
 - `GET /api/v1/service`
@@ -235,6 +236,7 @@ The following method/path patterns are extracted from production HTTP registrati
 - `POST /api/v1/messages/{id}/retry`
 - `POST /api/v1/participants/{actor}/{action}`
 - `POST /api/v1/projects`
+- `POST /api/v1/projects/{project}/native-setup`
 - `POST /api/v1/projects/{project}/refresh`
 - `POST /api/v1/projects/{project}/rooms`
 - `POST /api/v1/relay/{room}/{slot}/{action}`
@@ -380,3 +382,45 @@ Shared creation adds `sharing:"lan"` and `owner_slot:"slot1"|"slot2"` to the run
 These guest routes are an optional local dashboard over the same per-user client store used by the CLI. Direct `join`, `send`, `wait`, `exchange` and hooks do not use these routes or require a local Service. Guest route IDs are local opaque identifiers derived from host identity and remote Room ID, not a second authoritative Room. Summaries carry `{id,remote_room_id,name,workspace,slot,runtime,status,connected,last_seen,host_pin,endpoint,generation}` without private keys, relay credentials, or native transcript/session paths. The workspace is the guest's own local path. `connected` describes this optional Service's latest transport observation, and `last_seen` is its last observed successful host contact; zero means none was observed. Saved admission alone proves neither present reachability nor collector/model activity. A lost human publication response retains the original ID and immutable payload; checking its receipt does not publish again. An identical explicit retry returns the original receipt, while changed content under that ID is rejected.
 
 The separate TLS listener implements only the fixed Native membership protocol; guest CLI/hooks call it directly with the identity retained for that binding. It is not a browser Management endpoint. Invitations pin the host key. A per-Room client certificate identifies the guest, and each admitted operation rechecks its bound slot, public key, bind ID and generation. It exposes no Management, workspace browsing, provider, process, approval or arbitrary proxy route. Shared human messages carry `author:"host_owner"` or `author:"lan:<fingerprint>"`; both owners can see `@user` publications. Native session IDs/transcript paths remain local. Evidence messages contain attachment IDs, filenames, media types, lengths and hashes; the receiver explicitly downloads bytes without treating them as permission to run a script.
+
+## Project-local Native setup
+
+Local Management exposes `GET /api/v1/projects/{project}/native-setup` and
+`POST /api/v1/projects/{project}/native-setup`. Both require the full Management
+bearer or an authenticated browser session; browser writes require the usual
+CSRF header. The scoped relay-setup token and Native LAN credentials cannot use
+these routes. They are not enterprise filesystem APIs.
+
+The Project must already be registered, and its canonical Git identity is
+revalidated. The client cannot provide a root directory or arbitrary file path.
+GET is read-only and returns `Cache-Control: no-store` and `runtimes`, an array
+with `runtime`, `skill`, and `hook`. Each component reports `component`, `path`
+(relative to the Project), `state`, `reason` when applicable, opaque `revision`,
+`can_install`, and `needs_confirmation`. States are `missing`, `current`,
+`update_required`, `conflict`, `shared`, `disabled`, and `blocked`. `shared` points
+to the existing Claude hook. These are file-configuration states, not native
+approval or session-readiness claims. Files or configuration values are not
+included in the response. See [Native setup](NATIVE_RELAY.md#project-page-inspect-and-install-without-global-changes)
+for discovery paths, trust and preservation boundaries.
+
+POST selects exactly one component and requires its last inspected revision:
+
+```json
+{
+  "runtime": "codex",
+  "component": "skill",
+  "revision": "<opaque revision from GET>",
+  "confirm_replace": false
+}
+```
+
+`runtime` is `claude`, `codex`, `grok`, or `gemini`; `component` is `skill` or
+`hook`. For an existing file/directory requiring a change, present the Project,
+file and effect to the user, and send `confirm_replace: true` only after explicit
+confirmation. No confirmation bypasses an unsafe/disabled/conflicting target.
+Successful POST returns the refreshed status. Current/shared configurations are
+no-ops only when the supplied revision still matches. Invalid selectors or
+unknown request fields return 400; unknown Projects return 404; stale revisions,
+missing confirmation, changed Project identity and blocked installs return 409.
+Read/write filesystem failures can return 500. After a failed/uncertain POST,
+inspect again rather than automatically retrying an overwrite.
