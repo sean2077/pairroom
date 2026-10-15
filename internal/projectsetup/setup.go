@@ -277,12 +277,10 @@ func protectedTarget(root, relative string) bool {
 		protected = append(protected, "/etc/codex")
 	}
 	for _, path := range protected {
-		absolute, err := filepath.Abs(path)
+		absolute, err := canonicalDestination(path)
 		if err != nil {
-			continue
-		}
-		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
-			absolute = resolved
+			// An unresolved global boundary is not permission to write through it.
+			return true
 		}
 		rel, err := filepath.Rel(absolute, target)
 		if err == nil && filepath.IsLocal(rel) {
@@ -290,4 +288,33 @@ func protectedTarget(root, relative string) bool {
 		}
 	}
 	return false
+}
+
+// canonicalDestination resolves existing ancestors even when the final global
+// configuration directory is missing (for example /var -> /private/var on macOS).
+// A dangling link, inaccessible ancestor or loop fails closed, rather than
+// assuming its lexical path cannot overlap the selected project's target.
+func canonicalDestination(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	for ancestor := absolute; ; ancestor = filepath.Dir(ancestor) {
+		resolved, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			tail, err := filepath.Rel(ancestor, absolute)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(resolved, tail), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(ancestor) == ancestor {
+			return "", err
+		}
+		if _, statErr := os.Lstat(ancestor); !errors.Is(statErr, os.ErrNotExist) {
+			// EvalSymlinks failed for a present (e.g. dangling symlink) or
+			// unreadable entry. Never discard it as if it were a missing name.
+			return "", err
+		}
+	}
 }
