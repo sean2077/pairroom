@@ -60,8 +60,13 @@ def fixture_html() -> str:
           transcript_boundary_notice:'Earlier native history remains in its native harness.'})),
         runtimes:['r1','r2'].map(room_id=>({room_id,phase:'active',busy:false,occupies_capacity:true})),
         runtime_policy:{limit:4,idle_timeout_seconds:900},
-        capabilities:{room_surface:true,room_deletion:true,project_refresh:true,project_removal:true,runtime_suspend:true}
+        capabilities:{room_surface:true,room_deletion:true,project_refresh:true,project_native_setup:true,project_removal:true,runtime_suspend:true}
       };
+      window.__setupReads=0;
+      window.__setupStatus={runtimes:['claude','codex','grok','gemini'].map(runtime=>({runtime,
+        skill:{component:'skill',path:(runtime==='codex'?'.agents':'.'+runtime)+'/skills/pairroom-relay/SKILL.md',state:'missing',revision:runtime+'-skill-v1',can_install:true,needs_confirmation:false},
+        hook:{component:'hook',path:runtime==='codex'?'.codex/hooks.json':runtime==='grok'?'.grok/hooks/pairroom.json':'.'+runtime+'/settings.json',state:'missing',revision:runtime+'-hook-v1',can_install:true,needs_confirmation:false}
+      }))};
       window.__catalog = {collaboration_default:COLLABORATION,profiles:[{name:'Example Provider',runtime:'claude',supported:true,provider:{source:'cc-switch',app_type:'claude',profile_id:'fixture'}}],runtimes:['claude','codex','grok'].map(runtime=>({runtime,
         display_name:{claude:'Claude Code',codex:'Codex',grok:'Grok Build'}[runtime],available:true})),
         defaults:{slot1:{runtime:'claude',provider:{source:'native'},permission_mode:'yolo'},slot2:{runtime:'codex',provider:{source:'native'},approval_policy:'yolo',sandbox:'danger-full-access'}}};
@@ -75,6 +80,14 @@ def fixture_html() -> str:
         else if (path === '/api/v1/service') {
           __serviceReads++; body=structuredClone(__snapshot);
           await new Promise(resolve=>setTimeout(resolve,__readDelay));
+        } else if (path.endsWith('/native-setup')) {
+          if(options.method==='POST') {
+            const input=JSON.parse(options.body);
+            __writes.push({path,body:options.body,csrf:options.headers.get('X-PairRoom-CSRF')});
+            const row=__setupStatus.runtimes.find(item=>item.runtime===input.runtime);
+            row[input.component]={...row[input.component],state:'current',can_install:false,needs_confirmation:false,revision:input.runtime+'-'+input.component+'-v2'};
+          } else __setupReads++;
+          body=structuredClone(__setupStatus);
         } else if (path.startsWith('/api/v1/agent-pair-profiles')) {
           if (!options.method || options.method==='GET') __pairProfileReads++;
           const base='/api/v1/agent-pair-profiles';
@@ -517,6 +530,68 @@ async def verify_activation(browser) -> dict:
     finally:
         await page.close()
 
+
+
+async def verify_project_native_setup(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
+    """Real project controls and consent dialog; HTTP remains a deterministic fixture."""
+    page = await browser.new_page(viewport={'width':1440,'height':1000}, locale='en-US', reduced_motion='reduce')
+    page.set_default_timeout(5000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    if in_page_fixture:
+        await page.evaluate("location.hash='#/projects/p1'")
+        await page.set_content(fixture_html())
+    else:
+        await load_csp_fixture(page)
+    panel = page.locator('.project-native-setup')
+    await expect(panel).to_be_visible()
+    await expect(panel.locator('[data-setup-component]')).to_have_count(2)
+    assert await page.evaluate('__writes.length') == 0, 'inspection installed files'
+    await page.locator('#project-native-runtime').select_option('codex')
+    skill = panel.locator('[data-setup-component="skill"]')
+    hook = panel.locator('[data-setup-component="hook"]')
+    await expect(skill).to_contain_text('.agents/skills/pairroom-relay/SKILL.md')
+    await skill.locator('button').click()
+    await expect(skill.locator('button')).to_be_disabled()
+    writes = await page.evaluate('__writes')
+    assert len(writes) == 1 and writes[0]['csrf'] == 'fixture', writes
+    assert json.loads(writes[0]['body']) == {'runtime':'codex','component':'skill','revision':'codex-skill-v1','confirm_replace':False}
+    await expect(hook.locator('button')).to_be_enabled()
+    # A different existing skill is never overwritten by merely opening a modal.
+    await page.evaluate("""() => {
+      const item=__setupStatus.runtimes.find(row=>row.runtime==='codex');
+      item.skill={...item.skill,state:'conflict',needs_confirmation:true,can_install:true,revision:'user-edited'};
+    }""")
+    await panel.get_by_role('button', name='Check again', exact=True).click()
+    await skill.get_by_role('button', name='Review changes…', exact=True).click()
+    await expect(page.locator('#confirm-submit')).to_be_disabled()
+    await expect(page.locator('#confirm-message')).to_contain_text('/workspace/example')
+    await expect(page.locator('#confirm-message')).to_contain_text('.agents/skills/pairroom-relay/SKILL.md')
+    await page.locator('#confirm-dialog [data-close-dialog="confirm-dialog"]').last.click()
+    assert await page.evaluate('__writes.length') == 1, 'cancelled confirmation sent a write'
+    await skill.locator('button').click()
+    await page.locator('#confirm-ack').check()
+    await page.locator('#confirm-submit').click()
+    await expect(page.locator('#confirm-dialog')).not_to_be_visible()
+    await expect(skill.locator('button')).to_be_disabled()
+    writes = await page.evaluate('__writes')
+    assert len(writes) == 2 and json.loads(writes[-1]['body'])['confirm_replace'] is True
+    # Actual responsive bilingual rendering, including untrusted path text.
+    for lang in ['en','zh-CN']:
+        await page.evaluate('(lang)=>PairRoomI18n.setLang(lang)',lang)
+        for width in [1440,390]:
+            await page.set_viewport_size({'width':width,'height':1000})
+            await panel.scroll_into_view_if_needed()
+            await expect(panel.locator('[data-setup-component]')).to_have_count(2)
+            assert await panel.evaluate('(node)=>node.scrollWidth<=node.clientWidth+1'), 'setup panel overflows'
+            assert not re.search(r'\b(null|undefined)\b', await panel.inner_text()), 'optional nodes rendered as literal text'
+            await panel.screenshot(path=str(artifacts/f'project-native-setup-{lang}-{width}.png'))
+    assert not errors, errors
+    if not in_page_fixture:
+        assert not await page.evaluate('window.__cspErrors'), 'setup violated production CSP'
+    await page.close()
+    return {'project_setup_read_only':True,'project_setup_separate_install':True,
+            'project_setup_confirm_cancel_and_apply':True,'project_setup_bilingual_responsive':True}
 
 
 async def verify_native_creation(browser, artifacts: Path, in_page_fixture: bool = False) -> dict:
@@ -986,6 +1061,7 @@ async def verify(browser_path: str | None, artifacts: Path, in_page_fixture: boo
         results.update(await verify_names(browser, artifacts, in_page_fixture))
         results.update(await verify_activation(browser))
         results.update(await verify_cleanup_controls(browser, artifacts, in_page_fixture))
+        results.update(await verify_project_native_setup(browser, artifacts, in_page_fixture))
         results.update(await verify_native_creation(browser, artifacts, in_page_fixture))
         results.update(await verify_pair_profiles(browser, artifacts, in_page_fixture))
         from test_management_lan_browser import verify_lan

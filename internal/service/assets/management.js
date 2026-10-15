@@ -79,6 +79,7 @@
   const $ = (id) => document.getElementById(id);
   const app = $('app');
   const view = $('view');
+  let projectSetup;
   const diagnostics = window.PairRoomDiagnostics.create({ t, node, actionButton, api, confirm: openConfirm, navigate });
 
   const ordering = window.PairRoomOrder.create({ t, node, getSnapshot: () => state.snapshot, api, refresh, render, toast,
@@ -1095,6 +1096,11 @@
           statCard(t("workspace.queued"), runtimeCounts.queued, runtimeCounts.queued ? t("ui.waitingForGlobalCapacity") : '', '↥', runtimeCounts.queued ? 'warn' : 'good'),
           statCard(t("workspace.failed"), runtimeCounts.failed, runtimeCounts.failed ? t("ui.viewRuntimeDiagnostics") : '', '!', runtimeCounts.failed ? 'danger' : 'good')
         ),
+        snapshot.capabilities?.project_native_setup ? (projectSetup ||= window.PairRoomProjectSetup.create({
+          t, node, actionButton, api, confirm: openConfirm,
+          isCurrent: () => { const generation = state.sessionGeneration, id = state.route.projectID;
+            return () => state.authenticated && generation === state.sessionGeneration && state.route.name === 'project' && state.route.projectID === id; }
+        })).mount(project) : null,
         node('section', { className: 'project-room-section' },
           panel(t('common.rooms'), '',
             node('div', {},

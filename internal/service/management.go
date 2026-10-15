@@ -107,6 +107,7 @@ type ServiceCapabilities struct {
 	RuntimeSuspend        bool `json:"runtime_suspend"`
 	RuntimePolicyMutation bool `json:"runtime_policy_mutation"`
 	ProjectRefresh        bool `json:"project_refresh"`
+	ProjectNativeSetup    bool `json:"project_native_setup"`
 	ProjectRemoval        bool `json:"project_removal"`
 	RoomDeletion          bool `json:"room_deletion"`
 	ServerPathBrowser     bool `json:"server_path_browser"`
@@ -194,6 +195,7 @@ func NewManagementServer(cfg ManagementServerConfig) (*ManagementServer, error) 
 	server.mountAgentPairProfiles(mux)
 	server.mountNavigationOrder(mux)
 	server.mountNativeRelay(mux)
+	server.mountProjectNativeSetup(mux)
 	server.mountLANHost(mux)
 	server.mountLANGuests(mux)
 	mux.HandleFunc("POST "+diagnosticsPath, server.runDiagnostics)
@@ -336,7 +338,7 @@ func (s *ManagementServer) readService(w http.ResponseWriter, r *http.Request) {
 		Summary:       summarizeService(registry.Projects, registry.Rooms, runtimes),
 		Capabilities: ServiceCapabilities{
 			RuntimeSuspend: true, RuntimePolicyMutation: true,
-			ProjectRefresh: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true, Diagnostics: true,
+			ProjectRefresh: true, ProjectNativeSetup: true, ProjectRemoval: true, RoomDeletion: true, RoomSurface: true, Diagnostics: true,
 		},
 		Maintenance: s.registry.RoomDeletionMaintenance(),
 		Healthy:     healthErr == nil,

@@ -1,0 +1,16 @@
+.project-native-setup { padding: 20px; }
+.project-setup-heading, .project-setup-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.project-setup-runtime { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.project-setup-runtime select { width: auto; min-width: 150px; }
+.project-setup-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.project-setup-item { min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.project-setup-path { display: block; margin: 12px 0; overflow-wrap: anywhere; font-size: .82rem; }
+.project-setup-state { font-size: .8rem; color: var(--muted); }
+.project-setup-state.is-ready { color: var(--good); }
+.project-setup-boundary { margin-bottom: 0; color: var(--muted); font-size: .82rem; line-height: 1.6; }
+@media (max-width: 680px) {
+  .project-setup-items { grid-template-columns: 1fr; }
+  .project-native-setup { padding: 16px; }
+}
+
+#confirm-message { white-space: pre-line; overflow-wrap: anywhere; }

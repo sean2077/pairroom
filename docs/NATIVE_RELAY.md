@@ -10,6 +10,63 @@ Install and authenticate the harnesses you intend to use: Claude Code, Codex, Gr
 
 ## One-time project setup
 
+### Project page: inspect and install without global changes
+
+Open the Project in the local Management UI or Desktop and use **Native project
+setup**. It checks the project's `pairroom-relay` skill and hooks on the Service
+machine, with a Harness selector and separate **Install in project** actions.
+Opening the page and **Check again** are read-only; no harness or model is launched.
+
+| Harness | Project skill manifest | Project hook configuration |
+| --- | --- | --- |
+| Claude Code | `.claude/skills/pairroom-relay/SKILL.md` | `.claude/settings.json` |
+| Codex | `.agents/skills/pairroom-relay/SKILL.md` | `.codex/hooks.json` |
+| Grok Build | `.grok/skills/pairroom-relay/SKILL.md` | `.grok/hooks/pairroom.json`, or the existing Claude hook when compatibility is enabled |
+| Gemini CLI | `.gemini/skills/pairroom-relay/SKILL.md`, or an existing higher-precedence `.agents/skills/pairroom-relay/SKILL.md` | `.gemini/settings.json` |
+
+Skill discovery follows the official [Claude](https://code.claude.com/docs/en/skills),
+[Codex](https://developers.openai.com/codex/skills),
+[Grok](https://docs.x.ai/build/features/skills-plugins-marketplaces), and
+[Gemini](https://geminicli.com/docs/cli/skills/) project locations. The shared
+`.agents` path can also affect other harnesses that discover it. Status concerns
+**project files**, not all inherited/global/plugin sources or an active session's
+loaded skills; those sources may take precedence and are not read or changed.
+
+An existing different skill, an existing skill directory without a manifest, or a
+hook configuration that needs modifying requires **Review changes** and an explicit
+confirmation naming the Project and file. A skill update replaces only that
+`SKILL.md`; other skills and companion files remain untouched. Hook installation
+merges exact PairRoom commands while retaining unrelated settings and hook entries;
+JSON formatting can change. Even appending to an existing hook file requires
+confirmation. Identical configured files are not rewritten.
+
+Confirmation is bound to the inspected file revision. A changed file, duplicate
+click, or stale page cannot silently turn a first installation into an overwrite.
+After an error or uncertain response, check again before retrying; the UI never
+retries writes automatically. Each action changes only one component. Files are
+published through a temporary file in the same pinned project directory; new
+files use no-replace publication and updates replace the directory entry rather
+than truncating a potentially hardlinked file. This is optimistic protection
+against external edits, not a cross-process editor lock or a filesystem sandbox.
+
+Linked paths, non-regular/oversized files, invalid or duplicate-key JSON, disabled
+hooks, and ambiguous custom/shared relay hooks require manual review. A confirmed
+update still cannot follow a skill/configuration symlink or target a global
+configuration directory. Existing Claude hooks can cover Grok, using the same
+`GROK_CLAUDE_HOOKS_ENABLED` assumption as the CLI; conflicting existing Grok hooks
+are surfaced rather than silently removed. When only Grok was configured first,
+resolve that overlap before adding Claude hooks. PairRoom never enables hooks or
+changes native trust for you. Reload/approve the files in the harness, check
+`pairroom` on the Agent tool shell's PATH, and run `pairroom relay preflight`.
+
+These filesystem endpoints belong only to authenticated local Management, not
+LAN guests, enterprise browsers, or the limited relay-setup credential. A LAN
+guest without a local Service can still use the CLI workflow below. The GUI's
+project-only installer is intentionally separate from the existing CLI installer,
+which also manages user-level skills.
+
+### CLI setup
+
 Run `relay install` from any terminal in the Project's worktree; installation itself does not require a native session:
 
 ```bash

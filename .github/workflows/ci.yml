@@ -81,7 +81,7 @@ jobs:
       - name: Verify actual Go toolchain
         run: python scripts/check_go_versions.py minimum go.mod
       - name: Test native configuration, private LAN identities, Event Log, and daemon behavior
-        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient ./internal/claudewake ./internal/codexwake ./internal/execx ./internal/review ./internal/lanshare ./internal/lanclient ./internal/nativeidentity ./internal/privatelock ./internal/privatefile ./internal/attachment
+        run: go test -count=1 ./internal/config ./internal/store ./internal/bus ./internal/daemon ./internal/relay ./internal/relayclient ./internal/projectsetup ./internal/claudewake ./internal/codexwake ./internal/execx ./internal/review ./internal/lanshare ./internal/lanclient ./internal/nativeidentity ./internal/privatelock ./internal/privatefile ./internal/attachment
       - name: Test adapter lifecycle, protocol, environment, and credential boundaries
         run: go test -count=1 ./internal/agent
       - name: Repeat blocked stdin cancellation on real pipes and child processes
@@ -94,7 +94,7 @@ jobs:
       - name: Test no-auth probe isolation and fail-closed wire boundaries (fixtures)
         run: node scripts/test_probe_gemini_no_auth.js
       - name: Test Service profiles, Native LAN runtime, and startup ownership boundaries
-        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile|Native|LAN|FutureLAN|.*ServiceLock|ServiceRootGuard|RegistryRejects|RegistryStill|ProvisioningPreflight)'
+        run: go test -count=1 ./internal/service -run 'Test(AgentPairProfile|ManagementAgentPairProfile|ManagementProjectNativeSetup|Native|LAN|FutureLAN|.*ServiceLock|ServiceRootGuard|RegistryRejects|RegistryStill|ProvisioningPreflight)'
 
   gemini-no-auth:
     if: github.event_name == 'workflow_dispatch' && inputs.gemini_no_auth
