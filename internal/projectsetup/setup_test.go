@@ -282,6 +282,36 @@ func TestGeminiHookUnitsAndAliasPrecedence(t *testing.T) {
 	}
 }
 
+// The Gemini caller identity is captured from the run_shell_command BeforeTool
+// observation, and `relay bind` re-checks exactly that matcher. A hand-written
+// wildcard or absent matcher must not be reported as configured, or the panel
+// would present a ready project that bind refuses.
+func TestGeminiBeforeToolMatcherMustBeTheBindIdentityCommand(t *testing.T) {
+	for _, group := range []string{
+		`{"matcher":"*","hooks":[{"type":"command","command":"pairroom relay hook --runtime gemini","timeout":45000}]}`,
+		`{"hooks":[{"type":"command","command":"pairroom relay hook --runtime gemini","timeout":45000}]}`,
+	} {
+		t.Run(group, func(t *testing.T) {
+			root := t.TempDir()
+			put(t, root, ".gemini/settings.json", `{"hooks":{"AfterAgent":[{"hooks":[{"type":"command","command":"pairroom relay hook --runtime gemini","timeout":45000}]}],"BeforeTool":[`+group+`]}}`)
+			item := setupItem(t, root, "gemini", "hook")
+			if item.State != "update_required" || !item.CanInstall || !item.NeedsConfirmation {
+				t.Fatalf("%+v", item)
+			}
+			if err := setupInstall(t, root, "gemini", "hook", true); err != nil {
+				t.Fatal(err)
+			}
+			if now := setupItem(t, root, "gemini", "hook"); now.State != "current" {
+				t.Fatalf("matcher not repaired: %+v", now)
+			}
+			data := contents(t, root, ".gemini/settings.json")
+			if bytes.Count(data, []byte(command("gemini"))) != 2 || bytes.Count(data, []byte(`"matcher": "run_shell_command"`)) != 1 {
+				t.Fatalf("expected one enabled shell-command hook per event: %s", data)
+			}
+		})
+	}
+}
+
 func TestGrokSharedHookDoesNotInstallDuplicateOrRemoveExisting(t *testing.T) {
 	t.Setenv("GROK_CLAUDE_HOOKS_ENABLED", "true")
 	root := t.TempDir()

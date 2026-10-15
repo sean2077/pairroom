@@ -140,7 +140,12 @@ func planHooks(before fileState, kind string) ([]byte, string, string, error) {
 				matcher, _ := group["matcher"].(string)
 				matches := matcher == "" || matcher == "*"
 				if kind == "gemini" && event == "BeforeTool" {
-					matches = matcher == "run_shell_command" || matcher == "*" || matcher == ""
+					// The bind identity comes from an approved run_shell_command
+					// BeforeTool observation, and the relay preflight re-checks that
+					// exact matcher. A wildcard or absent matcher still fires, but it
+					// is not what bind accepts, so it stays "update_required" and the
+					// install rewrites this group instead of reporting a ready project.
+					matches = matcher == "run_shell_command"
 				}
 				ready = entry["type"] == "command" && entry["async"] != true && entry["enabled"] != false && group["enabled"] != false && seconds >= float64(timeout) && matches
 			}

@@ -52,12 +52,17 @@ against external edits, not a cross-process editor lock or a filesystem sandbox.
 Linked paths, non-regular/oversized files, invalid or duplicate-key JSON, disabled
 hooks, and ambiguous custom/shared relay hooks require manual review. A confirmed
 update still cannot follow a skill/configuration symlink or target a global
-configuration directory. Existing Claude hooks can cover Grok, using the same
-`GROK_CLAUDE_HOOKS_ENABLED` assumption as the CLI; conflicting existing Grok hooks
-are surfaced rather than silently removed. When only Grok was configured first,
-resolve that overlap before adding Claude hooks. PairRoom never enables hooks or
-changes native trust for you. Reload/approve the files in the harness, check
-`pairroom` on the Agent tool shell's PATH, and run `pairroom relay preflight`.
+configuration directory. The reported state follows the acceptance the bind
+preflight applies rather than only this panel's own view, so hand-edited hooks
+stay an update instead of a ready project: a Gemini `BeforeTool` matcher other
+than `run_shell_command`, or an entry that is disabled or asynchronous, is not
+"configured". Existing Claude hooks can cover Grok, using the same
+`GROK_CLAUDE_HOOKS_ENABLED` assumption as the CLI; conflicting existing Grok
+hooks are surfaced rather than silently removed. When only Grok was configured
+first, resolve that overlap before adding Claude hooks. PairRoom never enables
+hooks or changes native trust for you. Reload/approve the files in the harness,
+check `pairroom` on the Agent tool shell's PATH, and run
+`pairroom relay preflight`.
 
 These filesystem endpoints belong only to authenticated local Management, not
 LAN guests, enterprise browsers, or the limited relay-setup credential. A LAN
