@@ -4,6 +4,8 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+## [v5.18.0] — 2026-10-15
+
 ### Added
 
 - Add **Native project setup** to the Project page in local Management and Desktop. Choosing Claude Code, Codex, Grok Build or Gemini CLI shows that harness's project-local `pairroom-relay` skill and hook with their exact target paths, and each component installs independently: opening the page and **Check again** stay read-only, and nothing here invokes the user-scoped CLI installer, changes global configuration, grants native trust or launches a harness. An existing differing skill, a skill directory without a manifest, or a hook file that has to change needs explicit confirmation naming the Project and the file, and confirmation is bound to the inspected revision, so a changed file, a duplicate click or a stale page returns a conflict instead of overwriting. Linked paths, invalid or duplicate-key JSON, non-regular or oversized files, disabled hooks and ambiguous shared Claude/Grok hooks fail closed, the reported state follows the acceptance `relay bind` applies, and "Configured" describes project files rather than native approval or session readiness.
