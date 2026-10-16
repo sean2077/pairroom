@@ -54,7 +54,7 @@ jobs:
         run: python scripts/check_coverage.py .coverage
       - name: Retain coverage evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairroom-linux-coverage
           path: .coverage
@@ -127,7 +127,7 @@ jobs:
             "${RUNNER_TEMP}/gemini-no-auth-evidence/probe.json"
       - name: Retain redacted transport evidence and resolved dependency lock
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairroom-gemini-no-auth-${{ matrix.os }}
           path: |
@@ -169,7 +169,7 @@ jobs:
         run: '"${RUNNER_TEMP}/browser-venv/bin/python" scripts/test_desktop_settings_browser.py --artifacts "${RUNNER_TEMP}/browser-results/desktop-settings"'
       - name: Upload browser evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairroom-browser-evidence
           path: ${{ runner.temp }}/browser-results/
@@ -246,7 +246,7 @@ jobs:
           grep -Fq "${FILE_SIGNATURE}" "${RUNNER_TEMP}/file-type.txt"
           (cd dist/ci && sha256sum -c "${FILENAME}.sha256")
       - name: Upload build artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairroom-cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -338,7 +338,7 @@ jobs:
             "dist/ci/pairroom-cli-v${version}-darwin-arm64" \
             "dist/ci/pairroom-cli-v${version}-darwin-amd64"
       - name: Upload verified CI provenance
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pairroom-ci-provenance
           path: |
