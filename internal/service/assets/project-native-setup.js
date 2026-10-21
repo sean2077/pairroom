@@ -8,6 +8,7 @@
     let selected = 'claude', loaded = false;
     const names = { claude: 'Claude Code', codex: 'Codex', grok: 'Grok Build', gemini: 'Gemini CLI' };
     const endpoint = (id) => `/api/v1/projects/${encodeURIComponent(id)}/native-setup`;
+    const paths = (item) => item.files?.length ? item.files : [item.path];
 
     function paint() {
       if (!host) return;
@@ -35,7 +36,8 @@
                 node('div', { className: 'project-setup-item-heading' },
                   node('strong', { textContent: t(`workspace.nativeSetup.${component}`) }),
                   node('span', { className: `project-setup-state ${ready ? 'is-ready' : ''}`, role: 'status', textContent: t(`workspace.nativeSetup.state.${item.state}`) })),
-                node('code', { className: 'project-setup-path', textContent: item.path }),
+                ...paths(item).map((path) => node('code', { className: 'project-setup-path', textContent: path })),
+                component === 'skill' && item.files?.length > 1 ? node('p', { className: 'muted', textContent: t('workspace.nativeSetup.skillContents') }) : null,
                 item.reason ? node('p', { className: 'muted', textContent: t(`workspace.nativeSetup.reason.${item.reason}`) }) : null,
                 actionButton(t(item.needs_confirmation ? 'workspace.nativeSetup.review' : 'workspace.nativeSetup.install'), () => install(selected, item),
                   'secondary-button compact-button', busy || !item.can_install));
@@ -86,7 +88,7 @@
       };
       if (item.needs_confirmation) {
         confirm({ title: t('workspace.nativeSetup.confirmTitle'),
-          message: t('workspace.nativeSetup.confirmBody', { runtime: names[kind], component: t(`workspace.nativeSetup.${item.component}`), root, path: item.path }),
+          message: t('workspace.nativeSetup.confirmBody', { runtime: names[kind], component: t(`workspace.nativeSetup.${item.component}`), root, paths: paths(item).join('\n') }),
           detail: t(item.component === 'skill' ? 'workspace.nativeSetup.skillReplace' : 'workspace.nativeSetup.hookMerge'),
           acknowledgement: t('workspace.nativeSetup.acknowledge'), label: t('workspace.nativeSetup.confirm'), tone: 'danger', action: apply });
       } else return apply();

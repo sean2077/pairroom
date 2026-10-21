@@ -4,6 +4,10 @@ Release sections group their entries under `### Added`, `### Fixed`, and `### Ch
 
 ## [Unreleased]
 
+### Changed
+
+- Load the `pairroom-relay` skill's enterprise, LAN, Runtime-specific, waiting, evidence and recovery guidance only when needed, keeping the default local create/join/relay entrypoint small. Distribute and check the complete reference bundle through both CLI and project installation; project updates list every managed path, require revision-bound confirmation for existing content, and preserve unrelated companions and externally managed links.
+
 ## [v5.18.0] — 2026-10-15
 
 ### Added

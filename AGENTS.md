@@ -32,7 +32,7 @@ The enterprise implementation has a separate explicitly configured HTTPS/browser
 
 ## Product skill versus project harness
 
-The distributed onboarding skill is product payload: edit `skills/pairroom-relay/SKILL.md` (published through `.claude-plugin/plugin.json` and the skill installers), then copy it byte-identically to `internal/relayclient/skill/pairroom-relay/SKILL.md`. The freshness test enforces the embedded projection. Do not relink either into `.agents/skills/` or independently edit generated host projections.
+The distributed onboarding skill is product payload: edit `skills/pairroom-relay/` (`SKILL.md` and its on-demand `references/`, published through `.claude-plugin/plugin.json` and the skill installers), then copy the complete directory byte-identically to `internal/relayclient/skill/pairroom-relay/`. Freshness tests enforce the full bundle and its reference links; keep optional capabilities out of the default body. Do not relink either into `.agents/skills/` or independently edit generated host projections.
 
 <!-- agent-scaffold:start (managed; edit outside) profile=default domains=docs,tools,testing,specs,terminology,git,release -->
 ## Agent Harness

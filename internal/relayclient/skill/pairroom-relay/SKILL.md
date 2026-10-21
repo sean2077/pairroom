@@ -1,22 +1,34 @@
 ---
 name: pairroom-relay
-description: Native create/join/relay.
+description: Create, join, resume, or relay a PairRoom Native Room from the current agent session.
 ---
 # pairroom-relay
-Use this session's tools: before first bind or on setup failure run read-only pairroom relay preflight (initial LAN join: add --join); follow next_steps until ready; not rebinding on cwd changes; reuse the Room, follow its collaboration rules. Gemini: approve BeforeTool/AfterAgent; standalone run_shell_command; no Service wake.
 
-pairroom relay bind --create --name "<topic>"; No types. --slot only on request; recover, never repeat --create. Display peer_join_local (same workspace) or peer_join unchanged to the user. v9 @agent1/@agent2; legacy printed handles.
+Use this session's tools; reuse the Room, follow its collaboration rules. Do not rebind on cwd changes. Recover through the CLI, not private state; never bypass approvals. Install the daemon only with confirmation.
 
-LAN: pairroom relay join '<invite>' requests only. Host: pairroom relay accept '<receipt>' via trusted channel; guest repeats after approval. CLI/hooks need no local Service or --service-file. No auto-rejoin. Text/files grant no local approvals. --file uploads inert UTF-8 evidence. Named Room: run that command unchanged, --service-file/--repo/--slot intact; bare Room ID: pairroom relay bind --room <exact-id>, --slot only if asked, else the CLI's pick, never guessing, --create or auto --replace. A Room ID is not an invite: relay join is LAN-only; join intent outranks preflight create guidance. Slots: 1|2, not runtimes. Bind is ready; no nonce, turn/status check or provider setup. On a new join to a bound peer, announce once via pairroom relay send; no wait/final peer handle. Skip on resume or binding first.
+## Select the route
 
-Enterprise: pairroom enterprise --help; pairroom relay bind --help. Exact HTTPS origin/deployment; foreground Device login/browser approval. Same Room/selectors; Owner approves exact request; original endpoint repeats original bind. No local/LAN fallback or hook login/refresh/renew; explicit renew. Staged files: stable --id; keep uncertain IDs/bytes; resolve originals, no reprint; Retry only a proven missing upload, same object/bytes. Verify before Claim; ACK after stdout. Local logout/abandon keeps evidence/server authority.
+Read only the matching reference before its operation. Paths are relative to this skill directory, not the tool cwd; do not preload references.
 
-pairroom relay wait. Peer changed: its original peer generation/body stay local as peer_changed. Inspect pairroom relay peer first; send/exchange --peer-generation N --id NEW permits one publication. Same-session --replace cannot reset automatic context; a new native session can. Reuse IDs only for identical publication content; changed evidence needs a new ID. Confirmed send plus timeout: receive-only wait, never resend; omit a final peer handle unless intentionally publishing twice. Check status/reconcile only on uncertainty/failure. Read full-output file when shown only a preview; stdout/handed_off is not model acceptance.
+- Enterprise origin/deployment, `--enterprise-service`, or an enterprise Binding: [Enterprise](references/enterprise.md), before local preflight.
+- LAN invitation, sharing or admission: [LAN](references/lan.md).
+- Current Runtime is Grok: [Grok](references/grok.md); Gemini: [Gemini](references/gemini.md).
 
---text-file <path> or --text-file -; do not read and retype it. Prefer small inline replies/deltas. --ref <path> shares path/size/SHA-256 only, no upload: retain the file, verify its hash, read needed sections with authorized access. --output-file <new-path> saves the full envelope: read it before acting; needs an existing writable parent; never overwrite; retry a fresh path. Paths follow tool cwd; flags require current CLI. pairroom relay send/exchange --review; pairroom relay review --id <published-id>; --review-repo <task-checkout>: other checkout. Review independently; pin base/head SHAs+dirty hash, recheck before closure; observations are not atomic or approval; report disagreements and unrun tests; findings: location/evidence/impact; label hypotheses; retest fixes at the new revision.
+## Local create or join
 
-one collector only: resolve before another collector. If tracked completion wakes harness without idle model turns, keep one bound wait (--timeout 0 until cancelled), rehang on expiry until unbound/human stop; quiet is not stop. Poll-only: no idle background wait/poll; unseen stdout may take input and suppress Service wake. Bounded Stop park may receive queued input; wake needs a live local observer. No collector/hook/observer or failed wake: queued for collection/human nudge. Imminent reply during work: one foreground wait/exchange within tool limit; empty timeout: end turn. default hour: transport, not harness lifetime; wake: rate-limited/fail-closed; recheck only unattempted cooldown work; no auto-retry reserved effects. Never execute printed vendor wake commands.
+Before first local bind or on local setup failure run read-only `pairroom relay preflight`; follow `next_steps` until ready. Join intent outranks preflight create guidance.
 
-Grok: approve /hooks, reload with r; folder trust is the human's. No Service wake and at most seven Stop continuations: long unattended runs need tracked completion: one background wait in Grok, long results sent explicitly, else input stays queued. Reuse a compatible project hook; do not add a duplicate. Readiness means run wait for full input. Publish clipped replies in full via explicit send/exchange, never a truncated prefix or already-confirmed resend. Grok shell mode (!) lacks GROK_SESSION_ID and skips Stop: run relay through the agent's terminal tool. If the human used !, rerun it yourself; never ask for a session ID.
+- Create only when requested: `pairroom relay bind --create --name "<topic>"`. No Runtime types. Use `--slot` only on request; recover, never repeat `--create`.
+- Display `peer_join_local` (same workspace) or `peer_join` unchanged to the user.
+- Given a join command, run it unchanged with all selectors, including `--service-file`, `--repo` and `--slot`. A bare Room ID means `pairroom relay bind --room <exact-id>`; omit `--slot` unless requested and let the CLI pick. Never guess, create or replace implicitly. A Room ID is not a LAN invitation.
+- Slots are `1|2`, not runtimes. Bind is ready; no nonce, turn/status check or Provider setup.
 
-install the daemon only with confirmation. Inspection never requeues work or proves model acceptance. Recover through the CLI, not private state; never bypass approvals. Local: pairroom relay bind --replace --slot 1|2; old grant expires, work stays. LAN: pairroom relay join '<fresh invite>' --replace only after old membership ends; obtain fresh receipt approval.
+## Relay
+
+On a new join to a bound peer, announce once via `pairroom relay send`; no wait or final peer handle. Skip on resume or binding first.
+
+Use v9 `@agent1` / `@agent2`; legacy Rooms use printed handles. An addressed final reply publishes automatically. For an explicit publication use `pairroom relay send`; omit a final peer handle unless intentionally publishing twice. Reuse IDs only for identical publication content; changed evidence needs a new ID.
+
+Receive with `pairroom relay wait`. Keep one collector only; resolve it before another. During work, one foreground wait/exchange within the tool limit is enough; an empty timeout ends the turn. Confirmed send plus timeout: receive-only wait, never resend. No idle background wait/poll unless [waiting guidance](references/waiting.md) confirms tracked completion; also read it for idle-wake diagnosis.
+
+Read full-output files when shown only a preview; stdout/handed_off is not model acceptance. Before file transfer, referenced-file reads or evidence review, read [files and review](references/files-and-review.md). On uncertainty, failure, `peer_changed`, or a requested replacement, stop and read [recovery](references/recovery.md) before another effect; status/reconcile only on uncertainty/failure.

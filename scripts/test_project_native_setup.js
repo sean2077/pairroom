@@ -40,6 +40,7 @@ function button(root) { return find(root,item=>item.tag==='button'); }
   let host=c.ui.mount(project);await flush();
   assert.equal(c.calls.length,1);assert.equal(c.calls[0].method,undefined,'render is read-only');
   assert.equal(c.calls[0].path,'/api/v1/projects/project%20one/native-setup');
+  assert.equal(find(component(host,'skill'),item=>item.tag==='code').textContent,'.claude/skills/pairroom-relay/SKILL.md','manifest-only responses remain readable');
   const install=button(component(host,'skill'));
   c.setHandler(()=>status('current'));
   await install.onClick();
@@ -56,6 +57,29 @@ function button(root) { return find(root,item=>item.tag==='button'); }
   await flush();assert.equal(d.calls.length,1);
   d.setHandler(()=>status('current'));await d.dialogs[0].action();
   assert.equal(JSON.parse(d.calls[1].body).confirm_replace,true);
+
+  const bundleFiles=['.claude/skills/pairroom-relay/SKILL.md',
+    '.claude/skills/pairroom-relay/references/enterprise.md',
+    '.claude/skills/pairroom-relay/references/lan.md'];
+  const bundleStatus=(state,confirmation)=>{
+    const result=status(state,confirmation);result.runtimes[0].skill.files=[...bundleFiles];return result;
+  };
+  const bundle=fixture();bundle.setHandler(()=>bundleStatus('missing',false));
+  host=bundle.ui.mount(project);await flush();
+  for(const path of bundleFiles){
+    assert.ok(find(component(host,'skill'),item=>item.tag==='code'&&item.textContent===path),'new installation displays every bundled file');
+  }
+  assert.ok(find(component(host,'skill'),item=>item.textContent==='workspace.nativeSetup.skillContents'));
+  assert.equal(bundle.calls.length,1,'showing the bundle does not install it');
+  bundle.setHandler(()=>bundleStatus('update_required',true));await button(host).onClick();
+  button(component(host,'skill')).onClick();
+  const review=bundle.dialogs[0];
+  assert.ok(review);
+  assert.equal(JSON.parse(review.message.slice('workspace.nativeSetup.confirmBody'.length)).paths,bundleFiles.join('\n'),'confirmation names every managed file');
+  assert.equal(bundle.calls.filter(call=>call.method==='POST').length,0,'bundle replacement waits for confirmation');
+  bundle.setHandler(()=>bundleStatus('current',false));await review.action();
+  assert.equal(bundle.calls.filter(call=>call.method==='POST').length,1);
+  assert.deepEqual(JSON.parse(bundle.calls[2].body),{runtime:'claude',component:'skill',revision:'claude-update_required-v1',confirm_replace:true});
 
   const e=fixture();e.setHandler(()=>status('conflict',true));
   host=e.ui.mount(project);await flush();button(component(host,'skill')).onClick();
@@ -94,5 +118,5 @@ function button(root) { return find(root,item=>item.tag==='button'); }
   for(const key of keys){assert.ok(en[key]);assert.ok(zh[key]);}
   const html=fs.readFileSync('internal/service/assets/index.html','utf8');
   assert.ok(html.indexOf('/project-native-setup.js')<html.indexOf('/management.js'));
-  console.log('project native setup: read-only loading, install, confirmation, stale responses, errors and locale coverage OK');
+  console.log('project native setup: read-only loading, bundle paths, install, confirmation, stale responses, errors and locale coverage OK');
 })().catch(error=>{console.error(error);process.exitCode=1;});
