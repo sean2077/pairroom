@@ -77,7 +77,7 @@ func TestNativeSkillReferenceRoutes(t *testing.T) {
 		t.Fatal("CLI and shared bundle use different entrypoints")
 	}
 	linked := map[string]bool{}
-	for _, match := range regexp.MustCompile("\\]\\((references/[^)]+)\\)").FindAllStringSubmatch(skillContent, -1) {
+	for _, match := range regexp.MustCompile(`\]\((references/[^)]+)\)`).FindAllStringSubmatch(skillContent, -1) {
 		path := match[1]
 		if strings.TrimSpace(files[path]) == "" {
 			t.Errorf("default skill links to missing or empty reference %s", path)
