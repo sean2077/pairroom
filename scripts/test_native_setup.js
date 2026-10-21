@@ -23,5 +23,6 @@ const skill = read('skills/pairroom-relay/SKILL.md');
 assert.equal(skill, read('internal/relayclient/skill/pairroom-relay/SKILL.md'));
 assert.ok(!/CLAUDE_CODE_SESSION_ID|CODEX_SESSION_ID|bind_nonce|--continue|--session-id|exchange --help/.test(skill));
 assert.ok(!/Claude Code|Codex/.test(skill));
-assert.ok(skill.split('\n').length <= 24, 'onboarding skill should stay concise');
+// Budget context bytes while allowing readable headings and paragraphs.
+assert.ok(Buffer.byteLength(skill, 'utf8') <= 3000, 'default onboarding skill should fit its context budget');
 console.log('native setup translations, entry points and skill payload: OK');

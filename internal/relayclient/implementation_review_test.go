@@ -16,7 +16,7 @@ import (
 )
 
 // Exercise the installer and freshness detection for every current Native
-// Runtime. The recipe travels through the existing single-file projection.
+// Runtime. The recipe travels with the embedded skill bundle.
 func TestImplementationReviewSkillInstalledForEveryRuntime(t *testing.T) {
 	for _, kind := range []model.RuntimeKind{model.RuntimeClaude, model.RuntimeCodex, model.RuntimeGrok, model.RuntimeGemini} {
 		t.Run(string(kind), func(t *testing.T) {

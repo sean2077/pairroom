@@ -396,10 +396,13 @@ revalidated. The client cannot provide a root directory or arbitrary file path.
 GET is read-only and returns `Cache-Control: no-store` and `runtimes`, an array
 with `runtime`, `skill`, and `hook`. Each component reports `component`, `path`
 (relative to the Project), `state`, `reason` when applicable, opaque `revision`,
-`can_install`, and `needs_confirmation`. States are `missing`, `current`,
+`can_install`, and `needs_confirmation`. Skill components also list `files`, the
+Project-relative manifest and bundled reference paths; `path` remains the manifest
+for compatibility. Their revision covers the whole inspected and proposed bundle,
+and `current` requires every bundled file to match. States are `missing`, `current`,
 `update_required`, `conflict`, `shared`, `disabled`, and `blocked`. `shared` points
 to the existing Claude hook. These are file-configuration states, not native
-approval or session-readiness claims. Files or configuration values are not
+approval or session-readiness claims. File contents or configuration values are not
 included in the response. See [Native setup](NATIVE_RELAY.md#project-page-inspect-and-install-without-global-changes)
 for discovery paths, trust and preservation boundaries.
 
@@ -416,7 +419,7 @@ POST selects exactly one component and requires its last inspected revision:
 
 `runtime` is `claude`, `codex`, `grok`, or `gemini`; `component` is `skill` or
 `hook`. For an existing file/directory requiring a change, present the Project,
-file and effect to the user, and send `confirm_replace: true` only after explicit
+all managed file paths and effect to the user, and send `confirm_replace: true` only after explicit
 confirmation. No confirmation bypasses an unsafe/disabled/conflicting target.
 Successful POST returns the refreshed status. Current/shared configurations are
 no-ops only when the supplied revision still matches. Invalid selectors or

@@ -44,7 +44,7 @@ func TestFileDeliveryWithholdsAckWhenDestinationAppears(t *testing.T) {
 }
 
 func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
-	assertSkillRules(t, map[string]string{
+	assertSkillRules(t, "references/files-and-review.md", map[string]string{
 		"existing-text-file":       "--text-file <path>",
 		"stdin":                    "--text-file -",
 		"local-reference":          "--ref <path>",
@@ -54,19 +54,21 @@ func TestNativeFileWorkflowSkillGuidance(t *testing.T) {
 		"not-uploaded":             "shares path/size/SHA-256 only, no upload",
 		"retain-and-verify":        "retain the file, verify its hash",
 		"authorized-file-access":   "read needed sections with authorized access",
-		"changed-evidence-new-id":  "changed evidence needs a new ID",
+		"changed-evidence-new-id":  "Changed evidence needs a new publication ID",
 		"read-full-envelope":       "saves the full envelope: read it before acting",
 		"existing-writable-parent": "needs an existing writable parent",
 		"no-overwrite":             "never overwrite; retry a fresh path",
 		"tool-cwd":                 "Paths follow tool cwd",
-		"current-cli":              "flags require current CLI",
-		"direct-join":              "CLI/hooks need no local Service or --service-file",
-		"review-anchor":            "pairroom relay send/exchange --review; pairroom relay review --id <published-id>",
-		"review-checkout":          "--review-repo <task-checkout>: other checkout",
-		"evidence-not-approval":    "observations are not atomic or approval",
-		"independent-review":       "Review independently; pin base/head SHAs+dirty hash",
-		"review-revision-pinning":  "pin base/head SHAs+dirty hash, recheck before closure",
-		"review-findings":          "findings: location/evidence/impact; label hypotheses",
+		"current-cli":              "flags require the current CLI",
+		"review-send":              "pairroom relay send --review",
+		"review-exchange":          "pairroom relay exchange --review",
+		"review-anchor":            "pairroom relay review --id <published-id>",
+		"review-checkout":          "--review-repo <task-checkout>",
+		"evidence-not-approval":    "Observations are not atomic or approval",
+		"independent-review":       "Review independently",
+		"review-revision-pinning":  "pin base/head SHAs and the dirty hash, recheck before closure",
+		"review-findings":          "findings need location, evidence and impact",
+		"review-hypotheses":        "Label hypotheses",
 		"review-retest":            "retest fixes at the new revision",
 	})
 }

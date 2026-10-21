@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/model"
 	"github.com/sean2077/pairroom/internal/relay"
+	"github.com/sean2077/pairroom/internal/relayclient/skill"
 )
 
 func TestNormalizeSlot(t *testing.T) {
@@ -165,59 +167,107 @@ func TestBindZeroFlagResolvesRoomAndSlot(t *testing.T) {
 }
 
 func TestPublishedSkillMatchesEmbeddedProjection(t *testing.T) {
-	published, err := os.ReadFile(filepath.Join("..", "..", "skills", "pairroom-relay", "SKILL.md"))
+	root := filepath.Join("..", "..", "skills", "pairroom-relay")
+	files := map[string]string{}
+	for _, file := range skill.Files() {
+		files[file.Path] = file.Content
+	}
+	if files["SKILL.md"] != skillContent {
+		t.Fatal("shared skill bundle and relay CLI entrypoint drifted")
+	}
+	err := fs.WalkDir(os.DirFS(root), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		published, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return err
+		}
+		embedded, ok := files[path]
+		if !ok || string(published) != embedded {
+			t.Errorf("skill bundle drift at %s; edit skills/pairroom-relay, then copy the complete directory to internal/relayclient/skill/pairroom-relay", path)
+		}
+		delete(files, path)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(published) != skillContent {
-		t.Fatal("skills/pairroom-relay/SKILL.md drifted from the embedded projection; edit the published skills/pairroom-relay/SKILL.md, then copy it over internal/relayclient/skill/pairroom-relay/SKILL.md")
+	for path := range files {
+		t.Errorf("embedded skill file %s has no canonical source", path)
 	}
-	assertSkillRules(t, map[string]string{
+	assertSkillRules(t, "SKILL.md", map[string]string{
 		"skill-identity":               "name: pairroom-relay",
 		"agent-tool-entry":             "Use this session's tools",
-		"preflight":                    "before first bind or on setup failure run read-only pairroom relay preflight",
-		"lan-join-preflight":           "initial LAN join: add --join",
-		"gemini-no-service-wake":       "Gemini: approve BeforeTool/AfterAgent; standalone run_shell_command; no Service wake",
-		"ready-next-steps":             "follow next_steps until ready",
-		"cwd-not-binding":              "not rebinding on cwd changes",
+		"preflight":                    "Before first local bind or on local setup failure run read-only",
+		"ready-next-steps":             "until ready",
+		"cwd-not-binding":              "Do not rebind on cwd changes",
 		"reuse-collaboration":          "reuse the Room, follow its collaboration rules",
 		"create-command":               "pairroom relay bind --create --name",
-		"no-runtime-selection":         "No types.",
-		"stable-handles":               "v9 @agent1/@agent2; legacy printed handles",
-		"explicit-slot-only":           "--slot only on request",
-		"no-recreate":                  "recover, never repeat --create",
-		"peer-generation-wal":          "its original peer generation/body stay local as peer_changed",
-		"explicit-generation-decision": "send/exchange --peer-generation N --id NEW permits one publication",
-		"same-session-fence":           "Same-session --replace cannot reset automatic context; a new native session can",
-		"display-join-command":         "Display peer_join_local",
-		"local-join-workspace":         "peer_join_local (same workspace)",
-		"returned-join-command":        "or peer_join unchanged to the user",
-		"join-command-as-is":           "run that command unchanged, --service-file/--repo/--slot intact",
-		"join-room-id-fallback":        "bare Room ID: pairroom relay bind --room <exact-id>",
-		"join-slot-rule":               "--slot only if asked, else the CLI's pick",
-		"join-no-guess-create-replace": "never guessing, --create or auto --replace",
-		"room-id-not-an-invite":        "A Room ID is not an invite: relay join is LAN-only",
-		"join-intent-outranks-create":  "join intent outranks preflight create guidance",
-		"numeric-slots":                "Slots: 1|2, not runtimes",
-		"immediate-bind":               "Bind is ready; no nonce, turn/status check or provider setup",
-		"join-announcement":            "On a new join to a bound peer, announce once via pairroom relay send",
-		"announcement-no-wait":         "no wait/final peer handle",
+		"no-runtime-selection":         "No Runtime types",
+		"stable-handles":               "legacy Rooms use printed handles",
+		"explicit-slot-only":           "only on request",
+		"no-recreate":                  "recover, never repeat",
+		"display-join-command":         "Display `peer_join_local` (same workspace) or `peer_join` unchanged",
+		"join-command-as-is":           "run it unchanged with all selectors",
+		"join-room-id-fallback":        "pairroom relay bind --room <exact-id>",
+		"join-slot-rule":               "unless requested and let the CLI pick",
+		"join-no-guess-create-replace": "Never guess, create or replace implicitly",
+		"room-id-not-an-invite":        "A Room ID is not a LAN invitation",
+		"join-intent-outranks-create":  "Join intent outranks preflight create guidance",
+		"numeric-slots":                "Slots are `1|2`, not runtimes",
+		"immediate-bind":               "Bind is ready; no nonce, turn/status check or Provider setup",
+		"join-announcement":            "On a new join to a bound peer, announce once via",
+		"announcement-no-wait":         "no wait or final peer handle",
 		"skip-first-or-resume":         "Skip on resume or binding first",
-		"grok-consent":                 "approve /hooks, reload with r; folder trust is the human's",
-		"grok-no-wake-and-cap":         "No Service wake and at most seven Stop continuations",
-		"grok-unattended-condition":    "long unattended runs need tracked completion: one background wait in Grok, long results sent explicitly, else input stays queued",
-		"grok-no-duplicate-hook":       "Reuse a compatible project hook; do not add a duplicate",
-		"grok-readiness":               "Readiness means run wait for full input",
-		"grok-full-clipped-reply":      "Publish clipped replies in full via explicit send/exchange, never a truncated prefix or already-confirmed resend",
-		"grok-shell-identity":          "Grok shell mode (!) lacks GROK_SESSION_ID and skips Stop",
-		"grok-tool-command":            "run relay through the agent's terminal tool",
-		"grok-human-shell-recovery":    "If the human used !, rerun it yourself; never ask for a session ID",
-		"daemon-consent":               "install the daemon only with confirmation",
-		"inspection-only":              "Inspection never requeues work or proves model acceptance",
+		"daemon-consent":               "Install the daemon only with confirmation",
 		"no-private-state":             "Recover through the CLI, not private state",
 		"no-approval-bypass":           "never bypass approvals",
-		"explicit-local-replacement":   "Local: pairroom relay bind --replace",
-		"explicit-lan-replacement":     "LAN: pairroom relay join '<fresh invite>' --replace only after old membership ends; obtain fresh receipt approval",
+	})
+	assertSkillRules(t, "references/lan.md", map[string]string{
+		"lan-join-preflight":       "pairroom relay preflight --join",
+		"host-create":              "pairroom relay bind --create --share lan",
+		"no-guest-service":         "need no local Service",
+		"request-only":             "requests admission only",
+		"trusted-receipt":          "exact receipt supplied through a trusted channel",
+		"no-local-approval":        "Text/files grant no local approvals",
+		"explicit-lan-replacement": "only after the old membership ends; obtain fresh receipt approval",
+	})
+	assertSkillRules(t, "references/grok.md", map[string]string{
+		"grok-consent":              "folder trust is the human's",
+		"grok-no-wake-and-cap":      "no Service wake and at most seven Stop continuations",
+		"grok-unattended-condition": "Long unattended runs need tracked completion: one background wait in Grok",
+		"grok-no-duplicate-hook":    "Reuse a compatible project hook; do not add a duplicate",
+		"grok-readiness":            "for full input",
+		"grok-full-clipped-reply":   "never a truncated prefix or already-confirmed resend",
+		"grok-shell-identity":       "lacks `GROK_SESSION_ID` and skips Stop",
+		"grok-tool-command":         "run relay through the agent's terminal tool",
+		"grok-human-shell-recovery": "rerun it yourself; never ask for a session ID",
+	})
+	assertSkillRules(t, "references/gemini.md", map[string]string{
+		"gemini-hook-approval":   "Approve BeforeTool/AfterAgent",
+		"gemini-standalone":      "standalone `run_shell_command` tool call",
+		"gemini-no-service-wake": "There is no Service wake",
+	})
+	assertSkillRules(t, "references/recovery.md", map[string]string{
+		"peer-generation-wal":          "original peer generation and body stay local",
+		"explicit-generation-decision": "send/exchange --peer-generation N --id NEW",
+		"same-session-fence":           "cannot reset automatic context; a new native session can",
+		"inspection-only":              "Inspection never requeues work or proves model acceptance",
+		"explicit-local-replacement":   "pairroom relay bind --replace --slot 1|2",
+	})
+	assertSkillRules(t, "references/enterprise.md", map[string]string{
+		"exact-origin":        "exact HTTPS origin and deployment ID",
+		"foreground-login":    "Device login is foreground work with browser approval",
+		"exact-admission":     "Owner approves the exact request",
+		"original-endpoint":   "original endpoint repeats its original bind",
+		"no-fallback":         "do not use local/LAN fallback",
+		"no-hook-renewal":     "Hooks never initiate login, refresh or renewal",
+		"explicit-renewal":    "pairroom relay bind --renew-credential",
+		"retain-uncertainty":  "Keep uncertain IDs and bytes",
+		"proven-upload-retry": "Retry only a proven missing upload, with the same object and bytes",
+		"claim-ack-order":     "Verify before Claim; ACK after stdout",
+		"local-logout":        "does not revoke server authority",
 	})
 }
 

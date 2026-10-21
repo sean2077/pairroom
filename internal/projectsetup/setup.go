@@ -3,7 +3,6 @@
 package projectsetup
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/sean2077/pairroom/internal/relayclient/skill"
 )
 
 var (
@@ -29,13 +26,14 @@ var installMu sync.Mutex
 var runtimes = []string{"claude", "codex", "grok", "gemini"}
 
 type Item struct {
-	Component         string `json:"component"`
-	Path              string `json:"path"`
-	State             string `json:"state"`
-	Reason            string `json:"reason,omitempty"`
-	Revision          string `json:"revision"`
-	CanInstall        bool   `json:"can_install"`
-	NeedsConfirmation bool   `json:"needs_confirmation"`
+	Component         string   `json:"component"`
+	Path              string   `json:"path"`
+	Files             []string `json:"files,omitempty"`
+	State             string   `json:"state"`
+	Reason            string   `json:"reason,omitempty"`
+	Revision          string   `json:"revision"`
+	CanInstall        bool     `json:"can_install"`
+	NeedsConfirmation bool     `json:"needs_confirmation"`
 }
 
 type Runtime struct {
@@ -61,6 +59,7 @@ type plan struct {
 	item   Item
 	before fileState
 	after  []byte
+	files  []plannedFile
 }
 
 func validRuntime(kind string) bool {
@@ -116,7 +115,12 @@ func Install(root string, request Request) (Status, error) {
 	if p.item.NeedsConfirmation && !request.ConfirmReplace {
 		return Status{}, ErrConfirmation
 	}
-	if err := replaceFile(dir, p.item.Path, p.before, p.after); err != nil {
+	if len(p.files) != 0 {
+		err = replaceSkillFiles(dir, p.files)
+	} else {
+		err = replaceFile(dir, p.item.Path, p.before, p.after)
+	}
+	if err != nil {
 		return Status{}, err
 	}
 	return Inspect(root)
@@ -141,6 +145,9 @@ func makePlan(dir *os.Root, root, kind, component string) plan {
 			}
 		}
 	}
+	if component == "skill" {
+		return makeSkillPlan(dir, root, path)
+	}
 	p := plan{item: Item{Component: component, Path: path, State: "blocked"}}
 	if reason := protectedReason(root, path); reason != "" {
 		p.item.Reason = reason
@@ -153,22 +160,6 @@ func makePlan(dir *os.Root, root, kind, component string) plan {
 		return p
 	}
 	p.item.Revision = revision(path, before)
-	if component == "skill" {
-		p.after = []byte(skill.Content)
-		switch {
-		case before.exists && bytes.Equal(before.data, p.after):
-			p.item.State = "current"
-		case before.exists || before.parentExists:
-			p.item.State, p.item.Reason = "conflict", "existing_skill"
-			p.item.CanInstall, p.item.NeedsConfirmation = true, true
-			if bytes.Contains(before.data, []byte("name: pairroom-relay")) && bytes.Contains(before.data, []byte("# pairroom-relay")) {
-				p.item.State = "update_required"
-			}
-		default:
-			p.item.State, p.item.CanInstall = "missing", true
-		}
-		return p
-	}
 	p.after, p.item.State, p.item.Reason, err = planHooks(before, kind)
 	if err != nil {
 		p.item.State, p.item.Reason = "blocked", "invalid_hooks"

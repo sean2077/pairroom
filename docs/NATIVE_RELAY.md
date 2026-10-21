@@ -34,20 +34,25 @@ loaded skills; those sources may take precedence and are not read or changed.
 
 An existing different skill, an existing skill directory without a manifest, or a
 hook configuration that needs modifying requires **Review changes** and an explicit
-confirmation naming the Project and file. A skill update replaces only that
-`SKILL.md`; other skills and companion files remain untouched. Hook installation
+confirmation naming the Project and every managed file. A skill update writes
+`SKILL.md` and its bundled `references/` files, all listed in the status and
+confirmation views; other skills and companion files remain untouched. A matching
+manifest with missing or changed references still needs an update. Hook installation
 merges exact PairRoom commands while retaining unrelated settings and hook entries;
 JSON formatting can change. Even appending to an existing hook file requires
 confirmation. Identical configured files are not rewritten.
 
-Confirmation is bound to the inspected file revision. A changed file, duplicate
+Confirmation is bound to the inspected files and proposed bundle revision. A changed file, duplicate
 click, or stale page cannot silently turn a first installation into an overwrite.
 After an error or uncertain response, check again before retrying; the UI never
 retries writes automatically. Each action changes only one component. Files are
 published through a temporary file in the same pinned project directory; new
 files use no-replace publication and updates replace the directory entry rather
-than truncating a potentially hardlinked file. This is optimistic protection
-against external edits, not a cross-process editor lock or a filesystem sandbox.
+than truncating a potentially hardlinked file. References are staged and published
+before the manifest. A publication failure may leave an incomplete bundle, which
+the next check detects and requires fresh confirmation to repair. This is optimistic
+protection against external edits, not a cross-file transaction, cross-process editor
+lock or filesystem sandbox.
 
 Linked paths, non-regular/oversized files, invalid or duplicate-key JSON, disabled
 hooks, and ambiguous custom/shared relay hooks require manual review; a user-level
@@ -94,7 +99,33 @@ For an invited LAN session that is not yet bound, run **`pairroom relay prefligh
 
 For local Service transport, relay commands and hooks print one stderr line suggesting `pairroom relay preflight` whenever a Service response reports a different release than the CLI, including beside errors that version skew can cause, such as "no matching binding". It uses responses the command already receives and never writes to stdout. Direct LAN transport does not supply this automatic warning; inspect its doctor report. See [CLI reference](CLI_REFERENCE.md#native-relay-commands).
 
-Installation also writes the relay skill. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, and Gemini's `GEMINI_CLI_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not.
+Installation also writes the complete relay skill bundle. Skill roots honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, and Gemini's `GEMINI_CLI_HOME`; project hooks stay project-local. The optional `npx skills add sean2077/pairroom` route installs the skill, **not** the hooks or their approval. That route needs Node's package runner; the Go relay CLI does not. Externally managed skill-directory symlinks remain read-only; update those through their owning installer. The CLI refuses unrelated content at a bundled reference path and retains other companion files.
+
+## Skill context loaded on demand
+
+The single [pairroom-relay skill](../skills/pairroom-relay/SKILL.md) keeps local
+create/join, normal relay and shared safety rules in its entrypoint. It links to
+additional instructions only when the task or current Runtime needs them:
+
+| Situation | Read before the operation |
+| --- | --- |
+| Enterprise origin/deployment, enterprise Binding, login or renewal | [Enterprise relay](../skills/pairroom-relay/references/enterprise.md) |
+| LAN invitation, sharing or admission | [LAN relay](../skills/pairroom-relay/references/lan.md) |
+| Current Runtime is Grok or Gemini | [Grok](../skills/pairroom-relay/references/grok.md) or [Gemini](../skills/pairroom-relay/references/gemini.md) |
+| Background/unattended wait or idle-wake diagnosis | [Waiting](../skills/pairroom-relay/references/waiting.md) |
+| File transfer or evidence review | [Files and review](../skills/pairroom-relay/references/files-and-review.md) |
+| Uncertainty, failure, changed peer or requested replacement | [Recovery](../skills/pairroom-relay/references/recovery.md) |
+
+Reference paths are relative to the installed skill, independent of the Agent's
+working directory. Do not preload every reference. Enterprise routing comes
+before local setup: `relay preflight` currently handles Local and LAN transport,
+so its local Service/create guidance must not replace an explicit enterprise route.
+
+Plugin, CLI and project installation distribute the same full directory; copying
+only `SKILL.md` is incomplete. CLI freshness checks and project status compare all
+bundled files. Existing sessions may need their harness's skill reload or restart
+after an update. Smaller default text is a context-size reduction, not a measured
+vendor-model or billed-token result.
 
 ## Gemini CLI
 
@@ -295,7 +326,7 @@ For a LAN guest, the Service wake entries mean the **optional local observer**;
 the remote host cannot invoke a guest's native process. Direct foreground and
 hook collection remain available without a guest Service.
 
-After Grok's seventh continuation the chain ends and the session goes idle. Queued input then waits until that session's background wait returns it, the human nudges it, or the session's next turn collects it; nothing on the Service side can restart it. Grok also clips Stop replies over 32,768 characters, so a long reply needs explicit `send`/`exchange --text-file` or it is not relayed. For a long unattended run, prefer Claude Code or Codex for any slot that must recover from idleness on its own. Grok works when its session keeps exactly one long background `relay wait` (see the relay skill's *Stay reachable* rule) and sends long results explicitly. Treat the Grok slot as the first place to check when such a run stalls. These are integration boundaries, not authenticated multi-round acceptance results.
+After Grok's seventh continuation the chain ends and the session goes idle. Queued input then waits until that session's background wait returns it, the human nudges it, or the session's next turn collects it; nothing on the Service side can restart it. Grok also clips Stop replies over 32,768 characters, so a long reply needs explicit `send`/`exchange --text-file` or it is not relayed. For a long unattended run, prefer Claude Code or Codex for any slot that must recover from idleness on its own. Grok works when its session keeps exactly one long background `relay wait` (see the skill's [waiting guidance](../skills/pairroom-relay/references/waiting.md)) and sends long results explicitly. Treat the Grok slot as the first place to check when such a run stalls. These are integration boundaries, not authenticated multi-round acceptance results.
 
 ## Troubleshooting
 

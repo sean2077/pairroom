@@ -98,8 +98,117 @@ func TestInspectIsReadOnlyAndAllRuntimesInstallIndependently(t *testing.T) {
 				if component == "skill" && string(contents(t, root, item.Path)) != skill.Content {
 					t.Fatal("wrong skill payload")
 				}
+				if component == "skill" {
+					files := skill.Files()
+					if len(item.Files) != len(files) || len(files) < 2 {
+						t.Fatalf("preview omitted bundled references: %+v", item)
+					}
+					for i, file := range files {
+						path := filepath.ToSlash(filepath.Join(filepath.Dir(item.Path), filepath.FromSlash(file.Path)))
+						if item.Files[i] != path || string(contents(t, root, path)) != file.Content {
+							t.Fatalf("preview/install mismatch for %s", path)
+						}
+					}
+				}
 			})
 		}
+	}
+}
+
+func TestSkillBundleMissingAndChangedReferencesRequireFreshConfirmation(t *testing.T) {
+	root := t.TempDir()
+	const manifest = ".agents/skills/pairroom-relay/SKILL.md"
+	const reference = ".agents/skills/pairroom-relay/references/enterprise.md"
+	const notes = ".agents/skills/pairroom-relay/references/personal-notes.md"
+	// A manifest-only installation is incomplete even when SKILL.md is current.
+	put(t, root, manifest, skill.Content)
+	put(t, root, notes, "keep user notes")
+	item := setupItem(t, root, "codex", "skill")
+	if item.State != "update_required" || !item.NeedsConfirmation || !item.CanInstall {
+		t.Fatalf("incomplete bundle reported ready: %+v", item)
+	}
+	if err := setupInstall(t, root, "codex", "skill", false); !errors.Is(err, ErrConfirmation) {
+		t.Fatalf("unconfirmed reference addition: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, reference)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unconfirmed reference written: %v", err)
+	}
+	if err := setupInstall(t, root, "codex", "skill", true); err != nil {
+		t.Fatal(err)
+	}
+	original := contents(t, root, reference)
+	put(t, root, reference, "user-modified reference")
+	item = setupItem(t, root, "codex", "skill")
+	if item.State != "update_required" || !item.NeedsConfirmation {
+		t.Fatalf("modified reference reported ready: %+v", item)
+	}
+	put(t, root, reference, "later user edits")
+	_, err := Install(root, Request{Runtime: "codex", Component: "skill", Revision: item.Revision, ConfirmReplace: true})
+	if !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale bundle confirmation: %v", err)
+	}
+	if string(contents(t, root, reference)) != "later user edits" || string(contents(t, root, manifest)) != skill.Content {
+		t.Fatal("stale bundle preview changed files")
+	}
+	if err := setupInstall(t, root, "codex", "skill", true); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents(t, root, reference), original) || string(contents(t, root, notes)) != "keep user notes" {
+		t.Fatal("reference update lost bundled or unrelated content")
+	}
+	if err := os.Remove(filepath.Join(root, reference)); err != nil {
+		t.Fatal(err)
+	}
+	if item := setupItem(t, root, "codex", "skill"); item.State != "update_required" || !item.NeedsConfirmation {
+		t.Fatalf("deleted reference reported ready: %+v", item)
+	}
+}
+
+func TestSkillBundleReferencePathHazardsBlockBeforeAnyPayloadWrite(t *testing.T) {
+	for _, relative := range []string{"references", "references/enterprise.md"} {
+		t.Run(relative, func(t *testing.T) {
+			root := t.TempDir()
+			const base = ".agents/skills/pairroom-relay/"
+			put(t, root, base+"SKILL.md", "old skill")
+			path := filepath.Join(root, filepath.FromSlash(base+relative))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			external := t.TempDir()
+			target := external
+			if strings.HasSuffix(relative, ".md") {
+				target = filepath.Join(external, "reference.md")
+				if err := os.WriteFile(target, []byte("external reference"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			item := setupItem(t, root, "codex", "skill")
+			if item.State != "blocked" || item.CanInstall {
+				t.Fatalf("reference link accepted: %+v", item)
+			}
+			_, err := Install(root, Request{Runtime: "codex", Component: "skill", Revision: item.Revision, ConfirmReplace: true})
+			if err == nil {
+				t.Fatal("unsafe bundle installed")
+			}
+			if string(contents(t, root, base+"SKILL.md")) != "old skill" {
+				t.Fatal("manifest changed before all reference paths were validated")
+			}
+			entries, err := os.ReadDir(external)
+			want := 0
+			if strings.HasSuffix(relative, ".md") {
+				want = 1
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != "external reference" {
+					t.Fatalf("external reference changed: %v", err)
+				}
+			}
+			if err != nil || len(entries) != want {
+				t.Fatalf("unexpected write through reference link: %v", err)
+			}
+		})
 	}
 }
 

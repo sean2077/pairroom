@@ -3,7 +3,6 @@ package relayclient
 import (
 	"bufio"
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/sean2077/pairroom/internal/atomicfile"
 	"github.com/sean2077/pairroom/internal/model"
+	"github.com/sean2077/pairroom/internal/relayclient/skill"
 )
 
 // installRuntimeChoices is the interactive selection order. Each is a real native
@@ -432,13 +432,9 @@ func editHooks(root string, kind model.RuntimeKind, remove bool) error {
 	return atomicText(path, string(data)+"\n", mode)
 }
 
-// The canonical public skill lives at skills/pairroom-relay/SKILL.md,
-// distributable through skill installers (npx skills, plugin manifest). This
-// projection is embedded for `relay install`; a freshness test keeps the two
-// byte-identical.
-//
-//go:embed skill/pairroom-relay/SKILL.md
-var skillContent string
+// The skill package is the shared projection for CLI and project installers.
+// A freshness test keeps its entire bundle identical to skills/pairroom-relay.
+var skillContent = skill.Content
 
 // skillHeadings are the headings PairRoom's own projections have shipped. A
 // projection installed by an earlier `relay install` must stay upgradable; only
@@ -500,11 +496,16 @@ func skillStatus(kind model.RuntimeKind) string {
 		return "missing"
 	case !ownedSkill(data):
 		return "external"
-	case string(data) == skillContent:
-		return "current"
-	default:
+	case string(data) != skillContent:
 		return "stale"
 	}
+	for _, file := range skill.Files() {
+		data, err := readSkillBundleFile(dir, file.Path)
+		if err != nil || string(data) != file.Content {
+			return "stale"
+		}
+	}
+	return "current"
 }
 
 func installSkill(kind model.RuntimeKind) error {
@@ -619,14 +620,62 @@ func installSkillLeaf(parent, name string) error {
 	return writeSkillFile(dir)
 }
 
-// writeSkillFile upgrades the bundled skill into a real PairRoom-owned
-// directory, refusing to clobber genuinely unrelated content.
-func writeSkillFile(dir string) error {
-	path := filepath.Join(dir, "SKILL.md")
-	if data, err := os.ReadFile(path); err == nil && !ownedSkill(data) {
-		return errors.New("an unrelated pairroom-relay skill exists; refusing to overwrite")
+// readSkillBundleFile rejects links and non-regular entries inside a skill.
+// The skill directory itself may be externally linked for read-only inspection.
+func readSkillBundleFile(dir, relative string) ([]byte, error) {
+	path := dir
+	parts := strings.Split(relative, "/")
+	for i, part := range parts {
+		path = filepath.Join(path, part)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if i < len(parts)-1 {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return nil, errors.New("skill reference parent must be a real directory")
+			}
+		} else if !info.Mode().IsRegular() || info.Size() > 2<<20 {
+			return nil, errors.New("skill payload must be a bounded regular file")
+		}
 	}
-	return atomicText(path, skillContent, 0600)
+	return atomicfile.ReadFile(path)
+}
+
+// writeSkillFile upgrades the complete skill bundle. Validate every managed
+// path before writing any payload, retain other companions, and publish the
+// manifest last so its references are available when it becomes discoverable.
+func writeSkillFile(dir string) error {
+	files := skill.Files()
+	for _, file := range files {
+		data, err := readSkillBundleFile(dir, file.Path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		owned := bytes.HasPrefix(data, []byte(skill.ReferenceMarker))
+		if file.Path == "SKILL.md" {
+			owned = ownedSkill(data)
+		}
+		if !owned && string(data) != file.Content {
+			return fmt.Errorf("an unrelated pairroom-relay skill file exists at %s; refusing to overwrite", file.Path)
+		}
+	}
+	for _, file := range files {
+		if file.Path == "SKILL.md" {
+			continue
+		}
+		parent, err := secureDir(dir, strings.Split(filepath.ToSlash(filepath.Dir(file.Path)), "/")...)
+		if err != nil {
+			return err
+		}
+		if err := atomicText(filepath.Join(parent, filepath.Base(file.Path)), file.Content, 0600); err != nil {
+			return err
+		}
+	}
+	return atomicText(filepath.Join(dir, "SKILL.md"), skillContent, 0600)
 }
 func atomicText(path, text string, mode os.FileMode) error {
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
